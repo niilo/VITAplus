@@ -48,6 +48,36 @@ struct Viewport {
     uint32_t texture_height;
 };
 
+// Select renderer paths from queried capabilities instead of GPU branding.
+// Adreno stock and custom drivers can expose different Vulkan feature sets.
+struct VulkanCapabilities {
+    uint32_t instance_api_version = VK_API_VERSION_1_0;
+    uint32_t device_api_version = VK_API_VERSION_1_0;
+    uint32_t api_version = VK_API_VERSION_1_0;
+
+    bool timeline_semaphore = false;
+    bool dynamic_rendering = false;
+    bool synchronization2 = false;
+    bool maintenance4 = false;
+    bool extended_dynamic_state = false;
+    bool descriptor_indexing = false;
+    bool pipeline_creation_cache_control = false;
+
+    uint32_t subgroup_size = 0;
+
+    uint32_t feature_mask() const {
+        uint32_t mask = 0;
+        mask |= timeline_semaphore ? 1U << 0 : 0;
+        mask |= dynamic_rendering ? 1U << 1 : 0;
+        mask |= synchronization2 ? 1U << 2 : 0;
+        mask |= maintenance4 ? 1U << 3 : 0;
+        mask |= extended_dynamic_state ? 1U << 4 : 0;
+        mask |= descriptor_indexing ? 1U << 5 : 0;
+        mask |= pipeline_creation_cache_control ? 1U << 6 : 0;
+        return mask;
+    }
+};
+
 struct VKState : public renderer::State {
     MemState *mem;
 
@@ -60,6 +90,8 @@ struct VKState : public renderer::State {
 
     vk::Instance instance;
     vk::Device device;
+
+    VulkanCapabilities capabilities;
 
     ScreenRenderer screen_renderer;
     OverlayRenderer overlay_renderer;
@@ -82,6 +114,8 @@ struct VKState : public renderer::State {
     uint32_t transfer_queue_last = 0;
     vk::Queue general_queue;
     vk::Queue transfer_queue;
+    vk::Semaphore render_timeline;
+    std::atomic<uint64_t> next_render_timeline_value{ 0 };
 
     // These might be merged into one queue, but for now they are different.
     vk::CommandPool general_command_pool;

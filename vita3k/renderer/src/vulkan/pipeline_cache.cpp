@@ -43,8 +43,8 @@ constexpr size_t record_pipeline_len = offsetof(GxmRecordState, vertex_streams);
 
 // structure containing everything needed to compile a pipeline
 struct CompileRequest {
-    // iterator to the pipeline location
-    vk::Pipeline *pipeline;
+    // key of the placeholder in PipelineCache::pipelines
+    uint64_t key;
 
     // this is everything we need to compile the shader on another thread (as the original data will change)
     SceGxmPrimitiveType type;
@@ -281,7 +281,7 @@ void PipelineCache::set_async_compilation(bool enable) {
 // small Vita3K header in front of it so a cache produced by another driver,
 // device, or renderer feature set is never handed back to Vulkan.
 constexpr uint32_t pipeline_cache_magic = 0xBEEF4321;
-constexpr uint32_t pipeline_cache_format_version = 2;
+constexpr uint32_t pipeline_cache_format_version = 3;
 
 struct PipelineCacheHeader {
     uint32_t magic;
@@ -303,12 +303,13 @@ uint64_t PipelineCache::cache_key() const {
         : std::string();
 
     std::string identity = fmt::format(
-        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         properties.vendorID,
         properties.deviceID,
         properties.driverVersion,
         properties.apiVersion,
         state.get_features_mask(),
+        state.capabilities.feature_mask(),
         static_cast<int>(state.mapping_method),
         driver_id,
         properties.deviceName.data(),
@@ -849,7 +850,12 @@ void PipelineCache::compiler_thread(MemState &mem) {
             break;
 
         vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
-        *request->pipeline = pipeline;
+        {
+            std::lock_guard<std::mutex> lock(pipelines_mutex);
+            auto pipeline_it = pipelines.find(request->key);
+            if (pipeline_it != pipelines.end())
+                pipeline_it->second = pipeline;
+        }
 
         request->vertex_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
         request->fragment_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
@@ -1008,6 +1014,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
     // if the pipeline is in the pipeline cache, we can expect its creation time to be almost instantaneous
     bool already_in_cache = false;
 
+    std::unique_lock<std::mutex> pipeline_lock(pipelines_mutex);
     auto it = pipelines.find(key);
     if (it != pipelines.end()) {
         if (it->second != nullptr) {
@@ -1022,6 +1029,8 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         // the pipeline hash was not in the cache;
         it = pipelines.insert({ key, pipeline_compiling }).first;
     }
+
+    pipeline_lock.unlock();
 
     // get the correct renderpass here
     const SceGxmProgram *gxm_fragment_shader = fragment_program_gxm.program.get(mem);
@@ -1038,7 +1047,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         // create the pipeline compile request
         CompileRequest *request = new CompileRequest;
         *request = {
-            .pipeline = &it->second,
+            .key = key,
             .type = type,
             .render_pass = render_pass,
             .vertex_program_gxm = &vertex_program_gxm,
@@ -1046,7 +1055,6 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
             .hints = context.shader_hints
         };
         memcpy(request->record_data, &record, record_pipeline_len);
-        it->second = pipeline_compiling;
 
         // we must not delete these programs until the worker is done
         vertex_program_gxm.compile_threads_on.fetch_add(1, std::memory_order_relaxed);
@@ -1065,7 +1073,12 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         if (!already_in_cache)
             state.shaders_count_compiled++;
 
-        it->second = result;
+        {
+            std::lock_guard<std::mutex> lock(pipelines_mutex);
+            auto pipeline_it = pipelines.find(key);
+            if (pipeline_it != pipelines.end())
+                pipeline_it->second = result;
+        }
 
         return result;
     }

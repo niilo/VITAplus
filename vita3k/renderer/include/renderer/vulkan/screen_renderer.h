@@ -75,6 +75,8 @@ public:
 
     // these are used by the gui
     uint32_t swapchain_image_idx = ~0;
+    bool dynamic_rendering_active = false;
+    bool use_dynamic_rendering = false;
     // between 0 and swapchain_size - 1, used as the index for semaphores
     int current_frame = 0;
     // set when the swapchain needs to be rebuilt before the next acquire
@@ -91,7 +93,7 @@ public:
 
     bool acquire_swapchain_image();
     void begin_default_render_pass();
-    void render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport);
+    void render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport, bool has_overlays);
     void swap_window();
     void set_filter(const std::string_view &filter);
 

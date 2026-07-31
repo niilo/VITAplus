@@ -42,6 +42,9 @@ public:
     virtual bool need_post_processing_render_pass() {
         return false;
     }
+    virtual bool supports_dynamic_rendering() const {
+        return false;
+    }
 };
 
 class SinglePassScreenFilter : public ScreenFilter {
@@ -51,6 +54,7 @@ private:
     vk::DescriptorPool descriptor_pool;
     vk::PipelineLayout pipeline_layout;
     vk::Pipeline pipeline;
+    vk::Pipeline dynamic_pipeline;
 
     vkutil::Buffer vao;
     std::vector<std::array<float, 4>> last_uvs;
@@ -61,7 +65,7 @@ private:
     vk::Sampler sampler;
 
     void create_layout_sync();
-    void create_graphics_pipeline();
+    void create_graphics_pipeline(bool dynamic_rendering);
 
 protected:
     // file name inside shaders-builtin/vulkan
@@ -74,6 +78,9 @@ public:
     ~SinglePassScreenFilter();
     void init() override;
     void render(bool is_pre_renderpass, vk::ImageView src_img, vk::ImageLayout src_layout, const Viewport &viewport) override;
+    bool supports_dynamic_rendering() const override {
+        return static_cast<bool>(dynamic_pipeline);
+    }
 };
 
 class NearestScreenFilter : public SinglePassScreenFilter {

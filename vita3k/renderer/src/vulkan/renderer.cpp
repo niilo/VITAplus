@@ -385,12 +385,20 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         VULKAN_HPP_DEFAULT_DISPATCHER.init();
 #endif
 
+        uint32_t instance_api_version = VK_API_VERSION_1_0;
+        try {
+            instance_api_version = std::min(vk::enumerateInstanceVersion(), VK_API_VERSION_1_3);
+        } catch (const vk::SystemError &) {
+            // Vulkan 1.0 loaders do not expose vkEnumerateInstanceVersion.
+        }
+        capabilities.instance_api_version = instance_api_version;
+
         vk::ApplicationInfo app_info{
             .pApplicationName = app_name, // App Name
             .applicationVersion = VK_MAKE_API_VERSION(0, 0, 0, 1), // App Version
             .pEngineName = org_name, // Engine Name, using org instead.
             .engineVersion = VK_MAKE_API_VERSION(0, 0, 0, 1), // Engine Version
-            .apiVersion = VK_API_VERSION_1_0
+            .apiVersion = instance_api_version
         };
 
         std::vector<const char *> instance_extensions;
@@ -563,6 +571,12 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
 
         physical_device_properties = physical_device.getProperties();
+        capabilities.device_api_version = physical_device_properties.apiVersion;
+        capabilities.api_version = std::min(capabilities.instance_api_version, capabilities.device_api_version);
+        if (capabilities.api_version >= VK_API_VERSION_1_1) {
+            const auto properties = physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceSubgroupProperties>();
+            capabilities.subgroup_size = properties.get<vk::PhysicalDeviceSubgroupProperties>().subgroupSize;
+        }
         if (has_driver_properties_extension) {
             const auto properties = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
             physical_device_driver_properties = properties.get<vk::PhysicalDeviceDriverProperties>();
@@ -697,14 +711,40 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             }
         }
 
+        const bool has_vulkan12 = capabilities.api_version >= VK_API_VERSION_1_2;
+        const bool has_vulkan13 = capabilities.api_version >= VK_API_VERSION_1_3;
+        vk::PhysicalDeviceVulkan12Features core12_features{};
+        vk::PhysicalDeviceVulkan13Features core13_features{};
+        if (has_vulkan12) {
+            const auto queried = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features>();
+            core12_features = queried.get<vk::PhysicalDeviceVulkan12Features>();
+
+            capabilities.timeline_semaphore = core12_features.timelineSemaphore;
+            capabilities.descriptor_indexing = core12_features.descriptorIndexing;
+        }
+        if (has_vulkan13) {
+            const auto queried = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features>();
+            core13_features = queried.get<vk::PhysicalDeviceVulkan13Features>();
+
+            capabilities.dynamic_rendering = core13_features.dynamicRendering;
+            capabilities.synchronization2 = core13_features.synchronization2;
+            capabilities.maintenance4 = core13_features.maintenance4;
+            capabilities.extended_dynamic_state = true;
+            capabilities.pipeline_creation_cache_control = core13_features.pipelineCreationCacheControl;
+        }
+
         bool support_memory_mapping = true;
-        if (support_buffer_device_address) {
+        if (has_vulkan12) {
+            support_buffer_device_address = core12_features.bufferDeviceAddress;
+        } else if (support_buffer_device_address) {
             auto features = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceBufferDeviceAddressFeatures>();
             support_buffer_device_address &= static_cast<bool>(features.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>().bufferDeviceAddress);
         }
         support_memory_mapping &= support_buffer_device_address;
 
-        if (support_standard_layout) {
+        if (has_vulkan12) {
+            support_standard_layout = core12_features.uniformBufferStandardLayout;
+        } else if (support_standard_layout) {
             auto features = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>();
             support_standard_layout &= static_cast<bool>(features.get<vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>().uniformBufferStandardLayout);
         }
@@ -760,12 +800,31 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             }
         }
 
-        support_fsr &= static_cast<bool>(physical_device_features.shaderInt16);
-        if (support_fsr) {
+        if (has_vulkan12) {
+            support_fsr = core12_features.shaderFloat16Int8;
+        } else {
+            support_fsr &= static_cast<bool>(physical_device_features.shaderInt16);
+        }
+        if (support_fsr && !has_vulkan12) {
             // double check for FP16 support
             auto props = physical_device.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceShaderFloat16Int8Features>();
             support_fsr = static_cast<bool>(props.get<vk::PhysicalDeviceShaderFloat16Int8Features>().shaderFloat16);
         }
+        support_fsr &= static_cast<bool>(physical_device_features.shaderInt16);
+
+        LOG_INFO("Vulkan capability path: API {}.{}.{}, timeline semaphore {}, dynamic rendering {}, synchronization2 {}, "
+                 "extended dynamic state {}, descriptor indexing {}, maintenance4 {}, pipeline cache control {}, subgroup size {}",
+            VK_VERSION_MAJOR(capabilities.api_version),
+            VK_VERSION_MINOR(capabilities.api_version),
+            VK_VERSION_PATCH(capabilities.api_version),
+            capabilities.timeline_semaphore ? "yes" : "no",
+            capabilities.dynamic_rendering ? "yes" : "no",
+            capabilities.synchronization2 ? "yes" : "no",
+            capabilities.extended_dynamic_state ? "yes" : "no",
+            capabilities.descriptor_indexing ? "yes" : "no",
+            capabilities.maintenance4 ? "yes" : "no",
+            capabilities.pipeline_creation_cache_control ? "yes" : "no",
+            capabilities.subgroup_size);
 
         if (support_rasterized_order_access) {
             auto props = physical_device.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>();
@@ -782,6 +841,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
 
         vk::StructureChain<vk::DeviceCreateInfo,
+            vk::PhysicalDeviceVulkan12Features,
+            vk::PhysicalDeviceVulkan13Features,
             vk::PhysicalDeviceBufferDeviceAddressFeatures,
             vk::PhysicalDeviceUniformBufferStandardLayoutFeatures,
             vk::PhysicalDeviceShaderFloat16Int8Features,
@@ -790,6 +851,17 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             device_info{
                 vk::DeviceCreateInfo{
                     .pEnabledFeatures = &enabled_features },
+                vk::PhysicalDeviceVulkan12Features{
+                    .timelineSemaphore = capabilities.timeline_semaphore,
+                    .bufferDeviceAddress = support_buffer_device_address,
+                    .uniformBufferStandardLayout = support_standard_layout,
+                    .shaderFloat16Int8 = support_fsr,
+                    .descriptorIndexing = capabilities.descriptor_indexing },
+                vk::PhysicalDeviceVulkan13Features{
+                    .synchronization2 = capabilities.synchronization2,
+                    .dynamicRendering = capabilities.dynamic_rendering,
+                    .maintenance4 = capabilities.maintenance4,
+                    .pipelineCreationCacheControl = capabilities.pipeline_creation_cache_control },
                 vk::PhysicalDeviceBufferDeviceAddressFeatures{
                     .bufferDeviceAddress = VK_TRUE },
                 vk::PhysicalDeviceUniformBufferStandardLayoutFeatures{
@@ -805,17 +877,25 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         device_info.get().setQueueCreateInfos(queue_infos);
         device_info.get().setPEnabledExtensionNames(device_extensions);
 
-        if (!support_memory_mapping)
+        if (!has_vulkan12)
+            device_info.unlink<vk::PhysicalDeviceVulkan12Features>();
+
+        if (!has_vulkan13)
+            device_info.unlink<vk::PhysicalDeviceVulkan13Features>();
+
+        // Promoted Vulkan 1.2 features use the core feature structure. Keep
+        // the extension structures only for pre-1.2 devices.
+        if (has_vulkan12 || !support_memory_mapping)
             device_info.unlink<vk::PhysicalDeviceBufferDeviceAddressFeatures>();
 
-        if (!support_standard_layout)
+        if (has_vulkan12 || !support_standard_layout)
             device_info.unlink<vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>();
+
+        if (has_vulkan12 || !support_fsr)
+            device_info.unlink<vk::PhysicalDeviceShaderFloat16Int8Features>();
 
         if (!support_rasterized_order_access)
             device_info.unlink<vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>();
-
-        if (!support_fsr)
-            device_info.unlink<vk::PhysicalDeviceShaderFloat16Int8Features>();
 
         if (!support_shader_interlock)
             device_info.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
@@ -837,6 +917,18 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     // Get Queues
     general_queue = device.getQueue(general_family_index, 0);
     transfer_queue = device.getQueue(transfer_family_index, 0);
+
+    if (capabilities.timeline_semaphore) {
+        vk::SemaphoreTypeCreateInfo timeline_info{
+            .semaphoreType = vk::SemaphoreType::eTimeline,
+            .initialValue = 0
+        };
+        vk::SemaphoreCreateInfo semaphore_info{
+            .pNext = &timeline_info
+        };
+        render_timeline = device.createSemaphore(semaphore_info);
+        LOG_INFO("Using a Vulkan timeline semaphore for render completion tracking");
+    }
 
     // Create Command Pools
     {
@@ -871,7 +963,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             .device = device,
             .pVulkanFunctions = &vulkan_functions,
             .instance = instance,
-            .vulkanApiVersion = VK_API_VERSION_1_0,
+            .vulkanApiVersion = capabilities.api_version,
         };
 
         if (support_dedicated_allocations)
@@ -1035,6 +1127,7 @@ void VKState::cleanup() {
 
     for (int i = 0; i < MAX_FRAMES_RENDERING; i++) {
         frames[i].rendered_fences.clear();
+        frames[i].rendered_timeline_values.clear();
         for (auto &descriptor : frames[i].vert_descriptors)
             release_descriptor_sets(descriptor);
         for (auto &descriptor : frames[i].frag_descriptors)
@@ -1093,6 +1186,10 @@ void VKState::cleanup() {
     device.destroy(multithread_command_pool);
     multithread_command_pool = nullptr;
 
+    device.destroy(render_timeline);
+    render_timeline = nullptr;
+    next_render_timeline_value.store(0, std::memory_order_relaxed);
+
     allocator.destroy();
 
     vkutil::deinit();
@@ -1115,7 +1212,7 @@ void VKState::cleanup() {
     request_queue.reset();
     current_frame_idx = 1;
     last_scene_id = 0;
-    shaders_count_compiled = 0;
+    shaders_count_compiled.store(0, std::memory_order_relaxed);
     programs_count_pre_compiled = 0;
     should_display = false;
     render_abort = false;
@@ -1233,7 +1330,7 @@ void VKState::render_frame(DisplayState &display, const GxmState &gxm, MemState 
             layout = vk::ImageLayout::eShaderReadOnlyOptimal;
         }
 
-        screen_renderer.render(surface_handle, layout, viewport);
+        screen_renderer.render(surface_handle, layout, viewport, has_overlays);
     } else if (has_overlays) {
         screen_renderer.begin_default_render_pass();
     }
@@ -1252,7 +1349,7 @@ void VKState::swap_window() {
 
     // look once a frame if we need to save the pipeline cache
     const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    if (time_s >= pipeline_cache.next_pipeline_cache_save) {
+    if (time_s >= pipeline_cache.next_pipeline_cache_save.load(std::memory_order_relaxed)) {
         pipeline_cache.save_pipeline_cache();
 
         pipeline_cache.next_pipeline_cache_save = std::numeric_limits<uint64_t>::max();
@@ -1290,6 +1387,7 @@ uint32_t VKState::get_features_mask() {
     features_mask.use_memory_mapping = features.enable_memory_mapping;
     features_mask.use_rgb_attributes = features.support_rgb_attributes;
     features_mask.use_scaled_attributes = pipeline_cache.support_scaled_vertex_attribute;
+    features_mask.value |= capabilities.feature_mask() << 8;
 
     return features_mask.value;
 }

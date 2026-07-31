@@ -858,7 +858,7 @@ void GLState::cleanup() {
     shaders_cache_hashs.clear();
     command_buffer_queue.reset();
     last_scene_id = 0;
-    shaders_count_compiled = 0;
+    shaders_count_compiled.store(0, std::memory_order_relaxed);
     programs_count_pre_compiled = 0;
     should_display = false;
     render_abort = false;

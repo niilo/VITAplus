@@ -491,7 +491,47 @@ bool ScreenRenderer::acquire_swapchain_image() {
     return true;
 }
 
+static void transition_swapchain_image(ScreenRenderer &screen, const vk::ImageLayout old_layout, const vk::ImageLayout new_layout,
+    const vk::PipelineStageFlags2 src_stage, const vk::AccessFlags2 src_access,
+    const vk::PipelineStageFlags2 dst_stage, const vk::AccessFlags2 dst_access) {
+    if (screen.state.capabilities.synchronization2) {
+        vk::ImageMemoryBarrier2 barrier{
+            .srcStageMask = src_stage,
+            .srcAccessMask = src_access,
+            .dstStageMask = dst_stage,
+            .dstAccessMask = dst_access,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = screen.swapchain_images[screen.swapchain_image_idx],
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        vk::DependencyInfo dependency_info{};
+        dependency_info.setImageMemoryBarriers(barrier);
+        screen.current_cmd_buffer.pipelineBarrier2(dependency_info);
+        return;
+    }
+
+    vk::ImageMemoryBarrier barrier{
+        .srcAccessMask = old_layout == vk::ImageLayout::eUndefined ? vk::AccessFlags() : vk::AccessFlagBits::eColorAttachmentWrite,
+        .dstAccessMask = new_layout == vk::ImageLayout::ePresentSrcKHR ? vk::AccessFlags() : vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,
+        .oldLayout = old_layout,
+        .newLayout = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = screen.swapchain_images[screen.swapchain_image_idx],
+        .subresourceRange = vkutil::color_subresource_range
+    };
+    screen.current_cmd_buffer.pipelineBarrier(
+        old_layout == vk::ImageLayout::eUndefined ? vk::PipelineStageFlagBits::eTopOfPipe : vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        new_layout == vk::ImageLayout::ePresentSrcKHR ? vk::PipelineStageFlagBits::eBottomOfPipe : vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        {}, {}, {}, barrier);
+}
+
 void ScreenRenderer::begin_default_render_pass() {
+    use_dynamic_rendering = false;
+    dynamic_rendering_active = false;
     vk::RenderPassBeginInfo pass_info{
         .renderPass = default_render_pass,
         .framebuffer = swapchain_framebuffers[swapchain_image_idx],
@@ -506,12 +546,46 @@ void ScreenRenderer::begin_default_render_pass() {
     current_cmd_buffer.beginRenderPass(pass_info, vk::SubpassContents::eInline);
 }
 
-void ScreenRenderer::render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport) {
+void ScreenRenderer::render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport, const bool has_overlays) {
     if (swapchain_image_idx == ~0 && !acquire_swapchain_image())
         return;
 
     // we need to apply the screen filter at the right moment (before or after we start the render pass depending on it)
+    use_dynamic_rendering = state.capabilities.dynamic_rendering
+        && !has_overlays
+        && !filter->need_post_processing_render_pass()
+        && filter->supports_dynamic_rendering();
     filter->render(true, image_view, layout, viewport);
+
+    if (use_dynamic_rendering) {
+        transition_swapchain_image(*this,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::PipelineStageFlagBits2::eNone,
+            vk::AccessFlags2(),
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite);
+
+        vk::ClearValue clear_color{
+            .color = { std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }
+        };
+        vk::RenderingAttachmentInfo color_attachment{
+            .imageView = swapchain_views[swapchain_image_idx],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clear_color
+        };
+        vk::RenderingInfo rendering_info{
+            .renderArea = { { 0, 0 }, extent },
+            .layerCount = 1
+        };
+        rendering_info.setColorAttachments(color_attachment);
+        current_cmd_buffer.beginRendering(rendering_info);
+        dynamic_rendering_active = true;
+        filter->render(false, image_view, layout, viewport);
+        return;
+    }
 
     const auto render_pass = filter->need_post_processing_render_pass() ? post_filter_render_pass : default_render_pass;
     vk::RenderPassBeginInfo pass_info{
@@ -549,7 +623,19 @@ void ScreenRenderer::swap_window() {
     }
 
     // first submit the command buffer
-    current_cmd_buffer.endRenderPass();
+    if (dynamic_rendering_active) {
+        current_cmd_buffer.endRendering();
+        transition_swapchain_image(*this,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eNone,
+            vk::AccessFlags2());
+        dynamic_rendering_active = false;
+    } else {
+        current_cmd_buffer.endRenderPass();
+    }
     current_cmd_buffer.end();
     vk::SubmitInfo submit_info{};
     std::array<vk::Semaphore, 1> wait_semaphores = { image_acquired_semaphores[current_frame] };
