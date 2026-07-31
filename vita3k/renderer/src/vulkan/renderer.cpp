@@ -267,7 +267,7 @@ static bool device_is_compatible(const vk::PhysicalDevice &device, const Dispatc
     if (device.getProperties(dispatch).apiVersion < VK_API_VERSION_1_1)
         return false;
 
-    return has_required_device_extensions(device.enumerateDeviceExtensionProperties(dispatch));
+    return has_required_device_extensions(device.enumerateDeviceExtensionProperties(nullptr, dispatch));
 }
 
 static bool device_is_compatible(const vk::PhysicalDevice &device) {
@@ -1978,7 +1978,7 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
         for (const vk::PhysicalDevice &gpu : physical_devices) {
             const vk::PhysicalDeviceProperties properties = gpu.getProperties(dispatch);
             if (properties.apiVersion < VK_API_VERSION_1_1
-                || !device_is_compatible(gpu, dispatch))
+                || !vulkan::device_is_compatible(gpu, dispatch))
                 continue;
 
             info.gpu_names.emplace_back(properties.deviceName.data());
