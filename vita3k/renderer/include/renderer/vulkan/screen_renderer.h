@@ -44,6 +44,7 @@ public:
     vk::SurfaceCapabilitiesKHR surface_capabilities;
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
+    bool vsync = true;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
@@ -98,6 +99,7 @@ private:
     void create_render_pass();
     void create_layout_sync();
     void create_swapchain();
+    void select_present_mode();
     vk::Pipeline create_graphics_pipeline_impl(std::array<vk::PipelineShaderStageCreateInfo, 2> &shader_stages);
     bool create_graphics_pipelines();
     void copy_to_vao(const void *data);

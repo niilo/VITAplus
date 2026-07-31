@@ -22,6 +22,7 @@
 #include "util/perf_log.h"
 #include "vkutil/vkutil.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 
@@ -206,29 +207,6 @@ bool ScreenRenderer::setup() {
         state.deep_stencil_use = vk::Format::eD16Unorm;
     }
 
-    // preferred order : mailbox > fifo_relaxed > fifo > whatever
-    // the only drawback for mailbox is that it draws more power, so maybe on a portable device use something else
-    // this one should always be available
-    present_mode = vk::PresentModeKHR::eImmediate;
-    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
-    for (const auto &mode : present_modes) {
-        if (mode == vk::PresentModeKHR::eMailbox) {
-            present_mode = mode;
-            break;
-        }
-
-        if (mode == vk::PresentModeKHR::eFifoRelaxed) {
-            present_mode = mode;
-        }
-        if (present_mode == vk::PresentModeKHR::eFifoRelaxed)
-            continue;
-
-        if (mode == vk::PresentModeKHR::eFifo) {
-            present_mode = mode;
-        }
-    }
-    LOG_INFO("Present mode: {}", vk::to_string(present_mode));
-
     create_render_pass();
 
     create_swapchain();
@@ -244,6 +222,8 @@ bool ScreenRenderer::setup() {
 
 void ScreenRenderer::create_swapchain() {
     surface_capabilities = state.physical_device.getSurfaceCapabilitiesKHR(surface);
+
+    select_present_mode();
 
     if (surface_capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
         extent = surface_capabilities.currentExtent;
@@ -338,6 +318,35 @@ void ScreenRenderer::create_swapchain() {
     }
 
     create_layout_sync();
+}
+
+void ScreenRenderer::select_present_mode() {
+    const int requested_vsync = state.pending_vsync.exchange(-1, std::memory_order_relaxed);
+    if (requested_vsync >= 0)
+        vsync = requested_vsync != 0;
+
+    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
+    const auto has_mode = [&present_modes](const vk::PresentModeKHR mode) {
+        return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
+    };
+
+    if (vsync && has_mode(vk::PresentModeKHR::eFifo)) {
+        // FIFO is required by Vulkan and is the predictable, tear-free and
+        // lower-power mode for a handheld display.
+        present_mode = vk::PresentModeKHR::eFifo;
+    } else if (!vsync && has_mode(vk::PresentModeKHR::eImmediate)) {
+        present_mode = vk::PresentModeKHR::eImmediate;
+    } else if (!vsync && has_mode(vk::PresentModeKHR::eMailbox)) {
+        present_mode = vk::PresentModeKHR::eMailbox;
+    } else if (has_mode(vk::PresentModeKHR::eFifoRelaxed)) {
+        present_mode = vk::PresentModeKHR::eFifoRelaxed;
+    } else if (has_mode(vk::PresentModeKHR::eFifo)) {
+        present_mode = vk::PresentModeKHR::eFifo;
+    } else {
+        present_mode = present_modes.front();
+    }
+
+    LOG_INFO("Present mode: {} (vSync {})", vk::to_string(present_mode), vsync ? "enabled" : "disabled");
 }
 
 void ScreenRenderer::destroy_swapchain() {
@@ -700,8 +709,14 @@ bool ScreenRenderer::ensure_swapchain() {
     if (!window_has_drawable_size(state))
         return false;
 
-    if (!need_rebuild && !need_surface_recreate && swapchain && surface_matches_window_size())
+    const int requested_vsync = state.pending_vsync.load(std::memory_order_relaxed);
+    if (requested_vsync >= 0 && (requested_vsync != 0) != vsync)
+        need_rebuild = true;
+
+    if (!need_rebuild && !need_surface_recreate && swapchain && surface_matches_window_size()) {
+        state.pending_vsync.exchange(-1, std::memory_order_relaxed);
         return true;
+    }
 
     if (!rebuild_swapchain_if_visible()) {
         need_rebuild = true;

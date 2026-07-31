@@ -22,9 +22,11 @@
 #include <vkutil/vkutil.h>
 
 #include <array>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <set>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -93,6 +95,9 @@ private:
 
     vk::PipelineShaderStageCreateInfo retrieve_shader(const SceGxmProgram *program, const Sha256Hash &hash, bool is_vertex, bool maskupdate, MemState &mem, const shader::Hints &hints, bool is_srgb = false);
     vk::PipelineVertexInputStateCreateInfo get_vertex_input_state(const SceGxmVertexProgram &vertex_program, MemState &mem);
+
+    uint64_t cache_key() const;
+    std::string cache_file_name() const;
 
     // queue containing request sent by the main thread to the compile threads
     PipelineCompileQueue pipeline_compile_queue;

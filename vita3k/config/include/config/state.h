@@ -98,7 +98,7 @@ struct Config {
         bool log_active_shaders = false;
         bool log_uniforms = false;
         bool color_surface_debug = false;
-        bool validation_layer = true;
+        bool validation_layer = CONFIG_DEFAULT_VALIDATION_LAYER;
         bool tracy_primitive_impl = false;
         std::vector<std::string> tracy_advanced_profiling_modules;
     };

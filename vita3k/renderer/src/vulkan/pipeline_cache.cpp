@@ -238,6 +238,8 @@ void PipelineCache::init(bool support_rasterized_order_access) {
     else
         nb_worker_threads = 1;
 
+    LOG_INFO("Pipeline compiler worker policy: {} logical CPU cores -> {} workers", nb_logical_threads, nb_worker_threads);
+
     if (use_async_compilation) {
         // we could not initialize the worker threads previously
         use_async_compilation = false;
@@ -275,11 +277,55 @@ void PipelineCache::set_async_compilation(bool enable) {
     }
 }
 
-// magic number put at the beginning of the pipeline cache file
+// The Vulkan implementation owns the binary pipeline-cache payload. Keep a
+// small Vita3K header in front of it so a cache produced by another driver,
+// device, or renderer feature set is never handed back to Vulkan.
 constexpr uint32_t pipeline_cache_magic = 0xBEEF4321;
+constexpr uint32_t pipeline_cache_format_version = 2;
+
+struct PipelineCacheHeader {
+    uint32_t magic;
+    uint32_t format_version;
+    uint64_t cache_key;
+    uint64_t nb_hashes;
+};
+
+uint64_t PipelineCache::cache_key() const {
+    const auto &properties = state.physical_device_properties;
+    const uint32_t driver_id = state.has_physical_device_driver_properties
+        ? static_cast<uint32_t>(state.physical_device_driver_properties.driverID)
+        : 0;
+    const std::string driver_name = state.has_physical_device_driver_properties
+        ? std::string(state.physical_device_driver_properties.driverName.data())
+        : std::string();
+    const std::string driver_info = state.has_physical_device_driver_properties
+        ? std::string(state.physical_device_driver_properties.driverInfo.data())
+        : std::string();
+
+    std::string identity = fmt::format(
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        properties.vendorID,
+        properties.deviceID,
+        properties.driverVersion,
+        properties.apiVersion,
+        state.get_features_mask(),
+        static_cast<int>(state.mapping_method),
+        driver_id,
+        properties.deviceName.data(),
+        driver_name,
+        driver_info,
+        shader::CURRENT_VERSION);
+    identity.append(reinterpret_cast<const char *>(properties.pipelineCacheUUID.data()), VK_UUID_SIZE);
+
+    return XXH64(identity.data(), identity.size(), 0x56495441334BULL);
+}
+
+std::string PipelineCache::cache_file_name() const {
+    return fmt::format("pipeline-cache-vk{}-{:016x}.dat", shader::CURRENT_VERSION, cache_key());
+}
 
 void PipelineCache::read_pipeline_cache() {
-    const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
+    const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ifstream pipeline_cache_file(path, std::ios::in | std::ios::binary);
@@ -292,35 +338,45 @@ void PipelineCache::read_pipeline_cache() {
     size_t pipeline_size = pipeline_cache_file.tellg();
     pipeline_cache_file.seekg(0);
 
-    if (pipeline_size < sizeof(uint32_t) + sizeof(size_t))
+    if (pipeline_size < sizeof(PipelineCacheHeader))
         return;
 
-    // read the hashes
-    auto read_integer = [&]<typename T>(T &val) {
-        pipeline_cache_file.read(reinterpret_cast<char *>(&val), sizeof(T));
-    };
-    uint32_t magic_number;
-    read_integer(magic_number);
-    size_t nb_hashes;
-    read_integer(nb_hashes);
-    // safety check
-    size_t hashes_size = sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
-    if (magic_number != pipeline_cache_magic || pipeline_size < hashes_size) {
+    PipelineCacheHeader header{};
+    pipeline_cache_file.read(reinterpret_cast<char *>(&header), sizeof(header));
+
+    if (!pipeline_cache_file
+        || header.magic != pipeline_cache_magic
+        || header.format_version != pipeline_cache_format_version
+        || header.cache_key != cache_key()) {
+        LOG_INFO("Pipeline cache does not match the current Vulkan device or feature set, ignoring it.");
+        pipeline_cache_file.close();
+        return;
+    }
+
+    // Protect the size calculation before allocating or reading the hash list.
+    const size_t remaining_size = pipeline_size - sizeof(PipelineCacheHeader);
+    if (header.nb_hashes > remaining_size / sizeof(uint64_t)) {
         LOG_WARN("Pipeline cache is corrupted, ignoring it.");
         pipeline_cache_file.close();
         return;
     }
+    const size_t hashes_size = sizeof(PipelineCacheHeader) + header.nb_hashes * sizeof(uint64_t);
     pipeline_size -= hashes_size;
 
     // insert hashes with null pipeline
-    for (size_t i = 0; i < nb_hashes; i++) {
+    for (uint64_t i = 0; i < header.nb_hashes; i++) {
         uint64_t hash;
-        read_integer(hash);
+        pipeline_cache_file.read(reinterpret_cast<char *>(&hash), sizeof(hash));
         pipelines[hash] = nullptr;
     }
 
     std::vector<char> pipeline_data(pipeline_size);
     pipeline_cache_file.read(pipeline_data.data(), pipeline_size);
+    if (!pipeline_cache_file) {
+        LOG_WARN("Pipeline cache payload is truncated, ignoring it.");
+        pipeline_cache_file.close();
+        return;
+    }
     pipeline_cache_file.close();
 
     vk::PipelineCacheCreateInfo cache_info{
@@ -348,7 +404,7 @@ void PipelineCache::save_pipeline_cache() {
         // No pipeline was created
         return;
 
-    const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
+    const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ofstream pipeline_cache_file(path, std::ios::out | std::ios::binary | std::ios::trunc);
@@ -357,14 +413,15 @@ void PipelineCache::save_pipeline_cache() {
 
     LOG_INFO("Saving pipeline cache...");
 
-    // first save the hashes of all pipelines
-    auto write_integer = [&]<typename T>(T val) {
-        pipeline_cache_file.write(reinterpret_cast<const char *>(&val), sizeof(T));
+    PipelineCacheHeader header{
+        .magic = pipeline_cache_magic,
+        .format_version = pipeline_cache_format_version,
+        .cache_key = cache_key(),
+        .nb_hashes = pipelines.size(),
     };
-    write_integer(pipeline_cache_magic);
-    write_integer(pipelines.size());
+    pipeline_cache_file.write(reinterpret_cast<const char *>(&header), sizeof(header));
     for (auto &[hash, _] : pipelines) {
-        write_integer(hash);
+        pipeline_cache_file.write(reinterpret_cast<const char *>(&hash), sizeof(hash));
     }
 
     // then save the cache
