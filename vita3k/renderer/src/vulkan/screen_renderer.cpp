@@ -640,7 +640,7 @@ void ScreenRenderer::swap_window() {
     vk::SubmitInfo submit_info{};
     std::array<vk::Semaphore, 1> wait_semaphores = { image_acquired_semaphores[current_frame] };
     std::array<vk::PipelineStageFlags, 1> dst_masks
-        = { vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eTransfer };
+        = { vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eComputeShader };
     submit_info.setWaitSemaphores(wait_semaphores);
     submit_info.setWaitDstStageMask(dst_masks);
     submit_info.setSignalSemaphores(image_ready_semaphores[current_frame]);

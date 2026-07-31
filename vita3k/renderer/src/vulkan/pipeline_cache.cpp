@@ -525,68 +525,77 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
         spec_info = is_srgb ? &srgb_info_true : &srgb_info_false;
     }
 
-    vk::ShaderModule *shader_module;
+    vk::ShaderModule shader_module = nullptr;
+    bool compile_shader = false;
     {
         // look if it is in the cache
         std::unique_lock<std::mutex> lock(shaders_mutex);
-        shader_module = &shaders.insert({ hash, nullptr }).first->second;
-        if (*shader_module == shader_compiling) {
-            // another thread is compiling the same exact shader at the same time
-            // it's no use re-compiling it, so just wait for the other thread being done
-            lock.unlock();
+        auto shader_it = shaders.insert({ hash, nullptr }).first;
+        while (shader_it->second == shader_compiling)
+            shaders_condv.wait(lock);
 
-            // we shouldn't need atomics and the compiler shouldn't be able to optimize this
-            while (*shader_module == shader_compiling)
-                std::this_thread::yield();
+        if (shader_it->second != nullptr) {
+            shader_module = shader_it->second;
+        } else {
+            // Mark the shader as compiling so only this thread performs the work.
+            shader_it->second = shader_compiling;
+            compile_shader = true;
         }
-
-        if (*shader_module == nullptr)
-            // now mark the shader as compiling so that other threads accessing it won't try to compile it a second time
-            *shader_module = shader_compiling;
     }
 
-    if (*shader_module == shader_compiling) {
-        precompile_shader(hash, false);
-    }
-
-    if (*shader_module != shader_compiling) {
+    if (!compile_shader) {
         vk::PipelineShaderStageCreateInfo shader_stage_info{
             .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
-            .module = *shader_module,
+            .module = shader_module,
             .pName = is_vertex ? "main_vs" : "main_fs",
             .pSpecializationInfo = spec_info,
         };
         return shader_stage_info;
     }
 
-    const std::string hash_text = hex_string(hash);
-
-    LOG_INFO("Generating vulkan spv shader {}", hash_text);
-    const std::string shader_version = fmt::format("vk{}", shader::CURRENT_VERSION);
-
-    shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
-
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
-
-    *shader_module = state.device.createShaderModule(shader_info);
-    {
-        std::lock_guard<std::mutex> guard(shaders_mutex);
-        // Save shader cache hashes
-        // vertex and fragment shaders are not linked together so no need to associate them
-        Sha256Hash empty_hash{};
-        if (is_vertex) {
-            state.shaders_cache_hashs.push_back({ hash, empty_hash });
+    try {
+        if (const vk::ShaderModule cached_shader = precompile_shader(hash, false)) {
+            shader_module = cached_shader;
         } else {
-            state.shaders_cache_hashs.push_back({ empty_hash, hash });
+            const std::string hash_text = hex_string(hash);
+
+            LOG_INFO("Generating vulkan spv shader {}", hash_text);
+            const std::string shader_version = fmt::format("vk{}", shader::CURRENT_VERSION);
+
+            shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
+
+            vk::ShaderModuleCreateInfo shader_info{
+                .codeSize = sizeof(uint32_t) * source.size(),
+                .pCode = source.data()
+            };
+
+            shader_module = state.device.createShaderModule(shader_info);
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            shaders.find(hash)->second = shader_module;
+
+            // Save shader cache hashes
+            // vertex and fragment shaders are not linked together so no need to associate them
+            Sha256Hash empty_hash{};
+            if (is_vertex) {
+                state.shaders_cache_hashs.push_back({ hash, empty_hash });
+            } else {
+                state.shaders_cache_hashs.push_back({ empty_hash, hash });
+            }
         }
+    } catch (...) {
+        std::lock_guard<std::mutex> guard(shaders_mutex);
+        const auto shader_it = shaders.find(hash);
+        if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+            shader_it->second = nullptr;
+        shaders_condv.notify_all();
+        throw;
     }
+
+    shaders_condv.notify_all();
 
     vk::PipelineShaderStageCreateInfo shader_stage_info{
         .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
-        .module = *shader_module,
+        .module = shader_module,
         .pName = is_vertex ? "main_vs" : "main_fs",
         .pSpecializationInfo = spec_info,
     };
@@ -1085,35 +1094,62 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
 }
 
 vk::ShaderModule PipelineCache::precompile_shader(const Sha256Hash &hash, bool search_first) {
+    const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
+
     if (search_first) {
-        // happens while loading the thread, no parallel access so no need for a mutex
-        auto it = shaders.find(hash);
-        if (it != shaders.end())
-            return it->second;
+        std::unique_lock<std::mutex> lock(shaders_mutex);
+        auto shader_it = shaders.insert({ hash, nullptr }).first;
+        while (shader_it->second == shader_compiling)
+            shaders_condv.wait(lock);
+        if (shader_it->second != nullptr)
+            return shader_it->second;
+        shader_it->second = shader_compiling;
     }
 
-    if (!fs::exists(state.shaders_path) || fs::is_empty(state.shaders_path))
-        return nullptr;
+    try {
+        if (!fs::exists(state.shaders_path) || fs::is_empty(state.shaders_path)) {
+            if (search_first) {
+                std::lock_guard<std::mutex> lock(shaders_mutex);
+                shaders.find(hash)->second = nullptr;
+                shaders_condv.notify_all();
+            }
+            return nullptr;
+        }
 
-    Sha256Hash shader_hash;
-    memcpy(shader_hash.data(), hash.data(), sizeof(Sha256Hash));
-    const std::string shader_file_name = fmt::format("vk{}-{}.spv", shader::CURRENT_VERSION, hex_string(shader_hash));
-    const std::vector<uint32_t> source = renderer::pre_load_shader_spirv(state.shaders_path / shader_file_name);
+        Sha256Hash shader_hash;
+        memcpy(shader_hash.data(), hash.data(), sizeof(Sha256Hash));
+        const std::string shader_file_name = fmt::format("vk{}-{}.spv", shader::CURRENT_VERSION, hex_string(shader_hash));
+        const std::vector<uint32_t> source = renderer::pre_load_shader_spirv(state.shaders_path / shader_file_name);
 
-    if (source.empty())
-        return nullptr;
+        if (source.empty()) {
+            if (search_first) {
+                std::lock_guard<std::mutex> lock(shaders_mutex);
+                shaders.find(hash)->second = nullptr;
+                shaders_condv.notify_all();
+            }
+            return nullptr;
+        }
 
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
+        vk::ShaderModuleCreateInfo shader_info{
+            .codeSize = sizeof(uint32_t) * source.size(),
+            .pCode = source.data()
+        };
 
-    vk::ShaderModule shader = state.device.createShaderModule(shader_info);
-    {
-        std::lock_guard<std::mutex> guard(shaders_mutex);
-        shaders[hash] = shader;
+        vk::ShaderModule shader = state.device.createShaderModule(shader_info);
+        {
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            shaders.find(hash)->second = shader;
+        }
+        shaders_condv.notify_all();
+
+        return shader;
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(shaders_mutex);
+        const auto shader_it = shaders.find(hash);
+        if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+            shader_it->second = nullptr;
+        shaders_condv.notify_all();
+        throw;
     }
-
-    return shader;
 }
 } // namespace renderer::vulkan

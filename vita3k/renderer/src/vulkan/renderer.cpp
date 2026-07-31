@@ -368,7 +368,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     const bool custom_driver_requested = !config.current_config.custom_driver_name.empty();
 #endif
     pending_vsync.store(config.current_config.v_sync ? 1 : 0, std::memory_order_relaxed);
-    bool has_driver_properties_extension = false;
+    has_physical_device_driver_properties = false;
 
     // Create Instance
     {
@@ -418,7 +418,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         const std::set<std::string> optional_instance_extensions = {
             vk::KHRGetPhysicalDeviceProperties2ExtensionName,
-            vk::KHRDriverPropertiesExtensionName,
             vk::KHRExternalMemoryCapabilitiesExtensionName,
             vk::KHRDeviceGroupCreationExtensionName,
 #ifdef __APPLE__
@@ -431,8 +430,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             auto ite = optional_instance_extensions.find(prop.extensionName);
             if (ite != optional_instance_extensions.end()) {
                 instance_extensions.push_back(ite->c_str());
-                if (*ite == vk::KHRDriverPropertiesExtensionName)
-                    has_driver_properties_extension = true;
 #ifdef __APPLE__
                 if (*ite == vk::EXTLayerSettingsExtensionName)
                     has_layer_settings_extension = true;
@@ -577,11 +574,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             const auto properties = physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceSubgroupProperties>();
             capabilities.subgroup_size = properties.get<vk::PhysicalDeviceSubgroupProperties>().subgroupSize;
         }
-        if (has_driver_properties_extension) {
-            const auto properties = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
-            physical_device_driver_properties = properties.get<vk::PhysicalDeviceDriverProperties>();
-            has_physical_device_driver_properties = true;
-        }
         physical_device_features = physical_device.getFeatures();
         physical_device_memory = physical_device.getMemoryProperties();
         physical_device_queue_families = physical_device.getQueueFamilyProperties();
@@ -608,28 +600,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
                 static_cast<uint32_t>(physical_device_driver_properties.driverID));
         }
     }
-
-#ifdef __ANDROID__
-    if (support_custom_drivers()) {
-        bool driver_is_turnip = false;
-        if (has_physical_device_driver_properties) {
-            const std::string driver_name = string_utils::tolower(physical_device_driver_properties.driverName.data());
-            const std::string driver_info = string_utils::tolower(physical_device_driver_properties.driverInfo.data());
-            driver_is_turnip = physical_device_driver_properties.driverID == vk::DriverId::eMesaTurnip
-                || driver_name.find("turnip") != std::string::npos
-                || driver_info.find("turnip") != std::string::npos;
-        } else {
-            // Older Vulkan loaders may not expose VK_KHR_driver_properties.
-            // Keep the legacy fallback for those devices only.
-            const uint32_t major_driver_version = physical_device_properties.driverVersion >> 22;
-            driver_is_turnip = major_driver_version < 100;
-        }
-        is_adreno_turnip = driver_is_turnip;
-        is_adreno_stock = !driver_is_turnip;
-        LOG_INFO("Qualcomm Vulkan driver classification: {}",
-            is_adreno_turnip ? "Turnip" : "stock/other");
-    }
-#endif
 
     bool support_dedicated_allocations = false;
     // Create Device
@@ -665,6 +635,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         bool support_buffer_device_address = false;
         bool support_external_memory = false;
         bool support_shader_interlock = false;
+        bool support_driver_properties = false;
         const std::map<std::string_view, bool *> optional_extensions = {
             { vk::KHRGetMemoryRequirements2ExtensionName, &temp_bool },
             // can be used by vma to improve performance
@@ -685,6 +656,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             { vk::KHRShaderFloat16Int8ExtensionName, &support_fsr },
             // used for accurate programmable blending on desktop GPUs
             { vk::EXTFragmentShaderInterlockExtensionName, &support_shader_interlock },
+            // used to identify Mesa Turnip and distinguish it from stock Android drivers
+            { vk::KHRDriverPropertiesExtensionName, &support_driver_properties },
 #ifdef __APPLE__
             // Needed to create the MoltenVK device
             { vk::KHRPortabilitySubsetExtensionName, &temp_bool },
@@ -713,6 +686,52 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         const bool has_vulkan12 = capabilities.api_version >= VK_API_VERSION_1_2;
         const bool has_vulkan13 = capabilities.api_version >= VK_API_VERSION_1_3;
+
+        if (has_vulkan12) {
+            const auto properties = physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+            physical_device_driver_properties = properties.get<vk::PhysicalDeviceDriverProperties>();
+            has_physical_device_driver_properties = true;
+        } else if (support_driver_properties) {
+            if (capabilities.api_version >= VK_API_VERSION_1_1) {
+                const auto properties = physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+                physical_device_driver_properties = properties.get<vk::PhysicalDeviceDriverProperties>();
+                has_physical_device_driver_properties = true;
+            } else {
+                const auto properties = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+                physical_device_driver_properties = properties.get<vk::PhysicalDeviceDriverProperties>();
+                has_physical_device_driver_properties = true;
+            }
+        }
+
+        if (has_physical_device_driver_properties) {
+            LOG_INFO("Vulkan driver: {} ({}, id {})",
+                physical_device_driver_properties.driverName.data(),
+                physical_device_driver_properties.driverInfo.data(),
+                static_cast<uint32_t>(physical_device_driver_properties.driverID));
+        }
+
+#ifdef __ANDROID__
+        if (support_custom_drivers()) {
+            bool driver_is_turnip = false;
+            if (has_physical_device_driver_properties) {
+                const std::string driver_name = string_utils::tolower(physical_device_driver_properties.driverName.data());
+                const std::string driver_info = string_utils::tolower(physical_device_driver_properties.driverInfo.data());
+                driver_is_turnip = physical_device_driver_properties.driverID == vk::DriverId::eMesaTurnip
+                    || driver_name.find("turnip") != std::string::npos
+                    || driver_info.find("turnip") != std::string::npos;
+            } else {
+                // Older Vulkan loaders may not expose VK_KHR_driver_properties.
+                // Keep the legacy fallback for those devices only.
+                const uint32_t major_driver_version = physical_device_properties.driverVersion >> 22;
+                driver_is_turnip = major_driver_version < 100;
+            }
+            is_adreno_turnip = driver_is_turnip;
+            is_adreno_stock = !driver_is_turnip;
+            LOG_INFO("Qualcomm Vulkan driver classification: {}",
+                is_adreno_turnip ? "Turnip" : "stock/other");
+        }
+#endif
+
         vk::PhysicalDeviceVulkan12Features core12_features{};
         vk::PhysicalDeviceVulkan13Features core13_features{};
         if (has_vulkan12) {
@@ -801,7 +820,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
 
         if (has_vulkan12) {
-            support_fsr = core12_features.shaderFloat16Int8;
+            support_fsr = core12_features.shaderFloat16;
         } else {
             support_fsr &= static_cast<bool>(physical_device_features.shaderInt16);
         }
@@ -855,7 +874,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
                     .timelineSemaphore = capabilities.timeline_semaphore,
                     .bufferDeviceAddress = support_buffer_device_address,
                     .uniformBufferStandardLayout = support_standard_layout,
-                    .shaderFloat16Int8 = support_fsr,
+                    .shaderFloat16 = support_fsr,
                     .descriptorIndexing = capabilities.descriptor_indexing },
                 vk::PhysicalDeviceVulkan13Features{
                     .synchronization2 = capabilities.synchronization2,
@@ -1078,7 +1097,7 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
         // We support the requested mapping method.
         mapping_method = request_mapping;
     } else if (request_mapping != MappingMethod::Disabled) {
-        LOG_WARN("Requested memory mapping method '{}' is not supported by this Vulkan driver; falling back to disabled mapping", config_mapping);
+        LOG_WARN("Requested memory mapping method '{}' is not supported by this Vulkan driver; falling back to double-buffer mapping", config_mapping);
     }
 
     features.enable_memory_mapping = mapping_method != MappingMethod::Disabled;

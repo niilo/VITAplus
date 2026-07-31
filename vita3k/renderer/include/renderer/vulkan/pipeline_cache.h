@@ -23,6 +23,7 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -90,6 +91,7 @@ private:
 
     // only used when accessing the shaders map
     std::mutex shaders_mutex;
+    std::condition_variable shaders_condv;
     // Protect placeholders published by asynchronous compiler workers.
     std::mutex pipelines_mutex;
     // because of multithreading, we want the pointers to remain stable
