@@ -752,7 +752,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             capabilities.dynamic_rendering = core13_features.dynamicRendering;
             capabilities.synchronization2 = core13_features.synchronization2;
             capabilities.maintenance4 = core13_features.maintenance4;
-            capabilities.extended_dynamic_state = true;
             capabilities.pipeline_creation_cache_control = core13_features.pipelineCreationCacheControl;
         }
 

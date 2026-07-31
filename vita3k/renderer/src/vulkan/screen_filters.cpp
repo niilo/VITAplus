@@ -110,8 +110,12 @@ void SinglePassScreenFilter::create_graphics_pipeline(const bool dynamic_renderi
     const auto vertex_shader_path = builtin_shaders_path / get_vertex_name();
     const auto fragment_shader_path = builtin_shaders_path / get_fragment_name();
 
-    vertex_shader = vkutil::load_shader(screen.state.device, vertex_shader_path);
-    fragment_shader = vkutil::load_shader(screen.state.device, fragment_shader_path);
+    // Both the render-pass and dynamic-rendering pipelines use the same
+    // shader modules. Load them only once when both variants are created.
+    if (!vertex_shader)
+        vertex_shader = vkutil::load_shader(screen.state.device, vertex_shader_path);
+    if (!fragment_shader)
+        fragment_shader = vkutil::load_shader(screen.state.device, fragment_shader_path);
     vk::PipelineShaderStageCreateInfo vert_info{
         .stage = vk::ShaderStageFlagBits::eVertex,
         .module = vertex_shader,

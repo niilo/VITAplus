@@ -398,11 +398,22 @@ void PipelineCache::read_pipeline_cache() {
 }
 
 void PipelineCache::save_pipeline_cache() {
+    struct AsyncCompilationRestore {
+        PipelineCache &cache;
+        bool enabled;
+
+        ~AsyncCompilationRestore() {
+            if (enabled)
+                cache.set_async_compilation(true);
+        }
+    };
+
     // vkGetPipelineCacheData and pipeline creation both access the Vulkan
     // pipeline cache object. Stop workers before taking the snapshot.
     const bool restart_async_compilation = use_async_compilation;
     if (restart_async_compilation)
         set_async_compilation(false);
+    AsyncCompilationRestore async_compilation_restore{ *this, restart_async_compilation };
 
     // first save the shader hashes
     // do a copy for thread safety
@@ -414,22 +425,16 @@ void PipelineCache::save_pipeline_cache() {
     renderer::save_shaders_cache_hashs(state, shader_cache_copy);
 
     const std::vector<uint8_t> pipeline_data = state.device.getPipelineCacheData(pipeline_cache);
-    if (pipeline_data.empty()) {
+    if (pipeline_data.empty())
         // No pipeline was created
-        if (restart_async_compilation)
-            set_async_compilation(true);
         return;
-    }
 
     const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ofstream pipeline_cache_file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!pipeline_cache_file.is_open()) {
-        if (restart_async_compilation)
-            set_async_compilation(true);
+    if (!pipeline_cache_file.is_open())
         return;
-    }
 
     LOG_INFO("Saving pipeline cache...");
 
@@ -448,9 +453,6 @@ void PipelineCache::save_pipeline_cache() {
     pipeline_cache_file.write(reinterpret_cast<const char *>(pipeline_data.data()), pipeline_data.size());
     pipeline_cache_file.close();
     LOG_INFO("Pipeline cache saved");
-
-    if (restart_async_compilation)
-        set_async_compilation(true);
 }
 
 void PipelineCache::cleanup() {
@@ -603,6 +605,16 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
             } else {
                 state.shaders_cache_hashs.push_back({ empty_hash, hash });
             }
+        }
+
+        // precompile_shader(hash, false) loads a disk cache entry without
+        // touching the map. Publish it here so waiters do not remain blocked
+        // on the shader_compiling sentinel.
+        {
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            auto shader_it = shaders.find(hash);
+            if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+                shader_it->second = shader_module;
         }
     } catch (...) {
         std::lock_guard<std::mutex> guard(shaders_mutex);
