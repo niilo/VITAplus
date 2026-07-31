@@ -369,6 +369,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 #endif
     pending_vsync.store(config.current_config.v_sync ? 1 : 0, std::memory_order_relaxed);
     has_physical_device_driver_properties = false;
+    device_profile = {};
 
     // Create Instance
     {
@@ -727,6 +728,9 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             }
             is_adreno_turnip = driver_is_turnip;
             is_adreno_stock = !driver_is_turnip;
+            device_profile.driver_kind = driver_is_turnip ? VulkanDriverKind::MesaTurnip : VulkanDriverKind::QualcommStock;
+            device_profile.avoid_swapchain_storage = driver_is_turnip;
+            device_profile.use_stock_renderpass_workaround = !driver_is_turnip;
             LOG_INFO("Qualcomm Vulkan driver classification: {}",
                 is_adreno_turnip ? "Turnip" : "stock/other");
         }
@@ -1053,7 +1057,18 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         LOG_WARN("Failed to initialize Vulkan overlay renderer, overlays will be disabled");
     }
 
-    support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+    // FSR can render directly into the swapchain on safe drivers. Profiles
+    // that avoid swapchain storage use a private storage image and copy it
+    // into a transfer-destination swapchain image instead.
+    support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst);
+    const bool use_swapchain_storage = !device_profile.avoid_swapchain_storage
+        && static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+    if (!use_swapchain_storage) {
+        const vk::FormatFeatureFlags required_fsr_format_features = vk::FormatFeatureFlagBits::eStorageImage
+            | vk::FormatFeatureFlagBits::eTransferSrc;
+        support_fsr &= (physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures
+            & required_fsr_format_features) == required_fsr_format_features;
+    }
 
     return true;
 }
@@ -1758,11 +1773,16 @@ std::string_view VKState::get_gpu_name() {
 
 } // namespace renderer::vulkan
 
-static int get_supported_mapping_methods_mask(const vk::PhysicalDevice &gpu, const bool has_properties2, const vk::detail::DispatchLoaderDynamic &dispatch) {
+static int get_supported_mapping_methods_mask(const vk::PhysicalDevice &gpu, const uint32_t instance_api_version,
+    const bool properties2_available, const vk::detail::DispatchLoaderDynamic &dispatch) {
     int mask = (1 << static_cast<int>(MappingMethod::Disabled));
 
 #ifndef __APPLE__
-    if (has_properties2) {
+    if (properties2_available) {
+        const auto device_properties = gpu.getProperties(dispatch);
+        const uint32_t api_version = std::min(instance_api_version, device_properties.apiVersion);
+        const bool has_vulkan12 = api_version >= VK_API_VERSION_1_2;
+        const bool use_core_properties2 = instance_api_version >= VK_API_VERSION_1_1;
         bool support_buffer_device_address = false;
         bool support_standard_layout = false;
         bool support_external_memory = false;
@@ -1786,18 +1806,34 @@ static int get_supported_mapping_methods_mask(const vk::PhysicalDevice &gpu, con
 #endif
         }
 
-        bool support_memory_mapping = true;
-        if (support_buffer_device_address) {
-            auto features = gpu.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceBufferDeviceAddressFeatures>(dispatch);
-            support_buffer_device_address = static_cast<bool>(features.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>().bufferDeviceAddress);
-        }
-        support_memory_mapping &= support_buffer_device_address;
+        bool support_memory_mapping = false;
+        if (has_vulkan12) {
+            auto features = gpu.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features>(dispatch);
+            const auto core_features = features.get<vk::PhysicalDeviceVulkan12Features>();
+            support_buffer_device_address = core_features.bufferDeviceAddress;
+            support_standard_layout = core_features.uniformBufferStandardLayout;
+        } else {
+            if (support_buffer_device_address) {
+                if (use_core_properties2) {
+                    auto features = gpu.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceBufferDeviceAddressFeatures>(dispatch);
+                    support_buffer_device_address = static_cast<bool>(features.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>().bufferDeviceAddress);
+                } else {
+                    auto features = gpu.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceBufferDeviceAddressFeatures>(dispatch);
+                    support_buffer_device_address = static_cast<bool>(features.get<vk::PhysicalDeviceBufferDeviceAddressFeatures>().bufferDeviceAddress);
+                }
+            }
 
-        if (support_standard_layout) {
-            auto features = gpu.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>(dispatch);
-            support_standard_layout = static_cast<bool>(features.get<vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>().uniformBufferStandardLayout);
+            if (support_standard_layout) {
+                if (use_core_properties2) {
+                    auto features = gpu.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>(dispatch);
+                    support_standard_layout = static_cast<bool>(features.get<vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>().uniformBufferStandardLayout);
+                } else {
+                    auto features = gpu.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>(dispatch);
+                    support_standard_layout = static_cast<bool>(features.get<vk::PhysicalDeviceUniformBufferStandardLayoutFeatures>().uniformBufferStandardLayout);
+                }
+            }
         }
-        support_memory_mapping &= support_standard_layout;
+        support_memory_mapping = support_buffer_device_address && support_standard_layout;
 
 #ifdef __ANDROID__
         support_android_buffer_import &= SDL_GetAndroidSDKVersion() >= 26;
@@ -1809,8 +1845,13 @@ static int get_supported_mapping_methods_mask(const vk::PhysicalDevice &gpu, con
             mask |= (1 << static_cast<int>(MappingMethod::PageTable));
 
             if (support_external_memory) {
-                auto props = gpu.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>(dispatch);
-                support_external_memory = (props.get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().minImportedHostPointerAlignment <= 4096);
+                if (use_core_properties2) {
+                    auto props = gpu.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>(dispatch);
+                    support_external_memory = (props.get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().minImportedHostPointerAlignment <= 4096);
+                } else {
+                    auto props = gpu.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>(dispatch);
+                    support_external_memory = (props.get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().minImportedHostPointerAlignment <= 4096);
+                }
             }
 
             if (support_external_memory)
@@ -1844,17 +1885,24 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
         dispatch.init();
 #endif
 
+        uint32_t instance_api_version = VK_API_VERSION_1_0;
+        try {
+            instance_api_version = std::min(vk::enumerateInstanceVersion(dispatch), VK_API_VERSION_1_3);
+        } catch (const vk::SystemError &) {
+            // Vulkan 1.0 loaders do not expose vkEnumerateInstanceVersion.
+        }
+
         vk::ApplicationInfo app_info{
-            .apiVersion = VK_API_VERSION_1_0
+            .apiVersion = instance_api_version
         };
 
         std::vector<const char *> instance_extensions;
-        bool has_properties2 = false;
+        bool properties2_available = instance_api_version >= VK_API_VERSION_1_1;
         for (const vk::ExtensionProperties &prop : vk::enumerateInstanceExtensionProperties(nullptr, dispatch)) {
             const std::string_view name(prop.extensionName.data());
-            if (name == vk::KHRGetPhysicalDeviceProperties2ExtensionName) {
+            if (!properties2_available && name == vk::KHRGetPhysicalDeviceProperties2ExtensionName) {
                 instance_extensions.push_back(vk::KHRGetPhysicalDeviceProperties2ExtensionName);
-                has_properties2 = true;
+                properties2_available = true;
             }
 #ifdef __APPLE__
             else if (name == vk::KHRPortabilityEnumerationExtensionName) {
@@ -1878,7 +1926,7 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
         for (const vk::PhysicalDevice &gpu : physical_devices) {
             const vk::PhysicalDeviceProperties properties = gpu.getProperties(dispatch);
             info.gpu_names.emplace_back(properties.deviceName.data());
-            info.mapping_method_masks.push_back(get_supported_mapping_methods_mask(gpu, has_properties2, dispatch));
+            info.mapping_method_masks.push_back(get_supported_mapping_methods_mask(gpu, instance_api_version, properties2_available, dispatch));
         }
 
 #ifdef __ANDROID__

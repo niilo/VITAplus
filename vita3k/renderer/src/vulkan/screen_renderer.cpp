@@ -243,15 +243,11 @@ void ScreenRenderer::create_swapchain() {
     // Create Swapchain
     {
         vk::ImageUsageFlags surface_usage = vk::ImageUsageFlagBits::eColorAttachment;
-        vk::ImageUsageFlags fsr_flags = vk::ImageUsageFlagBits::eTransferDst;
-        if (!state.is_adreno_turnip)
-            // workaround for a Turnip driver bug: adding storage flag here breaks the swapchain
-            // and fsr works fine without this flag on Adreno
-            fsr_flags |= vk::ImageUsageFlagBits::eStorage;
-
-        if (surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
-            // needed for FSR
-            surface_usage |= fsr_flags;
+        if (surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst)
+            surface_usage |= vk::ImageUsageFlagBits::eTransferDst;
+        if ((surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
+            && !state.device_profile.avoid_swapchain_storage)
+            surface_usage |= vk::ImageUsageFlagBits::eStorage;
 
         vk::CompositeAlphaFlagBitsKHR comp_alpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
         if (!(surface_capabilities.supportedCompositeAlpha & comp_alpha))
@@ -608,7 +604,7 @@ void ScreenRenderer::render(vk::ImageView image_view, vk::ImageLayout layout, co
     // if there is too much load on the GPU, it just drops any render pass with ImGui graphics in it....
     // I still don't know exactly why
     // so as a partial fix, render the gui and screen in different render passes
-    if (state.is_adreno_stock) {
+    if (state.device_profile.use_stock_renderpass_workaround) {
         current_cmd_buffer.endRenderPass();
         pass_info.renderPass = stock_adreno_pass;
         current_cmd_buffer.beginRenderPass(pass_info, vk::SubpassContents::eInline);
@@ -771,7 +767,7 @@ void ScreenRenderer::create_render_pass() {
     post_filter_render_pass = state.device.createRenderPass(pass_info);
 
 #ifdef __ANDROID__
-    if (state.is_adreno_stock) {
+    if (state.device_profile.use_stock_renderpass_workaround) {
         // used to fix an adreno driver bug
         color_attachment.setInitialLayout(vk::ImageLayout::ePresentSrcKHR);
         stock_adreno_pass = state.device.createRenderPass(pass_info);

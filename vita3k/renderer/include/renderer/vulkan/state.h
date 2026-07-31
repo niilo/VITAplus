@@ -48,6 +48,22 @@ struct Viewport {
     uint32_t texture_height;
 };
 
+enum class VulkanDriverKind {
+    Unknown,
+    QualcommStock,
+    MesaTurnip,
+    Other,
+};
+
+// Runtime policy selected from Vulkan properties and actual feature support.
+// Keep driver quirks here instead of spreading name/version checks through
+// the renderer.
+struct VulkanDeviceProfile {
+    VulkanDriverKind driver_kind = VulkanDriverKind::Unknown;
+    bool avoid_swapchain_storage = false;
+    bool use_stock_renderpass_workaround = false;
+};
+
 // Select renderer paths from queried capabilities instead of GPU branding.
 // Adreno stock and custom drivers can expose different Vulkan feature sets.
 struct VulkanCapabilities {
@@ -92,6 +108,7 @@ struct VKState : public renderer::State {
     vk::Device device;
 
     VulkanCapabilities capabilities;
+    VulkanDeviceProfile device_profile;
 
     ScreenRenderer screen_renderer;
     OverlayRenderer overlay_renderer;

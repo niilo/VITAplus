@@ -143,6 +143,8 @@ class FSRScreenFilter : public ScreenFilter {
 private:
     // dst of the easu shader, src of the rcas shader
     std::vector<vkutil::Image> intermediate_images;
+    // Used when the swapchain cannot safely be created with storage usage.
+    std::vector<vkutil::Image> output_images;
 
     vk::ShaderModule easu_shader;
     vk::ShaderModule rcas_shader;
@@ -159,6 +161,7 @@ private:
     vk::Extent2D output_size;
 
     vk::Sampler sampler;
+    bool use_swapchain_storage = true;
 
 public:
     FSRScreenFilter(ScreenRenderer &screen_renderer)

@@ -519,10 +519,26 @@ void FSRScreenFilter::init() {
     for (auto &img : intermediate_images)
         img.format = vk::Format::eR8G8B8A8Unorm;
 
+    output_images.resize(screen.swapchain_size);
+    for (auto &img : output_images)
+        img.format = screen.surface_format.format;
+
     on_resize();
 }
 
 void FSRScreenFilter::on_resize() {
+    use_swapchain_storage = !screen.state.device_profile.avoid_swapchain_storage
+        && static_cast<bool>(screen.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+
+    if (use_swapchain_storage) {
+        output_images.clear();
+    } else {
+        if (output_images.size() != screen.swapchain_size)
+            output_images.resize(screen.swapchain_size);
+        for (auto &img : output_images)
+            img.format = screen.surface_format.format;
+    }
+
     // compute the extent
     const float window_aspect = static_cast<float>(screen.extent.width) / screen.extent.height;
     const float vita_aspect = static_cast<float>(DEFAULT_RES_WIDTH) / DEFAULT_RES_HEIGHT;
@@ -555,6 +571,13 @@ void FSRScreenFilter::on_resize() {
         img.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled);
     }
 
+    for (auto &img : output_images) {
+        img.destroy();
+        img.width = screen.extent.width;
+        img.height = screen.extent.height;
+        img.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc);
+    }
+
     // update the descriptor sets (except the first sampler image as it is not fixed)
     std::vector<vk::DescriptorImageInfo> descr_images(screen.swapchain_size * 3);
     std::vector<vk::WriteDescriptorSet> write_descr(screen.swapchain_size * 3);
@@ -578,7 +601,7 @@ void FSRScreenFilter::on_resize() {
             .setDescriptorType(vk::DescriptorType::eSampledImage);
         // rcas dst
         descr_images[i * 3 + 2]
-            .setImageView(screen.swapchain_views[i])
+            .setImageView(use_swapchain_storage ? screen.swapchain_views[i] : output_images[i].view)
             .setImageLayout(vk::ImageLayout::eGeneral);
         write_descr[i * 3 + 2]
             .setDstSet(descriptor_sets[i * 2 + 1])
@@ -630,31 +653,36 @@ void FSRScreenFilter::render(bool is_pre_renderpass, vk::ImageView src_img, vk::
     // case; retain it for letterboxed output so the bars stay black.
     const bool needs_clear = output_offset.width != 0 || output_offset.height != 0
         || output_size.width != screen.extent.width || output_size.height != screen.extent.height;
-    vk::ImageMemoryBarrier barrier{
-        .srcAccessMask = needs_clear ? vk::AccessFlagBits::eColorAttachmentWrite : vk::AccessFlags(),
-        .dstAccessMask = needs_clear ? vk::AccessFlagBits::eTransferWrite : vk::AccessFlagBits::eShaderWrite,
-        .oldLayout = vk::ImageLayout::eUndefined,
-        .newLayout = needs_clear ? vk::ImageLayout::eTransferDstOptimal : vk::ImageLayout::eGeneral,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = screen.swapchain_images[screen.swapchain_image_idx],
-        .subresourceRange = vkutil::color_subresource_range
-    };
-    cmd_buffer.pipelineBarrier(needs_clear ? vk::PipelineStageFlagBits::eColorAttachmentOutput : vk::PipelineStageFlagBits::eTopOfPipe,
-        needs_clear ? vk::PipelineStageFlagBits::eTransfer : vk::PipelineStageFlagBits::eComputeShader,
-        vk::DependencyFlags(), {}, {}, barrier);
 
-    if (needs_clear) {
-        vk::ClearColorValue clear_color{ std::array<float, 4>({ 0.0f, 0.0f, 0.0f, 0.0f }) };
-        cmd_buffer.clearColorImage(screen.swapchain_images[screen.swapchain_image_idx], vk::ImageLayout::eTransferDstOptimal, clear_color, vkutil::color_subresource_range);
+    if (use_swapchain_storage) {
+        vk::ImageMemoryBarrier barrier{
+            .srcAccessMask = needs_clear ? vk::AccessFlagBits::eColorAttachmentWrite : vk::AccessFlags(),
+            .dstAccessMask = needs_clear ? vk::AccessFlagBits::eTransferWrite : vk::AccessFlagBits::eShaderWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = needs_clear ? vk::ImageLayout::eTransferDstOptimal : vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = screen.swapchain_images[screen.swapchain_image_idx],
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        cmd_buffer.pipelineBarrier(needs_clear ? vk::PipelineStageFlagBits::eColorAttachmentOutput : vk::PipelineStageFlagBits::eTopOfPipe,
+            needs_clear ? vk::PipelineStageFlagBits::eTransfer : vk::PipelineStageFlagBits::eComputeShader,
+            vk::DependencyFlags(), {}, {}, barrier);
+
+        if (needs_clear) {
+            vk::ClearColorValue clear_color{ std::array<float, 4>({ 0.0f, 0.0f, 0.0f, 0.0f }) };
+            cmd_buffer.clearColorImage(screen.swapchain_images[screen.swapchain_image_idx], vk::ImageLayout::eTransferDstOptimal, clear_color, vkutil::color_subresource_range);
+        }
+    } else {
+        output_images[screen.swapchain_image_idx].transition_to_discard(cmd_buffer, vkutil::ImageLayout::StorageImage);
     }
 
     // then transition the read texture to sampled // wait for the previous compute shader to be done
     intermediate_images[screen.swapchain_image_idx].transition_to(cmd_buffer, vkutil::ImageLayout::SampledImage);
 
-    if (needs_clear) {
+    if (use_swapchain_storage && needs_clear) {
         // also transition the swapchain image to general
-        barrier = {
+        vk::ImageMemoryBarrier barrier{
             .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
             .dstAccessMask = vk::AccessFlagBits::eShaderWrite,
             .oldLayout = vk::ImageLayout::eTransferDstOptimal,
@@ -668,16 +696,69 @@ void FSRScreenFilter::render(bool is_pre_renderpass, vk::ImageView src_img, vk::
             vk::DependencyFlags(), {}, {}, barrier);
     }
 
-    // sharpening pass
-    cmd_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline_rcas);
-    cmd_buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline_layout_rcas, 0, descriptor_sets[2 * screen.swapchain_image_idx + 1], {});
-    RcasConstant rcas_constant{
-        .offset = output_offset,
-        // some default value for sharpening
-        .sharpening = 0.2f
+    auto render_rcas = [&]() {
+        // sharpening pass
+        cmd_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline_rcas);
+        cmd_buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline_layout_rcas, 0, descriptor_sets[2 * screen.swapchain_image_idx + 1], {});
+        RcasConstant rcas_constant{
+            .offset = output_offset,
+            // some default value for sharpening
+            .sharpening = 0.2f
+        };
+        cmd_buffer.pushConstants(pipeline_layout_rcas, vk::ShaderStageFlagBits::eCompute, 0, sizeof(RcasConstant), &rcas_constant);
+        cmd_buffer.dispatch(dispatch_x, dispatch_y, 1);
     };
-    cmd_buffer.pushConstants(pipeline_layout_rcas, vk::ShaderStageFlagBits::eCompute, 0, sizeof(RcasConstant), &rcas_constant);
-    cmd_buffer.dispatch(dispatch_x, dispatch_y, 1);
+
+    render_rcas();
+
+    if (!use_swapchain_storage) {
+        output_images[screen.swapchain_image_idx].transition_to(cmd_buffer, vkutil::ImageLayout::TransferSrc);
+
+        vk::ImageMemoryBarrier swapchain_barrier{
+            .srcAccessMask = vk::AccessFlags(),
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = screen.swapchain_images[screen.swapchain_image_idx],
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe, vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlags(), {}, {}, swapchain_barrier);
+
+        if (needs_clear) {
+            vk::ClearColorValue clear_color{ std::array<float, 4>({ 0.0f, 0.0f, 0.0f, 0.0f }) };
+            cmd_buffer.clearColorImage(screen.swapchain_images[screen.swapchain_image_idx], vk::ImageLayout::eTransferDstOptimal, clear_color, vkutil::color_subresource_range);
+        }
+
+        vk::ImageCopy copy_region{
+            .srcSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+            .srcOffset = { static_cast<int32_t>(output_offset.width), static_cast<int32_t>(output_offset.height), 0 },
+            .dstSubresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 1 },
+            .dstOffset = { static_cast<int32_t>(output_offset.width), static_cast<int32_t>(output_offset.height), 0 },
+            .extent = { output_size.width, output_size.height, 1 }
+        };
+        cmd_buffer.copyImage(
+            output_images[screen.swapchain_image_idx].image,
+            vk::ImageLayout::eTransferSrcOptimal,
+            screen.swapchain_images[screen.swapchain_image_idx],
+            vk::ImageLayout::eTransferDstOptimal,
+            copy_region);
+
+        swapchain_barrier = {
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = screen.swapchain_images[screen.swapchain_image_idx],
+            .subresourceRange = vkutil::color_subresource_range
+        };
+        cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eColorAttachmentOutput,
+            vk::DependencyFlags(), {}, {}, swapchain_barrier);
+    }
 
     // the barrier for the render pass will be handled by the renderpass external dependencies
 }

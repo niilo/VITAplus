@@ -224,6 +224,9 @@ void PipelineCache::init(bool support_rasterized_order_access) {
     }
 
     support_coherent_framebuffer_fetch = support_rasterized_order_access;
+    // Load only after all feature-dependent state used by cache_key() has been
+    // populated, including support_scaled_vertex_attribute above.
+    read_pipeline_cache();
 
     const int nb_logical_threads = SDL_GetNumLogicalCPUCores();
     // took this from RPCS3 (slightly modified)
@@ -364,11 +367,12 @@ void PipelineCache::read_pipeline_cache() {
     const size_t hashes_size = sizeof(PipelineCacheHeader) + header.nb_hashes * sizeof(uint64_t);
     pipeline_size -= hashes_size;
 
-    // insert hashes with null pipeline
-    for (uint64_t i = 0; i < header.nb_hashes; i++) {
-        uint64_t hash;
-        pipeline_cache_file.read(reinterpret_cast<char *>(&hash), sizeof(hash));
-        pipelines[hash] = nullptr;
+    std::vector<uint64_t> pipeline_hashes(header.nb_hashes);
+    pipeline_cache_file.read(reinterpret_cast<char *>(pipeline_hashes.data()), pipeline_hashes.size() * sizeof(uint64_t));
+    if (!pipeline_cache_file) {
+        LOG_WARN("Pipeline cache hash list is truncated, ignoring it.");
+        pipeline_cache_file.close();
+        return;
     }
 
     std::vector<char> pipeline_data(pipeline_size);
@@ -385,12 +389,21 @@ void PipelineCache::read_pipeline_cache() {
         .pInitialData = pipeline_data.data()
     };
 
+    const vk::PipelineCache loaded_pipeline_cache = state.device.createPipelineCache(cache_info);
     state.device.destroyPipelineCache(pipeline_cache);
-    pipeline_cache = state.device.createPipelineCache(cache_info);
+    pipeline_cache = loaded_pipeline_cache;
+    for (const uint64_t hash : pipeline_hashes)
+        pipelines[hash] = nullptr;
     LOG_INFO("Pipeline cache read and loaded");
 }
 
 void PipelineCache::save_pipeline_cache() {
+    // vkGetPipelineCacheData and pipeline creation both access the Vulkan
+    // pipeline cache object. Stop workers before taking the snapshot.
+    const bool restart_async_compilation = use_async_compilation;
+    if (restart_async_compilation)
+        set_async_compilation(false);
+
     // first save the shader hashes
     // do a copy for thread safety
     std::vector<ShadersHash> shader_cache_copy;
@@ -401,16 +414,22 @@ void PipelineCache::save_pipeline_cache() {
     renderer::save_shaders_cache_hashs(state, shader_cache_copy);
 
     const std::vector<uint8_t> pipeline_data = state.device.getPipelineCacheData(pipeline_cache);
-    if (pipeline_data.empty())
+    if (pipeline_data.empty()) {
         // No pipeline was created
+        if (restart_async_compilation)
+            set_async_compilation(true);
         return;
+    }
 
     const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ofstream pipeline_cache_file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!pipeline_cache_file.is_open())
+    if (!pipeline_cache_file.is_open()) {
+        if (restart_async_compilation)
+            set_async_compilation(true);
         return;
+    }
 
     LOG_INFO("Saving pipeline cache...");
 
@@ -429,6 +448,9 @@ void PipelineCache::save_pipeline_cache() {
     pipeline_cache_file.write(reinterpret_cast<const char *>(pipeline_data.data()), pipeline_data.size());
     pipeline_cache_file.close();
     LOG_INFO("Pipeline cache saved");
+
+    if (restart_async_compilation)
+        set_async_compilation(true);
 }
 
 void PipelineCache::cleanup() {
