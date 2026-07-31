@@ -391,7 +391,13 @@ void PipelineCache::read_pipeline_cache() {
         .pInitialData = pipeline_data.data()
     };
 
-    const vk::PipelineCache loaded_pipeline_cache = state.device.createPipelineCache(cache_info);
+    vk::PipelineCache loaded_pipeline_cache;
+    try {
+        loaded_pipeline_cache = state.device.createPipelineCache(cache_info);
+    } catch (const std::exception &e) {
+        LOG_WARN("Failed to load Vulkan pipeline cache, ignoring cached data: {}", e.what());
+        return;
+    }
     state.device.destroyPipelineCache(pipeline_cache);
     pipeline_cache = loaded_pipeline_cache;
     for (const uint64_t hash : pipeline_hashes)

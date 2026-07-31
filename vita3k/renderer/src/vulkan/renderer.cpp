@@ -144,11 +144,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_report_callback(
 }
 
 const static std::vector<const char *> required_device_extensions = {
-    vk::KHRSwapchainExtensionName,
-    // needed in order to use storage buffers
-    vk::KHRStorageBufferStorageClassExtensionName,
-    // needed in order to use negative viewport height
-    vk::KHRMaintenance1ExtensionName
+    vk::KHRSwapchainExtensionName
 };
 
 namespace renderer::vulkan {
@@ -1095,7 +1091,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     // into a transfer-destination swapchain image instead.
     support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst);
     const vk::FormatFeatureFlags required_fsr_intermediate_features = vk::FormatFeatureFlagBits::eStorageImage
-        | vk::FormatFeatureFlagBits::eSampledImage;
+        | vk::FormatFeatureFlagBits::eSampledImage
+        | vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
     support_fsr &= (physical_device.getFormatProperties(vk::Format::eR16G16B16A16Sfloat).optimalTilingFeatures
         & required_fsr_intermediate_features) == required_fsr_intermediate_features;
     const vk::FormatFeatureFlags surface_format_features = physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures;
