@@ -183,14 +183,25 @@ bool ScreenRenderer::setup() {
     bool support_d24u8 = static_cast<bool>(d24u8_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment);
     bool support_d32u8 = static_cast<bool>(d32u8_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment);
 
+    // Prefer RGBA8 because the FSR compute shaders use formatless storage
+    // writes, which Vulkan permits for RGBA8 but not for BGRA8. Keep BGRA8
+    // as a fallback for devices that do not expose RGBA8.
     for (const auto &format : surface_formats) {
-        // actually we don't care that much because we will just be copying what the game rendered
-        // rgba8 or bgra8 should be the best as it matches the format output from the vita (we don't care about the swizzle)
-        if ((format.format == vk::Format::eB8G8R8A8Unorm || format.format == vk::Format::eR8G8B8A8Unorm)
+        if (format.format == vk::Format::eR8G8B8A8Unorm
             && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
             surface_format = format;
             surface_format_found = true;
             break;
+        }
+    }
+    if (!surface_format_found) {
+        for (const auto &format : surface_formats) {
+            if (format.format == vk::Format::eB8G8R8A8Unorm
+                && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear) {
+                surface_format = format;
+                surface_format_found = true;
+                break;
+            }
         }
     }
     if (!surface_format_found)

@@ -254,17 +254,24 @@ static bool select_linux_surface_extension(VKState &vk_state, const renderer::Di
 }
 #endif
 
-static bool device_is_compatible(const vk::PhysicalDevice &device) {
-    if (device.getProperties().apiVersion < VK_API_VERSION_1_1)
-        return false;
-
-    const std::vector<vk::ExtensionProperties> available_extensions = device.enumerateDeviceExtensionProperties();
-
+static bool has_required_device_extensions(const std::vector<vk::ExtensionProperties> &available_extensions) {
     std::set<std::string> required_extensions(required_device_extensions.begin(), required_device_extensions.end());
     for (const auto &extension : available_extensions)
         required_extensions.erase(extension.extensionName);
 
     return required_extensions.empty();
+}
+
+template <typename Dispatch>
+static bool device_is_compatible(const vk::PhysicalDevice &device, const Dispatch &dispatch) {
+    if (device.getProperties(dispatch).apiVersion < VK_API_VERSION_1_1)
+        return false;
+
+    return has_required_device_extensions(device.enumerateDeviceExtensionProperties(dispatch));
+}
+
+static bool device_is_compatible(const vk::PhysicalDevice &device) {
+    return device_is_compatible(device, VULKAN_HPP_DEFAULT_DISPATCHER);
 }
 
 static bool select_queues(VKState &vk_state,
@@ -549,10 +556,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         if (gpu_idx > 0) {
             // Keep the setting index aligned with enumerate_vulkan_devices,
             // which omits physical devices that cannot meet the Vulkan 1.1
-            // minimum even when the loader exposes them.
+            // and swapchain requirements even when the loader exposes them.
             uint32_t supported_device_index = 0;
             for (const auto &device : physical_devices) {
-                if (device.getProperties().apiVersion < VK_API_VERSION_1_1)
+                if (!device_is_compatible(device))
                     continue;
 
                 if (++supported_device_index == static_cast<uint32_t>(gpu_idx)) {
@@ -1089,6 +1096,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     // FSR can render directly into the swapchain on safe drivers. Profiles
     // that avoid swapchain storage use a private storage image and copy it
     // into a transfer-destination swapchain image instead.
+    const bool supports_formatless_fsr_output = screen_renderer.surface_format.format == vk::Format::eR8G8B8A8Unorm;
+    if (!supports_formatless_fsr_output)
+        LOG_INFO("FSR disabled: selected swapchain format {} does not support formatless storage writes", vk::to_string(screen_renderer.surface_format.format));
+    support_fsr &= supports_formatless_fsr_output;
     support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst);
     const vk::FormatFeatureFlags required_fsr_intermediate_features = vk::FormatFeatureFlagBits::eStorageImage
         | vk::FormatFeatureFlagBits::eSampledImage
@@ -1966,7 +1977,8 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
 
         for (const vk::PhysicalDevice &gpu : physical_devices) {
             const vk::PhysicalDeviceProperties properties = gpu.getProperties(dispatch);
-            if (properties.apiVersion < VK_API_VERSION_1_1)
+            if (properties.apiVersion < VK_API_VERSION_1_1
+                || !device_is_compatible(gpu, dispatch))
                 continue;
 
             info.gpu_names.emplace_back(properties.deviceName.data());
