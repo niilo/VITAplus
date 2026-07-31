@@ -67,9 +67,9 @@ struct VulkanDeviceProfile {
 // Select renderer paths from queried capabilities instead of GPU branding.
 // Adreno stock and custom drivers can expose different Vulkan feature sets.
 struct VulkanCapabilities {
-    uint32_t instance_api_version = VK_API_VERSION_1_0;
-    uint32_t device_api_version = VK_API_VERSION_1_0;
-    uint32_t api_version = VK_API_VERSION_1_0;
+    uint32_t instance_api_version = VK_API_VERSION_1_1;
+    uint32_t device_api_version = VK_API_VERSION_1_1;
+    uint32_t api_version = VK_API_VERSION_1_1;
 
     bool timeline_semaphore = false;
     bool dynamic_rendering = false;
@@ -97,7 +97,7 @@ struct VulkanCapabilities {
 struct VKState : public renderer::State {
     MemState *mem;
 
-    // 0 = automatic, > 0 = order in instance.enumeratePhysicalDevices
+    // 0 = automatic, > 0 = order in the Vulkan 1.1+ physical-device list
     int gpu_idx;
 
     VKSurfaceCache surface_cache;

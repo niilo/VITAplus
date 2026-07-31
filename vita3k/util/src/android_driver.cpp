@@ -267,7 +267,7 @@ std::optional<DriverFingerprint> probe_driver_fingerprint(PFN_vkGetInstanceProcA
         .applicationVersion = VK_MAKE_API_VERSION(0, 0, 0, 1),
         .pEngineName = "Vita3K",
         .engineVersion = VK_MAKE_API_VERSION(0, 0, 0, 1),
-        .apiVersion = VK_API_VERSION_1_0,
+        .apiVersion = VK_API_VERSION_1_1,
     };
     const VkInstanceCreateInfo instance_info{
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,

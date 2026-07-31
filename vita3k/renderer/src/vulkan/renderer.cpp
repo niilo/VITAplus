@@ -176,7 +176,7 @@ static bool detect_patch_bcn(bool *support_dxt) {
 
     // create an instance to get the patch address
     vk::ApplicationInfo application_info{
-        .apiVersion = VK_API_VERSION_1_0
+        .apiVersion = VK_API_VERSION_1_1
     };
     vk::InstanceCreateInfo instance_info{
         .pApplicationInfo = &application_info
@@ -259,6 +259,9 @@ static bool select_linux_surface_extension(VKState &vk_state, const renderer::Di
 #endif
 
 static bool device_is_compatible(const vk::PhysicalDevice &device) {
+    if (device.getProperties().apiVersion < VK_API_VERSION_1_1)
+        return false;
+
     const std::vector<vk::ExtensionProperties> available_extensions = device.enumerateDeviceExtensionProperties();
 
     std::set<std::string> required_extensions(required_device_extensions.begin(), required_device_extensions.end());
@@ -368,6 +371,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     const bool custom_driver_requested = !config.current_config.custom_driver_name.empty();
 #endif
     pending_vsync.store(config.current_config.v_sync ? 1 : 0, std::memory_order_relaxed);
+    capabilities = {};
     has_physical_device_driver_properties = false;
     device_profile = {};
 
@@ -379,9 +383,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             return false;
 
         VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_get_instance_proc_addr);
-
-        if (!detect_patch_bcn(&texture_cache.support_dxt))
-            return false;
 #else
         VULKAN_HPP_DEFAULT_DISPATCHER.init();
 #endif
@@ -392,6 +393,16 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         } catch (const vk::SystemError &) {
             // Vulkan 1.0 loaders do not expose vkEnumerateInstanceVersion.
         }
+        if (instance_api_version < VK_API_VERSION_1_1) {
+            LOG_ERROR("Vulkan 1.1 or newer is required.");
+            return false;
+        }
+
+#if defined(__ANDROID__) && defined(USE_ADRENO_TOOLS)
+        if (!detect_patch_bcn(&texture_cache.support_dxt))
+            return false;
+#endif
+
         capabilities.instance_api_version = instance_api_version;
 
         vk::ApplicationInfo app_info{
@@ -539,10 +550,23 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     {
         std::vector<vk::PhysicalDevice> physical_devices = instance.enumeratePhysicalDevices();
 
-        if (gpu_idx > 0 && gpu_idx <= physical_devices.size()) {
-            // force choose the gpu
-            physical_device = physical_devices[gpu_idx - 1];
-        } else {
+        if (gpu_idx > 0) {
+            // Keep the setting index aligned with enumerate_vulkan_devices,
+            // which omits physical devices that cannot meet the Vulkan 1.1
+            // minimum even when the loader exposes them.
+            uint32_t supported_device_index = 0;
+            for (const auto &device : physical_devices) {
+                if (device.getProperties().apiVersion < VK_API_VERSION_1_1)
+                    continue;
+
+                if (++supported_device_index == static_cast<uint32_t>(gpu_idx)) {
+                    physical_device = device;
+                    break;
+                }
+            }
+        }
+
+        if (!physical_device) {
             // choose a suitable gpu
             for (const auto &device : physical_devices) {
                 if (!device_is_compatible(device))
@@ -569,6 +593,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
 
         physical_device_properties = physical_device.getProperties();
+        if (physical_device_properties.apiVersion < VK_API_VERSION_1_1) {
+            LOG_ERROR("Selected Vulkan device does not support Vulkan 1.1 or newer.");
+            return false;
+        }
         capabilities.device_api_version = physical_device_properties.apiVersion;
         capabilities.api_version = std::min(capabilities.instance_api_version, capabilities.device_api_version);
         if (capabilities.api_version >= VK_API_VERSION_1_1) {
@@ -626,6 +654,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             .occlusionQueryPrecise = physical_device_features.occlusionQueryPrecise,
             .fragmentStoresAndAtomics = physical_device_features.fragmentStoresAndAtomics,
             .shaderStorageImageExtendedFormats = physical_device_features.shaderStorageImageExtendedFormats,
+            .shaderStorageImageWriteWithoutFormat = physical_device_features.shaderStorageImageWriteWithoutFormat,
             .shaderInt16 = physical_device_features.shaderInt16,
         };
 
@@ -833,6 +862,11 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             support_fsr = static_cast<bool>(props.get<vk::PhysicalDeviceShaderFloat16Int8Features>().shaderFloat16);
         }
         support_fsr &= static_cast<bool>(physical_device_features.shaderInt16);
+        // FSR writes to both the FP16 intermediate and the native swapchain
+        // format. An unqualified storage image uses the actual image-view
+        // format, so this feature is required to support RGBA/BGRA surfaces
+        // without shader variants or a conversion pass.
+        support_fsr &= static_cast<bool>(physical_device_features.shaderStorageImageWriteWithoutFormat);
 
         LOG_INFO("Vulkan capability path: API {}.{}.{}, timeline semaphore {}, dynamic rendering {}, synchronization2 {}, "
                  "extended dynamic state {}, descriptor indexing {}, maintenance4 {}, pipeline cache control {}, subgroup size {}",
@@ -1060,8 +1094,14 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     // that avoid swapchain storage use a private storage image and copy it
     // into a transfer-destination swapchain image instead.
     support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferDst);
+    const vk::FormatFeatureFlags required_fsr_intermediate_features = vk::FormatFeatureFlagBits::eStorageImage
+        | vk::FormatFeatureFlagBits::eSampledImage;
+    support_fsr &= (physical_device.getFormatProperties(vk::Format::eR16G16B16A16Sfloat).optimalTilingFeatures
+        & required_fsr_intermediate_features) == required_fsr_intermediate_features;
+    const vk::FormatFeatureFlags surface_format_features = physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures;
     const bool use_swapchain_storage = !device_profile.avoid_swapchain_storage
-        && static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+        && static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
+        && static_cast<bool>(surface_format_features & vk::FormatFeatureFlagBits::eStorageImage);
     if (!use_swapchain_storage) {
         const vk::FormatFeatureFlags required_fsr_format_features = vk::FormatFeatureFlagBits::eStorageImage
             | vk::FormatFeatureFlagBits::eTransferSrc;
@@ -1891,6 +1931,11 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
             // Vulkan 1.0 loaders do not expose vkEnumerateInstanceVersion.
         }
 
+        if (instance_api_version < VK_API_VERSION_1_1) {
+            LOG_WARN("Vulkan 1.1 or newer is required for device enumeration.");
+            return info;
+        }
+
         vk::ApplicationInfo app_info{
             .apiVersion = instance_api_version
         };
@@ -1924,6 +1969,9 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
 
         for (const vk::PhysicalDevice &gpu : physical_devices) {
             const vk::PhysicalDeviceProperties properties = gpu.getProperties(dispatch);
+            if (properties.apiVersion < VK_API_VERSION_1_1)
+                continue;
+
             info.gpu_names.emplace_back(properties.deviceName.data());
             info.mapping_method_masks.push_back(get_supported_mapping_methods_mask(gpu, instance_api_version, properties2_available, dispatch));
         }

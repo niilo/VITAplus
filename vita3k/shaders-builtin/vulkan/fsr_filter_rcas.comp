@@ -34,7 +34,10 @@ uvec4 con0;
 #define A_HALF
 #include "../../../external/GPUOpen/ffx_a.h"
 layout(set=0,binding=1) uniform texture2D InputTexture;
-layout(set=0,binding=2,rgba16f) uniform image2D OutputTexture;
+// The output format is selected by the image view. This keeps the shader
+// usable with both RGBA and BGRA swapchain images. The device must enable
+// shaderStorageImageWriteWithoutFormat before this shader is used.
+layout(set=0,binding=2) writeonly uniform image2D OutputTexture;
 layout(set=0,binding=3) uniform sampler InputSampler;
 #define FSR_RCAS_H
 AH4 FsrRcasLoadH(ASW2 p) { return AH4(texelFetch(sampler2D(InputTexture,InputSampler), ASU2(p), 0)); }
@@ -63,4 +66,3 @@ void main()
 	gxy.x -= 8u;
 	CurrFilter(gxy);
 }
-

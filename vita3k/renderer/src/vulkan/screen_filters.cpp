@@ -518,10 +518,12 @@ void FSRScreenFilter::init() {
         LOG_ERROR("Failed to create compute pipeline");
     pipeline_rcas = result.value;
 
-    // create intermediate images
+    // Keep the EASU result in FP16 so RCAS receives the precision produced by
+    // the half-precision FSR math. The final image remains in the native
+    // swapchain format, which avoids a separate format-conversion pass.
     intermediate_images.resize(screen.swapchain_size);
     for (auto &img : intermediate_images)
-        img.format = vk::Format::eR8G8B8A8Unorm;
+        img.format = vk::Format::eR16G16B16A16Sfloat;
 
     output_images.resize(screen.swapchain_size);
     for (auto &img : output_images)
@@ -531,8 +533,10 @@ void FSRScreenFilter::init() {
 }
 
 void FSRScreenFilter::on_resize() {
+    const auto surface_format_features = screen.state.physical_device.getFormatProperties(screen.surface_format.format).optimalTilingFeatures;
     use_swapchain_storage = !screen.state.device_profile.avoid_swapchain_storage
-        && static_cast<bool>(screen.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+        && static_cast<bool>(screen.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
+        && static_cast<bool>(surface_format_features & vk::FormatFeatureFlagBits::eStorageImage);
 
     if (use_swapchain_storage) {
         output_images.clear();

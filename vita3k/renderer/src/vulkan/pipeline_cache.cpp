@@ -31,6 +31,8 @@
 
 #include <SDL3/SDL_cpuinfo.h>
 
+#include <exception>
+
 // don't use the dispatch version, because we always hash a small amount
 // with a known size
 #define XXH_INLINE_ALL
@@ -892,7 +894,16 @@ void PipelineCache::compiler_thread(MemState &mem) {
             // use this as an instruction to stop the thread
             break;
 
-        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        vk::Pipeline pipeline = nullptr;
+        try {
+            pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm,
+                *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        } catch (const std::exception &e) {
+            LOG_ERROR("Asynchronous Vulkan pipeline compilation failed: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("Asynchronous Vulkan pipeline compilation failed with an unknown exception.");
+        }
+
         {
             std::lock_guard<std::mutex> lock(pipelines_mutex);
             auto pipeline_it = pipelines.find(request->key);
@@ -903,10 +914,11 @@ void PipelineCache::compiler_thread(MemState &mem) {
         request->vertex_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
         request->fragment_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
 
-        const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
-
-        state.shaders_count_compiled++;
+        if (pipeline != nullptr) {
+            const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
+            state.shaders_count_compiled++;
+        }
 
         delete request;
     }
@@ -1108,13 +1120,22 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         return nullptr;
     } else {
         // can't wait, compile it right now
-        vk::Pipeline result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+        vk::Pipeline result = nullptr;
+        try {
+            result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+        } catch (const std::exception &e) {
+            LOG_ERROR("Synchronous Vulkan pipeline compilation failed: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("Synchronous Vulkan pipeline compilation failed with an unknown exception.");
+        }
 
-        const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
+        if (result != nullptr) {
+            const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
 
-        if (!already_in_cache)
-            state.shaders_count_compiled++;
+            if (!already_in_cache)
+                state.shaders_count_compiled++;
+        }
 
         {
             std::lock_guard<std::mutex> lock(pipelines_mutex);
