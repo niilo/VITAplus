@@ -44,7 +44,11 @@ public:
     vk::SurfaceCapabilitiesKHR surface_capabilities;
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
+    // On Android, v-sync on uses FIFO and v-sync off uses MAILBOX when the
+    // surface has it. See select_present_mode().
     bool vsync = true;
+    // Temporary setting for ticket 11: images added to minImageCount.
+    uint32_t extra_images = 1;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;

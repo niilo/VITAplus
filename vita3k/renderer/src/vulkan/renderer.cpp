@@ -1084,6 +1084,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         frame.destroy_queue.init(device);
     }
 
+    screen_renderer.extra_images = static_cast<uint32_t>(std::clamp(config.swapchain_extra_images, 0, 3));
     if (!screen_renderer.setup())
         return false;
 

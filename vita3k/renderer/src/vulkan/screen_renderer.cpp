@@ -231,6 +231,32 @@ bool ScreenRenderer::setup() {
     return true;
 }
 
+void ScreenRenderer::select_present_mode() {
+    const int requested_vsync = state.pending_vsync.exchange(-1, std::memory_order_relaxed);
+    if (requested_vsync >= 0)
+        vsync = requested_vsync != 0;
+
+    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
+    const auto has_mode = [&present_modes](const vk::PresentModeKHR mode) {
+        return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
+    };
+
+    // FIFO is the only mode that Vulkan requires, so it is the fallback.
+#ifdef __ANDROID__
+    // v-sync on uses FIFO. v-sync off uses MAILBOX when the surface has it.
+    present_mode = (!vsync && has_mode(vk::PresentModeKHR::eMailbox)) ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;
+#else
+    // Other systems keep the old order, and v-sync does not change it:
+    // MAILBOX, then FIFO_RELAXED, then FIFO.
+    if (has_mode(vk::PresentModeKHR::eMailbox))
+        present_mode = vk::PresentModeKHR::eMailbox;
+    else if (has_mode(vk::PresentModeKHR::eFifoRelaxed))
+        present_mode = vk::PresentModeKHR::eFifoRelaxed;
+    else
+        present_mode = vk::PresentModeKHR::eFifo;
+#endif
+}
+
 void ScreenRenderer::create_swapchain() {
     surface_capabilities = state.physical_device.getSurfaceCapabilitiesKHR(surface);
 
@@ -247,7 +273,7 @@ void ScreenRenderer::create_swapchain() {
     if (extent.width == 0 || extent.height == 0)
         return;
 
-    swapchain_size = surface_capabilities.minImageCount + 1;
+    swapchain_size = surface_capabilities.minImageCount + extra_images;
     if (surface_capabilities.maxImageCount != 0)
         swapchain_size = std::min(swapchain_size, surface_capabilities.maxImageCount);
 
@@ -285,6 +311,14 @@ void ScreenRenderer::create_swapchain() {
     // Get Swapchain Images
     swapchain_images = state.device.getSwapchainImagesKHR(swapchain);
     swapchain_size = swapchain_images.size();
+    LOG_INFO("Present mode: {} (v-sync {}), swapchain images: {} (minimum {})", vk::to_string(present_mode), vsync ? "on" : "off", swapchain_size, surface_capabilities.minImageCount);
+
+    // vita_surface has one image per swapchain image. The count can change
+    // when the swapchain is created again with another present mode.
+    // The GPU is idle here: setup() runs before the first frame, and the
+    // rebuild waits for the device first.
+    if (!vita_surface.empty() && vita_surface.size() != swapchain_size)
+        vita_surface.resize(swapchain_size);
 
     // Get Image views
     swapchain_views.resize(swapchain_size);
@@ -325,35 +359,6 @@ void ScreenRenderer::create_swapchain() {
     }
 
     create_layout_sync();
-}
-
-void ScreenRenderer::select_present_mode() {
-    const int requested_vsync = state.pending_vsync.exchange(-1, std::memory_order_relaxed);
-    if (requested_vsync >= 0)
-        vsync = requested_vsync != 0;
-
-    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
-    const auto has_mode = [&present_modes](const vk::PresentModeKHR mode) {
-        return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
-    };
-
-    if (vsync && has_mode(vk::PresentModeKHR::eFifo)) {
-        // FIFO is required by Vulkan and is the predictable, tear-free and
-        // lower-power mode for a handheld display.
-        present_mode = vk::PresentModeKHR::eFifo;
-    } else if (!vsync && has_mode(vk::PresentModeKHR::eImmediate)) {
-        present_mode = vk::PresentModeKHR::eImmediate;
-    } else if (!vsync && has_mode(vk::PresentModeKHR::eMailbox)) {
-        present_mode = vk::PresentModeKHR::eMailbox;
-    } else if (has_mode(vk::PresentModeKHR::eFifoRelaxed)) {
-        present_mode = vk::PresentModeKHR::eFifoRelaxed;
-    } else if (has_mode(vk::PresentModeKHR::eFifo)) {
-        present_mode = vk::PresentModeKHR::eFifo;
-    } else {
-        present_mode = present_modes.front();
-    }
-
-    LOG_INFO("Present mode: {} (vSync {})", vk::to_string(present_mode), vsync ? "enabled" : "disabled");
 }
 
 void ScreenRenderer::destroy_swapchain() {
@@ -807,7 +812,11 @@ bool ScreenRenderer::ensure_swapchain() {
         need_rebuild = true;
 
     if (!need_rebuild && !need_surface_recreate && swapchain && surface_matches_window_size()) {
-        state.pending_vsync.exchange(-1, std::memory_order_relaxed);
+        // The request matches the current mode. Clear it, unless a new
+        // request came in after the load above.
+        int expected = requested_vsync;
+        if (requested_vsync >= 0)
+            state.pending_vsync.compare_exchange_strong(expected, -1, std::memory_order_relaxed);
         return true;
     }
 
