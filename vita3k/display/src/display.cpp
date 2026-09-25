@@ -17,26 +17,38 @@
 
 #include <display/functions.h>
 
+#include <config/state.h>
 #include <dialog/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
 #include <kernel/state.h>
 #include <renderer/state.h>
 
+#include <util/perf_log.h>
+
+#include <algorithm>
 #include <chrono>
 #include <motion/functions.h>
 #include <touch/functions.h>
 
 // Code heavily influenced by PPSSSPP's SceDisplay.cpp
 
-static constexpr int TARGET_FPS = 60;
-static constexpr int64_t TARGET_MICRO_PER_FRAME = 1000000LL / TARGET_FPS;
 // how many cycles do we need to see before we start predicting the next frame
 static constexpr int predict_threshold = 3;
 static constexpr int max_expected_swapchain_size = 6;
 
 static void vblank_sync_thread(EmuEnvState &emuenv) {
     DisplayState &display = emuenv.display;
+
+    // Temporary setting for ticket 08: 16666 us is 60.002 Hz, 16683 us is the
+    // 59.94 Hz of the Vita.
+    const std::chrono::microseconds period{ std::clamp(emuenv.cfg.vblank_period_us, 1000, 100000) };
+    LOG_INFO("Vblank period: {} us", period.count());
+
+    // Deadline N is start + N * period. The steady clock does not jump, and an
+    // absolute deadline does not add the wake-up delay of each tick to the next.
+    const auto start = std::chrono::steady_clock::now();
+    int64_t tick = 0;
 
     while (!display.abort.load()) {
         {
@@ -75,9 +87,22 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                 }
             }
         }
-        const auto time_ms = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        const auto time_left = TARGET_MICRO_PER_FRAME - (time_ms % TARGET_MICRO_PER_FRAME);
-        std::this_thread::sleep_for(std::chrono::microseconds(time_left));
+        ++tick;
+        auto deadline = start + tick * period;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            // A whole period is gone. Skip the missed ticks, as real hardware
+            // does not send them later.
+            tick = (now - start) / period + 1;
+            deadline = start + tick * period;
+        }
+        std::this_thread::sleep_until(deadline);
+
+        if (perf_log::enabled()) {
+            const auto woke = std::chrono::steady_clock::now();
+            const auto error_us = std::chrono::duration_cast<std::chrono::microseconds>(woke - deadline).count();
+            perf_log::write("vblank", "steady_us,wake_error_us", fmt::format("{},{}", perf_log::now_us(), error_us));
+        }
     }
 }
 
