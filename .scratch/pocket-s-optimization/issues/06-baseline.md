@@ -105,3 +105,20 @@ build Plus: a normal clone (not a worktree, because the container cannot
 see the worktree git data), `chmod +x android/gradlew`, and a stub
 `vita3k/util/include/util/fork_build.h` with `FORK_BUILD_SEQ` and
 `FORK_BUILD_CHANGES`, because Plus does not commit that file.
+
+Uncharted solved, 2026-09-29: the cause was an incomplete firmware in the
+VitaFS folder on the SD card (`pref-path:
+/storage/4CDE-C1FC/emu-app-data/psvita/`). `os0:kd/bootimage.skprx`,
+`os0:kd/sysmodule.skprx` and `vs0:sys/` were missing (the log said
+"Missing file at kd/bootimage.skprx"). Without them the game module
+`app0:sce_module/libult.suprx` was not loaded, and the HLE stubs of
+`sceUlt*` (mutex, condition variable, semaphore) returned 0. The game then
+read a NULL pointer at "LEVEL START". A full firmware was in the app's
+default folder (`files/vita/`). The agent copied `vs0`, `os0` and `pd0`
+from there to the SD card with `cp -rn` (add only, no overwrite). After
+that, `libult.suprx` loads and Uncharted reaches the "Start New Campaign"
+menu on Turnip at 24 to 39 FPS.
+
+For the benchmark: check that `vita3k.log` has no "Missing file at kd/"
+line before a run. The debug build that found this is on branch
+`debug/uncharted-crash` (not merged).
