@@ -84,3 +84,13 @@ Progress 2026-09-28 (agent steps 1 to 3 in part, before session H1):
   (PCSA00029), Killzone Mercenary (PCSA00107), Ratchet & Clank (PCSF00484),
   Rayman Legends (PCSE00277), Sly Cooper: Thieves in Time (PCSA00068),
   LittleBigPlanet (PCSA00549), Sky Force Anniversary (PCSE00865).
+
+Uncharted (PCSA00029) test, 2026-09-28: it crashes at "LEVEL START" with
+`Unhandled write protected region was valid. Address=0x10C` and then
+`Unhandled access to 0x4FFFFFFFC` (guest address 0xFFFFFFFC). The same
+crash happens on the stock driver, on Turnip, at 1x resolution, with
+camera type 2, and with the build from before tickets 19 to 23
+(04401a79). So it is in the base code, not in the picks. The compat list
+marks the title Playable (desktop). Do not use it as a benchmark title
+unless a fix is found. The log shows `Unimplemented sceUltSemaphoreRelease`
+before the crash.

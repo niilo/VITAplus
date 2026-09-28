@@ -57,3 +57,20 @@ Present mode: Fifo (vSync enabled)
 Using the following memory mapping method: Double buffer
 Pipeline compiler worker policy: 8 logical CPU cores -> 3 workers
 ```
+
+Problem found 2026-09-28 (user report: Turnip gives a black screen in
+PCSF00484): with the Balemuni Apex v2 Ultimate Turnip driver (Mesa
+26.3.0-devel), every graphics pipeline failed with
+`ErrorOutOfHostMemory`. The validation layer showed invalid SPIR-V:
+`OpCompositeExtract %int` from a `uvec2`. Cause: 6db85423 (picked as
+2e5e8248) reads the low address bits with an `i32` result type. The stock
+driver accepts it; Turnip does not. Fix: the u32 commit on
+`pocket-s/21-fix-spirv-type`, merged to `master`. After the fix, with a new
+shader cache, PCSF00484 draws the title screen on Turnip with no SPIR-V
+errors and no pipeline errors.
+
+Note: the shader cache on disk keeps the old SPIR-V. After a translator
+fix, the cache must be deleted. The folder belongs to the app, so `adb
+shell rm` fails; `mv` of `cache/shaders` worked, because the restore made
+that folder with the shell user. The old cache is
+`cache/shaders.old-20260928` on the device.
