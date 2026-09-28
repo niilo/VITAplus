@@ -133,7 +133,7 @@ cmd_pull_perf() {
 
 pull_config() {
     local package="$1" dest="$2"
-    adb pull "$(files_dir "$package")/config.yml" "$dest" > /dev/null
+    adb pull "$(files_dir "$package")/config.yml" "$dest" > /dev/null 2>&1
 }
 
 cmd_config_get() {
@@ -159,7 +159,10 @@ cmd_config_set() {
     KEY="$key" VALUE="$value" awk '
         index($0, ENVIRON["KEY"] ":") == 1 { print ENVIRON["KEY"] ": " ENVIRON["VALUE"]; next }
         { print }' "$tmp" > "$tmp.new"
-    adb push "$tmp.new" "$(files_dir "$package")/config.yml" > /dev/null
+    adb push "$tmp.new" "$(files_dir "$package")/config.yml" > /dev/null 2>&1
+    # A pushed file belongs to the shell user. The app must write config.yml
+    # at start, or it fails with "Failed to initialise config".
+    adb shell chmod 666 "$(files_dir "$package")/config.yml"
     rm -f "$tmp" "$tmp.new"
     cmd_config_get "$package" "$key"
 }
