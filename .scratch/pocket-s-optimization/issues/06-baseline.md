@@ -94,3 +94,14 @@ camera type 2, and with the build from before tickets 19 to 23
 marks the title Playable (desktop). Do not use it as a benchmark title
 unless a fix is found. The log shows `Unimplemented sceUltSemaphoreRelease`
 before the crash.
+
+Uncharted on Vita3K-Plus, 2026-09-29: a release APK of
+`plus/all-enhancements` 20588fbf (package `org.vita3kplus.emulator`,
+installed next to the main app) crashes in the same place. Plus logs more:
+`Refused read to the NULL guard page (guest 0x10C) guest PC=0x810D3CA0
+LR=0xD last_import=0x120AFC8C (sceKernelUnlockLwMutex2)`. So Plus has no
+fix for it either. The APK is `tmp/app-release-plus-20588fbf.apk`. To
+build Plus: a normal clone (not a worktree, because the container cannot
+see the worktree git data), `chmod +x android/gradlew`, and a stub
+`vita3k/util/include/util/fork_build.h` with `FORK_BUILD_SEQ` and
+`FORK_BUILD_CHANGES`, because Plus does not commit that file.
