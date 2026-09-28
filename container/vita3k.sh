@@ -82,7 +82,10 @@ run_in() {
     local args=(--rm -c "$cpus" -m "$memory" -v "$repo_root:/src" -w /src)
     if [[ "$flavor" == "android" ]]; then
         ensure_volume "$android_cache_volume"
-        args+=(--arch amd64 --rosetta -v "$android_cache_volume:/cache")
+        # ANDROID_USER_HOME keeps debug.keystore in the cache volume. Without
+        # it, each run makes a new debug key, and Android refuses to update
+        # an installed APK that has another key.
+        args+=(--arch amd64 --rosetta -v "$android_cache_volume:/cache" -e ANDROID_USER_HOME=/cache/android-user)
     else
         ensure_volume "$linux_cache_volume"
         args+=(-v "$linux_cache_volume:/ccache")
