@@ -37,12 +37,8 @@ public:
     }
 
     Ptr(T *pointer, const MemState &mem) {
-        const uint8_t *const pointer_bytes = reinterpret_cast<const uint8_t *>(pointer);
-        if (pointer_bytes == 0) {
-            addr = 0;
-        } else {
-            addr = static_cast<Address>(pointer_bytes - &mem.memory[0]);
-        }
+        // reinterpret_cast also accepts T that is a function type.
+        addr = host_to_guest(mem, reinterpret_cast<const void *>(pointer));
     }
 
     Address address() const {
