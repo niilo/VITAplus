@@ -37,7 +37,8 @@ public:
     }
 
     Ptr(T *pointer, const MemState &mem) {
-        addr = host_to_guest(mem, pointer);
+        // reinterpret_cast also accepts T that is a function type.
+        addr = host_to_guest(mem, reinterpret_cast<const void *>(pointer));
     }
 
     Address address() const {
