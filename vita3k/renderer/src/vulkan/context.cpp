@@ -27,13 +27,43 @@
 #include <util/log.h>
 #include <util/overloaded.h>
 
+#include <algorithm>
+
 namespace renderer::vulkan {
 
 void VKContext::wait_thread_function(const MemState &mem) {
     // try to wait for multiple fences at the same time if possible
     std::vector<vk::Fence> fences;
+    std::vector<uint64_t> timeline_values;
 
     auto wait_for_fences = [&]() {
+        if (!timeline_values.empty()) {
+            const uint64_t target_value = *std::max_element(timeline_values.begin(), timeline_values.end());
+            vk::SemaphoreWaitInfo wait_info{
+                .semaphoreCount = 1,
+                .pSemaphores = &state.render_timeline,
+                .pValues = &target_value
+            };
+            while (true) {
+                const auto result = state.device.waitSemaphores(wait_info, 100'000'000ULL);
+                if (result == vk::Result::eSuccess) {
+                    timeline_values.clear();
+                    break;
+                }
+                if (result == vk::Result::eTimeout) {
+                    if (state.request_queue.is_aborted()) {
+                        timeline_values.clear();
+                        return;
+                    }
+                    continue;
+                }
+                LOG_ERROR("Could not wait for the Vulkan render timeline.");
+                assert(false);
+                timeline_values.clear();
+                return;
+            }
+        }
+
         while (!fences.empty()) {
             // timeout so we can check for shutdown
             auto result = state.device.waitForFences(fences, VK_TRUE, 100'000'000ULL);
@@ -64,7 +94,10 @@ void VKContext::wait_thread_function(const MemState &mem) {
 
         std::visit(overloaded{
                        [&](FenceWaitRequest &request) {
-                           fences.push_back(request.fence);
+                           if (request.timeline_value != 0)
+                               timeline_values.push_back(request.timeline_value);
+                           else
+                               fences.push_back(request.fence);
                        },
                        [&](NotificationRequest &request) {
                            if (request.notifications[0].address || request.notifications[1].address) {
@@ -478,13 +511,28 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     vk::SubmitInfo submit_info{};
     submit_info.setCommandBuffers(cmdbuffers_to_submit);
 
+    uint64_t timeline_value = 0;
+    vk::TimelineSemaphoreSubmitInfo timeline_info{};
+    std::array<vk::Semaphore, 1> timeline_semaphores;
+    std::array<uint64_t, 1> timeline_signal_values;
+    if (state.capabilities.timeline_semaphore) {
+        timeline_value = state.next_render_timeline_value.fetch_add(1, std::memory_order_relaxed) + 1;
+        timeline_semaphores[0] = state.render_timeline;
+        timeline_signal_values[0] = timeline_value;
+        timeline_info.setSignalSemaphoreValues(timeline_signal_values);
+        submit_info.setSignalSemaphores(timeline_semaphores);
+        submit_info.pNext = &timeline_info;
+    }
+
     state.general_queue.submit(submit_info, fence);
     cmdbuffers_to_submit.clear();
     state.frame().rendered_fences.push_back(fence);
+    if (timeline_value != 0)
+        state.frame().rendered_timeline_values.push_back(timeline_value);
 
     if (state.features.enable_memory_mapping) {
         // send it to the wait queue
-        state.request_queue.push(FenceWaitRequest{ fence });
+        state.request_queue.push(FenceWaitRequest{ fence, timeline_value });
 
         if (state.mapping_method == MappingMethod::DoubleBuffer) {
             // sync all the visibility buffers
@@ -561,7 +609,9 @@ void new_frame(VKContext &context) {
     vk::Device device = context.state.device;
     FrameObject &frame = context.state.frame();
 
-    // wait on all fences still present to make sure
+    // Wait for all submissions still associated with this frame. Timeline
+    // values coalesce the wait; fences are still reset for command-buffer
+    // reuse below.
     if (!frame.rendered_fences.empty()) {
         // wait for the fences, then reset them
 
@@ -575,6 +625,19 @@ void new_frame(VKContext &context) {
             context.new_frame_condv.wait(lock, [&]() {
                 return context.last_frame_waited >= previous_frame_timestamp;
             });
+        } else if (!frame.rendered_timeline_values.empty()) {
+            const uint64_t target_value = *std::max_element(frame.rendered_timeline_values.begin(), frame.rendered_timeline_values.end());
+            vk::SemaphoreWaitInfo wait_info{
+                .semaphoreCount = 1,
+                .pSemaphores = &context.state.render_timeline,
+                .pValues = &target_value
+            };
+            const auto result = device.waitSemaphores(wait_info, std::numeric_limits<uint64_t>::max());
+            if (result != vk::Result::eSuccess) {
+                LOG_ERROR("Could not wait for the Vulkan render timeline.");
+                assert(false);
+                return;
+            }
         } else {
             auto result = device.waitForFences(frame.rendered_fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
             if (result != vk::Result::eSuccess) {
@@ -587,6 +650,7 @@ void new_frame(VKContext &context) {
         // reset the fences in both case (the wait thread does not do that as they can still be used)
         device.resetFences(frame.rendered_fences);
         frame.rendered_fences.clear();
+        frame.rendered_timeline_values.clear();
     }
 
     device.resetCommandPool(frame.prerender_pool);

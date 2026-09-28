@@ -44,6 +44,7 @@ public:
     vk::SurfaceCapabilitiesKHR surface_capabilities;
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
+    bool vsync = true;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
@@ -74,6 +75,8 @@ public:
 
     // these are used by the gui
     uint32_t swapchain_image_idx = ~0;
+    bool dynamic_rendering_active = false;
+    bool use_dynamic_rendering = false;
     // between 0 and swapchain_size - 1, used as the index for semaphores
     int current_frame = 0;
     // set when the swapchain needs to be rebuilt before the next acquire
@@ -90,7 +93,7 @@ public:
 
     bool acquire_swapchain_image();
     void begin_default_render_pass();
-    void render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport);
+    void render(vk::ImageView image_view, vk::ImageLayout layout, const Viewport &viewport, bool has_overlays);
     void swap_window();
     void set_filter(const std::string_view &filter);
 
@@ -98,6 +101,7 @@ private:
     void create_render_pass();
     void create_layout_sync();
     void create_swapchain();
+    void select_present_mode();
     vk::Pipeline create_graphics_pipeline_impl(std::array<vk::PipelineShaderStageCreateInfo, 2> &shader_stages);
     bool create_graphics_pipelines();
     void copy_to_vao(const void *data);

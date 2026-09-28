@@ -78,7 +78,9 @@ class EmulatorConfig {
     @JvmField var logUniforms: Boolean = false
     @JvmField var colorSurfaceDebug: Boolean = false
     @JvmField var dumpElfs: Boolean = false
-    @JvmField var validationLayer: Boolean = true
+    // Validation is useful while diagnosing Vulkan issues, but its runtime
+    // overhead is too high for the Android release default.
+    @JvmField var validationLayer: Boolean = false
     @JvmField var textureCache: Boolean = true
     @JvmField var stretchDisplayArea: Boolean = false
     @JvmField var fullscreenHdResPixelPerfect: Boolean = false

@@ -236,7 +236,7 @@ bool load_custom_config(Config::CurrentConfig &out, const fs::path &config_path,
         out.log_active_shaders = dbg.attribute("log-active-shaders").as_bool();
         out.log_uniforms = dbg.attribute("log-uniforms").as_bool();
         out.color_surface_debug = dbg.attribute("color-surface-debug").as_bool();
-        out.validation_layer = dbg.attribute("validation-layer").as_bool(true);
+        out.validation_layer = dbg.attribute("validation-layer").as_bool(CONFIG_DEFAULT_VALIDATION_LAYER);
     }
 
     if (!config_child.child("network").empty())

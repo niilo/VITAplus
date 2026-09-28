@@ -48,10 +48,56 @@ struct Viewport {
     uint32_t texture_height;
 };
 
+enum class VulkanDriverKind {
+    Unknown,
+    QualcommStock,
+    MesaTurnip,
+    Other,
+};
+
+// Runtime policy selected from Vulkan properties and actual feature support.
+// Keep driver quirks here instead of spreading name/version checks through
+// the renderer.
+struct VulkanDeviceProfile {
+    VulkanDriverKind driver_kind = VulkanDriverKind::Unknown;
+    bool avoid_swapchain_storage = false;
+    bool use_stock_renderpass_workaround = false;
+};
+
+// Select renderer paths from queried capabilities instead of GPU branding.
+// Adreno stock and custom drivers can expose different Vulkan feature sets.
+struct VulkanCapabilities {
+    uint32_t instance_api_version = VK_API_VERSION_1_1;
+    uint32_t device_api_version = VK_API_VERSION_1_1;
+    uint32_t api_version = VK_API_VERSION_1_1;
+
+    bool timeline_semaphore = false;
+    bool dynamic_rendering = false;
+    bool synchronization2 = false;
+    bool maintenance4 = false;
+    bool extended_dynamic_state = false;
+    bool descriptor_indexing = false;
+    bool pipeline_creation_cache_control = false;
+
+    uint32_t subgroup_size = 0;
+
+    uint32_t feature_mask() const {
+        uint32_t mask = 0;
+        mask |= timeline_semaphore ? 1U << 0 : 0;
+        mask |= dynamic_rendering ? 1U << 1 : 0;
+        mask |= synchronization2 ? 1U << 2 : 0;
+        mask |= maintenance4 ? 1U << 3 : 0;
+        mask |= extended_dynamic_state ? 1U << 4 : 0;
+        mask |= descriptor_indexing ? 1U << 5 : 0;
+        mask |= pipeline_creation_cache_control ? 1U << 6 : 0;
+        return mask;
+    }
+};
+
 struct VKState : public renderer::State {
     MemState *mem;
 
-    // 0 = automatic, > 0 = order in instance.enumeratePhysicalDevices
+    // 0 = automatic, > 0 = order in the Vulkan 1.1+ physical-device list
     int gpu_idx;
 
     VKSurfaceCache surface_cache;
@@ -61,12 +107,17 @@ struct VKState : public renderer::State {
     vk::Instance instance;
     vk::Device device;
 
+    VulkanCapabilities capabilities;
+    VulkanDeviceProfile device_profile;
+
     ScreenRenderer screen_renderer;
     OverlayRenderer overlay_renderer;
 
     // Used for memory allocation and general query later.
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties physical_device_properties;
+    vk::PhysicalDeviceDriverProperties physical_device_driver_properties;
+    bool has_physical_device_driver_properties = false;
     vk::PhysicalDeviceFeatures physical_device_features;
     vk::PhysicalDeviceMemoryProperties physical_device_memory;
     std::vector<vk::QueueFamilyProperties> physical_device_queue_families;
@@ -80,6 +131,8 @@ struct VKState : public renderer::State {
     uint32_t transfer_queue_last = 0;
     vk::Queue general_queue;
     vk::Queue transfer_queue;
+    vk::Semaphore render_timeline;
+    std::atomic<uint64_t> next_render_timeline_value{ 0 };
 
     // These might be merged into one queue, but for now they are different.
     vk::CommandPool general_command_pool;

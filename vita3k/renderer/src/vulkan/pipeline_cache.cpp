@@ -31,6 +31,8 @@
 
 #include <SDL3/SDL_cpuinfo.h>
 
+#include <exception>
+
 // don't use the dispatch version, because we always hash a small amount
 // with a known size
 #define XXH_INLINE_ALL
@@ -43,8 +45,8 @@ constexpr size_t record_pipeline_len = offsetof(GxmRecordState, vertex_streams);
 
 // structure containing everything needed to compile a pipeline
 struct CompileRequest {
-    // iterator to the pipeline location
-    vk::Pipeline *pipeline;
+    // key of the placeholder in PipelineCache::pipelines
+    uint64_t key;
 
     // this is everything we need to compile the shader on another thread (as the original data will change)
     SceGxmPrimitiveType type;
@@ -224,6 +226,9 @@ void PipelineCache::init(bool support_rasterized_order_access) {
     }
 
     support_coherent_framebuffer_fetch = support_rasterized_order_access;
+    // Load only after all feature-dependent state used by cache_key() has been
+    // populated, including support_scaled_vertex_attribute above.
+    read_pipeline_cache();
 
     const int nb_logical_threads = SDL_GetNumLogicalCPUCores();
     // took this from RPCS3 (slightly modified)
@@ -237,6 +242,8 @@ void PipelineCache::init(bool support_rasterized_order_access) {
         nb_worker_threads = 2;
     else
         nb_worker_threads = 1;
+
+    LOG_INFO("Pipeline compiler worker policy: {} logical CPU cores -> {} workers", nb_logical_threads, nb_worker_threads);
 
     if (use_async_compilation) {
         // we could not initialize the worker threads previously
@@ -275,11 +282,56 @@ void PipelineCache::set_async_compilation(bool enable) {
     }
 }
 
-// magic number put at the beginning of the pipeline cache file
+// The Vulkan implementation owns the binary pipeline-cache payload. Keep a
+// small Vita3K header in front of it so a cache produced by another driver,
+// device, or renderer feature set is never handed back to Vulkan.
 constexpr uint32_t pipeline_cache_magic = 0xBEEF4321;
+constexpr uint32_t pipeline_cache_format_version = 3;
+
+struct PipelineCacheHeader {
+    uint32_t magic;
+    uint32_t format_version;
+    uint64_t cache_key;
+    uint64_t nb_hashes;
+};
+
+uint64_t PipelineCache::cache_key() const {
+    const auto &properties = state.physical_device_properties;
+    const uint32_t driver_id = state.has_physical_device_driver_properties
+        ? static_cast<uint32_t>(state.physical_device_driver_properties.driverID)
+        : 0;
+    const std::string driver_name = state.has_physical_device_driver_properties
+        ? std::string(state.physical_device_driver_properties.driverName.data())
+        : std::string();
+    const std::string driver_info = state.has_physical_device_driver_properties
+        ? std::string(state.physical_device_driver_properties.driverInfo.data())
+        : std::string();
+
+    std::string identity = fmt::format(
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        properties.vendorID,
+        properties.deviceID,
+        properties.driverVersion,
+        properties.apiVersion,
+        state.get_features_mask(),
+        state.capabilities.feature_mask(),
+        static_cast<int>(state.mapping_method),
+        driver_id,
+        properties.deviceName.data(),
+        driver_name,
+        driver_info,
+        shader::CURRENT_VERSION);
+    identity.append(reinterpret_cast<const char *>(properties.pipelineCacheUUID.data()), VK_UUID_SIZE);
+
+    return XXH64(identity.data(), identity.size(), 0x56495441334BULL);
+}
+
+std::string PipelineCache::cache_file_name() const {
+    return fmt::format("pipeline-cache-vk{}-{:016x}.dat", shader::CURRENT_VERSION, cache_key());
+}
 
 void PipelineCache::read_pipeline_cache() {
-    const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
+    const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ifstream pipeline_cache_file(path, std::ios::in | std::ios::binary);
@@ -292,35 +344,46 @@ void PipelineCache::read_pipeline_cache() {
     size_t pipeline_size = pipeline_cache_file.tellg();
     pipeline_cache_file.seekg(0);
 
-    if (pipeline_size < sizeof(uint32_t) + sizeof(size_t))
+    if (pipeline_size < sizeof(PipelineCacheHeader))
         return;
 
-    // read the hashes
-    auto read_integer = [&]<typename T>(T &val) {
-        pipeline_cache_file.read(reinterpret_cast<char *>(&val), sizeof(T));
-    };
-    uint32_t magic_number;
-    read_integer(magic_number);
-    size_t nb_hashes;
-    read_integer(nb_hashes);
-    // safety check
-    size_t hashes_size = sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
-    if (magic_number != pipeline_cache_magic || pipeline_size < hashes_size) {
+    PipelineCacheHeader header{};
+    pipeline_cache_file.read(reinterpret_cast<char *>(&header), sizeof(header));
+
+    if (!pipeline_cache_file
+        || header.magic != pipeline_cache_magic
+        || header.format_version != pipeline_cache_format_version
+        || header.cache_key != cache_key()) {
+        LOG_INFO("Pipeline cache does not match the current Vulkan device or feature set, ignoring it.");
+        pipeline_cache_file.close();
+        return;
+    }
+
+    // Protect the size calculation before allocating or reading the hash list.
+    const size_t remaining_size = pipeline_size - sizeof(PipelineCacheHeader);
+    if (header.nb_hashes > remaining_size / sizeof(uint64_t)) {
         LOG_WARN("Pipeline cache is corrupted, ignoring it.");
         pipeline_cache_file.close();
         return;
     }
+    const size_t hashes_size = sizeof(PipelineCacheHeader) + header.nb_hashes * sizeof(uint64_t);
     pipeline_size -= hashes_size;
 
-    // insert hashes with null pipeline
-    for (size_t i = 0; i < nb_hashes; i++) {
-        uint64_t hash;
-        read_integer(hash);
-        pipelines[hash] = nullptr;
+    std::vector<uint64_t> pipeline_hashes(header.nb_hashes);
+    pipeline_cache_file.read(reinterpret_cast<char *>(pipeline_hashes.data()), pipeline_hashes.size() * sizeof(uint64_t));
+    if (!pipeline_cache_file) {
+        LOG_WARN("Pipeline cache hash list is truncated, ignoring it.");
+        pipeline_cache_file.close();
+        return;
     }
 
     std::vector<char> pipeline_data(pipeline_size);
     pipeline_cache_file.read(pipeline_data.data(), pipeline_size);
+    if (!pipeline_cache_file) {
+        LOG_WARN("Pipeline cache payload is truncated, ignoring it.");
+        pipeline_cache_file.close();
+        return;
+    }
     pipeline_cache_file.close();
 
     vk::PipelineCacheCreateInfo cache_info{
@@ -328,12 +391,38 @@ void PipelineCache::read_pipeline_cache() {
         .pInitialData = pipeline_data.data()
     };
 
+    vk::PipelineCache loaded_pipeline_cache;
+    try {
+        loaded_pipeline_cache = state.device.createPipelineCache(cache_info);
+    } catch (const std::exception &e) {
+        LOG_WARN("Failed to load Vulkan pipeline cache, ignoring cached data: {}", e.what());
+        return;
+    }
     state.device.destroyPipelineCache(pipeline_cache);
-    pipeline_cache = state.device.createPipelineCache(cache_info);
+    pipeline_cache = loaded_pipeline_cache;
+    for (const uint64_t hash : pipeline_hashes)
+        pipelines[hash] = nullptr;
     LOG_INFO("Pipeline cache read and loaded");
 }
 
 void PipelineCache::save_pipeline_cache() {
+    struct AsyncCompilationRestore {
+        PipelineCache &cache;
+        bool enabled;
+
+        ~AsyncCompilationRestore() {
+            if (enabled)
+                cache.set_async_compilation(true);
+        }
+    };
+
+    // vkGetPipelineCacheData and pipeline creation both access the Vulkan
+    // pipeline cache object. Stop workers before taking the snapshot.
+    const bool restart_async_compilation = use_async_compilation;
+    if (restart_async_compilation)
+        set_async_compilation(false);
+    AsyncCompilationRestore async_compilation_restore{ *this, restart_async_compilation };
+
     // first save the shader hashes
     // do a copy for thread safety
     std::vector<ShadersHash> shader_cache_copy;
@@ -348,7 +437,7 @@ void PipelineCache::save_pipeline_cache() {
         // No pipeline was created
         return;
 
-    const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
+    const std::string pipeline_cache_name = cache_file_name();
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
     fs::ofstream pipeline_cache_file(path, std::ios::out | std::ios::binary | std::ios::trunc);
@@ -357,14 +446,15 @@ void PipelineCache::save_pipeline_cache() {
 
     LOG_INFO("Saving pipeline cache...");
 
-    // first save the hashes of all pipelines
-    auto write_integer = [&]<typename T>(T val) {
-        pipeline_cache_file.write(reinterpret_cast<const char *>(&val), sizeof(T));
+    PipelineCacheHeader header{
+        .magic = pipeline_cache_magic,
+        .format_version = pipeline_cache_format_version,
+        .cache_key = cache_key(),
+        .nb_hashes = pipelines.size(),
     };
-    write_integer(pipeline_cache_magic);
-    write_integer(pipelines.size());
+    pipeline_cache_file.write(reinterpret_cast<const char *>(&header), sizeof(header));
     for (auto &[hash, _] : pipelines) {
-        write_integer(hash);
+        pipeline_cache_file.write(reinterpret_cast<const char *>(&hash), sizeof(hash));
     }
 
     // then save the cache
@@ -467,68 +557,87 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
         spec_info = is_srgb ? &srgb_info_true : &srgb_info_false;
     }
 
-    vk::ShaderModule *shader_module;
+    vk::ShaderModule shader_module = nullptr;
+    bool compile_shader = false;
     {
         // look if it is in the cache
         std::unique_lock<std::mutex> lock(shaders_mutex);
-        shader_module = &shaders.insert({ hash, nullptr }).first->second;
-        if (*shader_module == shader_compiling) {
-            // another thread is compiling the same exact shader at the same time
-            // it's no use re-compiling it, so just wait for the other thread being done
-            lock.unlock();
+        auto shader_it = shaders.insert({ hash, nullptr }).first;
+        while (shader_it->second == shader_compiling)
+            shaders_condv.wait(lock);
 
-            // we shouldn't need atomics and the compiler shouldn't be able to optimize this
-            while (*shader_module == shader_compiling)
-                std::this_thread::yield();
+        if (shader_it->second != nullptr) {
+            shader_module = shader_it->second;
+        } else {
+            // Mark the shader as compiling so only this thread performs the work.
+            shader_it->second = shader_compiling;
+            compile_shader = true;
         }
-
-        if (*shader_module == nullptr)
-            // now mark the shader as compiling so that other threads accessing it won't try to compile it a second time
-            *shader_module = shader_compiling;
     }
 
-    if (*shader_module == shader_compiling) {
-        precompile_shader(hash, false);
-    }
-
-    if (*shader_module != shader_compiling) {
+    if (!compile_shader) {
         vk::PipelineShaderStageCreateInfo shader_stage_info{
             .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
-            .module = *shader_module,
+            .module = shader_module,
             .pName = is_vertex ? "main_vs" : "main_fs",
             .pSpecializationInfo = spec_info,
         };
         return shader_stage_info;
     }
 
-    const std::string hash_text = hex_string(hash);
-
-    LOG_INFO("Generating vulkan spv shader {}", hash_text);
-    const std::string shader_version = fmt::format("vk{}", shader::CURRENT_VERSION);
-
-    shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
-
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
-
-    *shader_module = state.device.createShaderModule(shader_info);
-    {
-        std::lock_guard<std::mutex> guard(shaders_mutex);
-        // Save shader cache hashes
-        // vertex and fragment shaders are not linked together so no need to associate them
-        Sha256Hash empty_hash{};
-        if (is_vertex) {
-            state.shaders_cache_hashs.push_back({ hash, empty_hash });
+    try {
+        if (const vk::ShaderModule cached_shader = precompile_shader(hash, false)) {
+            shader_module = cached_shader;
         } else {
-            state.shaders_cache_hashs.push_back({ empty_hash, hash });
+            const std::string hash_text = hex_string(hash);
+
+            LOG_INFO("Generating vulkan spv shader {}", hash_text);
+            const std::string shader_version = fmt::format("vk{}", shader::CURRENT_VERSION);
+
+            shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
+
+            vk::ShaderModuleCreateInfo shader_info{
+                .codeSize = sizeof(uint32_t) * source.size(),
+                .pCode = source.data()
+            };
+
+            shader_module = state.device.createShaderModule(shader_info);
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            shaders.find(hash)->second = shader_module;
+
+            // Save shader cache hashes
+            // vertex and fragment shaders are not linked together so no need to associate them
+            Sha256Hash empty_hash{};
+            if (is_vertex) {
+                state.shaders_cache_hashs.push_back({ hash, empty_hash });
+            } else {
+                state.shaders_cache_hashs.push_back({ empty_hash, hash });
+            }
         }
+
+        // precompile_shader(hash, false) loads a disk cache entry without
+        // touching the map. Publish it here so waiters do not remain blocked
+        // on the shader_compiling sentinel.
+        {
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            auto shader_it = shaders.find(hash);
+            if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+                shader_it->second = shader_module;
+        }
+    } catch (...) {
+        std::lock_guard<std::mutex> guard(shaders_mutex);
+        const auto shader_it = shaders.find(hash);
+        if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+            shader_it->second = nullptr;
+        shaders_condv.notify_all();
+        throw;
     }
+
+    shaders_condv.notify_all();
 
     vk::PipelineShaderStageCreateInfo shader_stage_info{
         .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
-        .module = *shader_module,
+        .module = shader_module,
         .pName = is_vertex ? "main_vs" : "main_fs",
         .pSpecializationInfo = spec_info,
     };
@@ -791,16 +900,31 @@ void PipelineCache::compiler_thread(MemState &mem) {
             // use this as an instruction to stop the thread
             break;
 
-        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm, *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
-        *request->pipeline = pipeline;
+        vk::Pipeline pipeline = nullptr;
+        try {
+            pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_gxm,
+                *request->fragment_program_gxm, *request->get_record(), request->hints, mem);
+        } catch (const std::exception &e) {
+            LOG_ERROR("Asynchronous Vulkan pipeline compilation failed: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("Asynchronous Vulkan pipeline compilation failed with an unknown exception.");
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(pipelines_mutex);
+            auto pipeline_it = pipelines.find(request->key);
+            if (pipeline_it != pipelines.end())
+                pipeline_it->second = pipeline;
+        }
 
         request->vertex_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
         request->fragment_program_gxm->compile_threads_on.fetch_sub(1, std::memory_order_release);
 
-        const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
-
-        state.shaders_count_compiled++;
+        if (pipeline != nullptr) {
+            const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
+            state.shaders_count_compiled++;
+        }
 
         delete request;
     }
@@ -951,6 +1075,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
     // if the pipeline is in the pipeline cache, we can expect its creation time to be almost instantaneous
     bool already_in_cache = false;
 
+    std::unique_lock<std::mutex> pipeline_lock(pipelines_mutex);
     auto it = pipelines.find(key);
     if (it != pipelines.end()) {
         if (it->second != nullptr) {
@@ -965,6 +1090,8 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         // the pipeline hash was not in the cache;
         it = pipelines.insert({ key, pipeline_compiling }).first;
     }
+
+    pipeline_lock.unlock();
 
     // get the correct renderpass here
     const SceGxmProgram *gxm_fragment_shader = fragment_program_gxm.program.get(mem);
@@ -981,7 +1108,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         // create the pipeline compile request
         CompileRequest *request = new CompileRequest;
         *request = {
-            .pipeline = &it->second,
+            .key = key,
             .type = type,
             .render_pass = render_pass,
             .vertex_program_gxm = &vertex_program_gxm,
@@ -989,7 +1116,6 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
             .hints = context.shader_hints
         };
         memcpy(request->record_data, &record, record_pipeline_len);
-        it->second = pipeline_compiling;
 
         // we must not delete these programs until the worker is done
         vertex_program_gxm.compile_threads_on.fetch_add(1, std::memory_order_relaxed);
@@ -1000,50 +1126,91 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
         return nullptr;
     } else {
         // can't wait, compile it right now
-        vk::Pipeline result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+        vk::Pipeline result = nullptr;
+        try {
+            result = compile_pipeline(type, render_pass, vertex_program_gxm, fragment_program_gxm, record, context.shader_hints, mem);
+        } catch (const std::exception &e) {
+            LOG_ERROR("Synchronous Vulkan pipeline compilation failed: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("Synchronous Vulkan pipeline compilation failed with an unknown exception.");
+        }
 
-        const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-        next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
+        if (result != nullptr) {
+            const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+            next_pipeline_cache_save = time_s + pipeline_cache_save_delay;
 
-        if (!already_in_cache)
-            state.shaders_count_compiled++;
+            if (!already_in_cache)
+                state.shaders_count_compiled++;
+        }
 
-        it->second = result;
+        {
+            std::lock_guard<std::mutex> lock(pipelines_mutex);
+            auto pipeline_it = pipelines.find(key);
+            if (pipeline_it != pipelines.end())
+                pipeline_it->second = result;
+        }
 
         return result;
     }
 }
 
 vk::ShaderModule PipelineCache::precompile_shader(const Sha256Hash &hash, bool search_first) {
+    const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
+
     if (search_first) {
-        // happens while loading the thread, no parallel access so no need for a mutex
-        auto it = shaders.find(hash);
-        if (it != shaders.end())
-            return it->second;
+        std::unique_lock<std::mutex> lock(shaders_mutex);
+        auto shader_it = shaders.insert({ hash, nullptr }).first;
+        while (shader_it->second == shader_compiling)
+            shaders_condv.wait(lock);
+        if (shader_it->second != nullptr)
+            return shader_it->second;
+        shader_it->second = shader_compiling;
     }
 
-    if (!fs::exists(state.shaders_path) || fs::is_empty(state.shaders_path))
-        return nullptr;
+    try {
+        if (!fs::exists(state.shaders_path) || fs::is_empty(state.shaders_path)) {
+            if (search_first) {
+                std::lock_guard<std::mutex> lock(shaders_mutex);
+                shaders.find(hash)->second = nullptr;
+                shaders_condv.notify_all();
+            }
+            return nullptr;
+        }
 
-    Sha256Hash shader_hash;
-    memcpy(shader_hash.data(), hash.data(), sizeof(Sha256Hash));
-    const std::string shader_file_name = fmt::format("vk{}-{}.spv", shader::CURRENT_VERSION, hex_string(shader_hash));
-    const std::vector<uint32_t> source = renderer::pre_load_shader_spirv(state.shaders_path / shader_file_name);
+        Sha256Hash shader_hash;
+        memcpy(shader_hash.data(), hash.data(), sizeof(Sha256Hash));
+        const std::string shader_file_name = fmt::format("vk{}-{}.spv", shader::CURRENT_VERSION, hex_string(shader_hash));
+        const std::vector<uint32_t> source = renderer::pre_load_shader_spirv(state.shaders_path / shader_file_name);
 
-    if (source.empty())
-        return nullptr;
+        if (source.empty()) {
+            if (search_first) {
+                std::lock_guard<std::mutex> lock(shaders_mutex);
+                shaders.find(hash)->second = nullptr;
+                shaders_condv.notify_all();
+            }
+            return nullptr;
+        }
 
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
+        vk::ShaderModuleCreateInfo shader_info{
+            .codeSize = sizeof(uint32_t) * source.size(),
+            .pCode = source.data()
+        };
 
-    vk::ShaderModule shader = state.device.createShaderModule(shader_info);
-    {
-        std::lock_guard<std::mutex> guard(shaders_mutex);
-        shaders[hash] = shader;
+        vk::ShaderModule shader = state.device.createShaderModule(shader_info);
+        {
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            shaders.find(hash)->second = shader;
+        }
+        shaders_condv.notify_all();
+
+        return shader;
+    } catch (...) {
+        std::lock_guard<std::mutex> lock(shaders_mutex);
+        const auto shader_it = shaders.find(hash);
+        if (shader_it != shaders.end() && shader_it->second == shader_compiling)
+            shader_it->second = nullptr;
+        shaders_condv.notify_all();
+        throw;
     }
-
-    return shader;
 }
 } // namespace renderer::vulkan
