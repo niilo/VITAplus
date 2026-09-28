@@ -31,6 +31,10 @@
 
 #include <SDL3/SDL_cpuinfo.h>
 
+#include <chrono>
+#include <future>
+#include <thread>
+
 // don't use the dispatch version, because we always hash a small amount
 // with a known size
 #define XXH_INLINE_ALL
@@ -455,11 +459,160 @@ static const vk::SpecializationInfo srgb_info_false = {
     .pData = &srgb_entry_false
 };
 
+// Some GPU drivers (observed on some Android/Mali configurations) can hang indefinitely
+// inside vkCreateShaderModule for certain shaders, with no error and no way for the
+// application to detect or recover. Since there is no Vulkan-level way to cancel or time
+// out a driver call, we run it on a detached worker thread and only wait up to `timeout`
+// on the calling thread. If the driver call never returns, the worker thread is abandoned
+// (it keeps running/leaking rather than blocking the app), and we treat this shader as
+// failed so the caller can skip it gracefully instead of the whole emulator freezing.
+//
+// `code` is taken by value (moved in) so the abandoned worker thread still has valid,
+// independently-owned memory to read from even after this function has returned.
+static vk::ShaderModule create_shader_module_with_timeout(vk::Device device, std::vector<uint32_t> code, std::chrono::milliseconds timeout, const std::string &debug_name) {
+    auto code_ptr = std::make_shared<std::vector<uint32_t>>(std::move(code));
+    auto promise_ptr = std::make_shared<std::promise<vk::ShaderModule>>();
+    std::future<vk::ShaderModule> future = promise_ptr->get_future();
+
+    std::thread([device, code_ptr, promise_ptr]() {
+        try {
+            const vk::ShaderModuleCreateInfo shader_info{
+                .codeSize = sizeof(uint32_t) * code_ptr->size(),
+                .pCode = code_ptr->data()
+            };
+            vk::ShaderModule module = device.createShaderModule(shader_info);
+            promise_ptr->set_value(module);
+        } catch (...) {
+            promise_ptr->set_exception(std::current_exception());
+        }
+    }).detach();
+
+    if (future.wait_for(timeout) == std::future_status::timeout) {
+        LOG_ERROR("Shader module compilation timed out after {} ms for shader {} - the GPU driver appears to be hung on this shader. "
+                   "Skipping it so the emulator stays responsive; expect a missing draw or visual glitch instead of a freeze.",
+            timeout.count(), debug_name);
+        return vk::ShaderModule{};
+    }
+
+    try {
+        return future.get();
+    } catch (const std::exception &e) {
+        LOG_ERROR("Shader module compilation for {} threw an exception: {}", debug_name, e.what());
+        return vk::ShaderModule{};
+    } catch (...) {
+        LOG_ERROR("Shader module compilation for {} threw an unknown exception", debug_name);
+        return vk::ShaderModule{};
+    }
+}
+
+// Like create_shader_module_with_timeout above, but for the final vkCreateGraphicsPipelines
+// call - the other raw, unguarded, blocking driver call in this file. This one is trickier
+// because the Vulkan create-info struct is a graph of pointers into several local variables
+// (vertex input bindings/attributes, dynamic state list, shader stage array, etc.) that would
+// normally be destroyed the moment this function returns. If we give up waiting and return
+// early, those still need to remain valid for as long as the abandoned background thread might
+// still be inside the (hung) driver call - so we deep-copy everything the create-info points to
+// onto the heap first, and have the background thread own those copies via shared_ptr.
+struct OwnedPipelineCreateInfo {
+    std::array<vk::PipelineShaderStageCreateInfo, 2> shader_stages;
+    vk::PipelineVertexInputStateCreateInfo vertex_input;
+    std::vector<vk::VertexInputBindingDescription> vertex_bindings;
+    std::vector<vk::VertexInputAttributeDescription> vertex_attributes;
+    vk::PipelineInputAssemblyStateCreateInfo input_assembly;
+    vk::PipelineViewportStateCreateInfo viewport;
+    vk::PipelineRasterizationStateCreateInfo rasterizer;
+    vk::PipelineMultisampleStateCreateInfo multisampling;
+    vk::PipelineDepthStencilStateCreateInfo ds_info;
+    vk::PipelineColorBlendStateCreateInfo color_blending;
+    std::vector<vk::PipelineColorBlendAttachmentState> blend_attachments;
+    vk::PipelineDynamicStateCreateInfo dynamic_info;
+    std::vector<vk::DynamicState> dynamic_states;
+    vk::GraphicsPipelineCreateInfo info;
+};
+
+static vk::Pipeline create_graphics_pipeline_with_timeout(vk::Device device, vk::PipelineCache pipeline_cache,
+    const vk::GraphicsPipelineCreateInfo &source_info, std::chrono::milliseconds timeout) {
+    // deep-copy every piece of data the create-info (transitively) points to, so it stays
+    // valid even if we give up waiting and the original stack frame unwinds
+    auto owned = std::make_shared<OwnedPipelineCreateInfo>();
+
+    owned->shader_stages[0] = source_info.pStages[0];
+    if (source_info.stageCount > 1)
+        owned->shader_stages[1] = source_info.pStages[1];
+
+    owned->vertex_input = *source_info.pVertexInputState;
+    owned->vertex_bindings.assign(owned->vertex_input.pVertexBindingDescriptions,
+        owned->vertex_input.pVertexBindingDescriptions + owned->vertex_input.vertexBindingDescriptionCount);
+    owned->vertex_attributes.assign(owned->vertex_input.pVertexAttributeDescriptions,
+        owned->vertex_input.pVertexAttributeDescriptions + owned->vertex_input.vertexAttributeDescriptionCount);
+    owned->vertex_input.pVertexBindingDescriptions = owned->vertex_bindings.data();
+    owned->vertex_input.pVertexAttributeDescriptions = owned->vertex_attributes.data();
+
+    owned->input_assembly = *source_info.pInputAssemblyState;
+    owned->viewport = *source_info.pViewportState;
+    owned->rasterizer = *source_info.pRasterizationState;
+    owned->multisampling = *source_info.pMultisampleState;
+    owned->ds_info = *source_info.pDepthStencilState;
+
+    owned->color_blending = *source_info.pColorBlendState;
+    owned->blend_attachments.assign(owned->color_blending.pAttachments,
+        owned->color_blending.pAttachments + owned->color_blending.attachmentCount);
+    owned->color_blending.pAttachments = owned->blend_attachments.data();
+
+    owned->dynamic_info = *source_info.pDynamicState;
+    owned->dynamic_states.assign(owned->dynamic_info.pDynamicStates,
+        owned->dynamic_info.pDynamicStates + owned->dynamic_info.dynamicStateCount);
+    owned->dynamic_info.pDynamicStates = owned->dynamic_states.data();
+
+    owned->info = source_info;
+    owned->info.pStages = owned->shader_stages.data();
+    owned->info.pVertexInputState = &owned->vertex_input;
+    owned->info.pInputAssemblyState = &owned->input_assembly;
+    owned->info.pViewportState = &owned->viewport;
+    owned->info.pRasterizationState = &owned->rasterizer;
+    owned->info.pMultisampleState = &owned->multisampling;
+    owned->info.pDepthStencilState = &owned->ds_info;
+    owned->info.pColorBlendState = &owned->color_blending;
+    owned->info.pDynamicState = &owned->dynamic_info;
+
+    auto promise_ptr = std::make_shared<std::promise<vk::Pipeline>>();
+    std::future<vk::Pipeline> future = promise_ptr->get_future();
+
+    std::thread([device, pipeline_cache, owned, promise_ptr]() {
+        try {
+            const auto result = device.createGraphicsPipeline(pipeline_cache, owned->info);
+            promise_ptr->set_value(result.result == vk::Result::eSuccess ? result.value : vk::Pipeline{});
+        } catch (...) {
+            promise_ptr->set_exception(std::current_exception());
+        }
+    }).detach();
+
+    if (future.wait_for(timeout) == std::future_status::timeout) {
+        LOG_ERROR("Graphics pipeline creation timed out after {} ms - the GPU driver appears to be hung. "
+                   "Skipping this pipeline so the emulator stays responsive; expect a missing draw instead of a freeze.",
+            timeout.count());
+        return vk::Pipeline{};
+    }
+
+    try {
+        return future.get();
+    } catch (const std::exception &e) {
+        LOG_ERROR("Graphics pipeline creation threw an exception: {}", e.what());
+        return vk::Pipeline{};
+    } catch (...) {
+        LOG_ERROR("Graphics pipeline creation threw an unknown exception");
+        return vk::Pipeline{};
+    }
+}
+
 vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmProgram *program, const Sha256Hash &hash, bool is_vertex, bool maskupdate, MemState &mem, const shader::Hints &hints, bool is_srgb) {
     if (maskupdate)
         LOG_WARN_ONCE("Mask not implemented in the vulkan renderer!");
 
     const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
+    // distinct sentinel from shader_compiling: marks a shader whose compile timed out/failed,
+    // so we don't retry it (and re-trigger the same driver hang) every time it's needed
+    const vk::ShaderModule shader_failed = std::bit_cast<vk::ShaderModule>(~1ULL);
 
     const vk::SpecializationInfo *spec_info = nullptr;
     if (!is_vertex && state.features.should_use_shader_interlock() && program->is_frag_color_used()) {
@@ -494,7 +647,9 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
     if (*shader_module != shader_compiling) {
         vk::PipelineShaderStageCreateInfo shader_stage_info{
             .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
-            .module = *shader_module,
+            // a shader whose compile previously timed out is reported as "no module" (VK_NULL_HANDLE)
+            // rather than the internal sentinel value, so callers can check `.module` the normal way
+            .module = (*shader_module == shader_failed) ? vk::ShaderModule{} : *shader_module,
             .pName = is_vertex ? "main_vs" : "main_fs",
             .pSpecializationInfo = spec_info,
         };
@@ -508,12 +663,25 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
 
     shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
 
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
+    // 5 second budget: generous for a legitimate first-time compile, but short enough that a
+    // hung driver call no longer freezes the whole emulator indefinitely.
+    *shader_module = create_shader_module_with_timeout(state.device, std::move(source), std::chrono::milliseconds(5000), hash_text);
 
-    *shader_module = state.device.createShaderModule(shader_info);
+    if (!*shader_module) {
+        // compilation timed out or threw - mark permanently failed so we don't keep retrying
+        // (and re-triggering the same driver hang) every time this shader is needed again
+        std::lock_guard<std::mutex> guard(shaders_mutex);
+        *shader_module = shader_failed;
+
+        vk::PipelineShaderStageCreateInfo shader_stage_info{
+            .stage = is_vertex ? vk::ShaderStageFlagBits::eVertex : vk::ShaderStageFlagBits::eFragment,
+            .module = vk::ShaderModule{},
+            .pName = is_vertex ? "main_vs" : "main_fs",
+            .pSpecializationInfo = spec_info,
+        };
+        return shader_stage_info;
+    }
+
     {
         std::lock_guard<std::mutex> guard(shaders_mutex);
         // Save shader cache hashes
@@ -831,6 +999,15 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     const bool is_fragment_disabled = record.front_side_fragment_program_mode == SCE_GXM_FRAGMENT_PROGRAM_DISABLED || gxm_fragment_shader->has_no_effect();
     const uint32_t shader_stage_count = is_fragment_disabled ? 1U : 2U;
 
+    // a shader compile can time out on a hung driver (see create_shader_module_with_timeout) -
+    // in that case its module is VK_NULL_HANDLE. Building a pipeline with a null shader stage
+    // would be invalid/UB, so bail out the same way the codebase already does for a pipeline
+    // that's still compiling asynchronously: skip this draw rather than crash or hang.
+    if (!vertex_shader.module || (!is_fragment_disabled && !fragment_shader.module)) {
+        LOG_ERROR("Skipping pipeline: a required shader failed to compile (likely a GPU driver timeout on this device). This draw will be missing rather than freezing the emulator.");
+        return nullptr;
+    }
+
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly{
         .topology = translate_primitive(type)
     };
@@ -919,13 +1096,13 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
         .subpass = 0
     };
 
-    const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
-    if (result.result != vk::Result::eSuccess) {
+    const auto pipeline = create_graphics_pipeline_with_timeout(state.device, pipeline_cache, pipeline_info, std::chrono::milliseconds(5000));
+    if (!pipeline) {
         LOG_CRITICAL("Failed to create pipeline.");
         return nullptr;
     }
 
-    return result.value;
+    return pipeline;
 }
 
 vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiveType &type, bool consider_for_async, MemState &mem) {
@@ -1033,12 +1210,7 @@ vk::ShaderModule PipelineCache::precompile_shader(const Sha256Hash &hash, bool s
     if (source.empty())
         return nullptr;
 
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
-
-    vk::ShaderModule shader = state.device.createShaderModule(shader_info);
+    vk::ShaderModule shader = create_shader_module_with_timeout(state.device, source, std::chrono::milliseconds(5000), hex_string(hash));
     {
         std::lock_guard<std::mutex> guard(shaders_mutex);
         shaders[hash] = shader;

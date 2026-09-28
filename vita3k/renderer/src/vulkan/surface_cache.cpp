@@ -33,6 +33,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <chrono>
+
 static bool format_support_surface_sync(SceGxmColorBaseFormat format) {
     // we use rgba16 to emulate this format, don't even try to convert it back for now
     return format != SCE_GXM_COLOR_BASE_FORMAT_U2F10F10F10;
@@ -58,6 +60,24 @@ static bool format_need_additional_memory(SceGxmColorBaseFormat format) {
 }
 
 namespace renderer::vulkan {
+
+// vkWaitForFences with an unbounded timeout can hang forever if the GPU driver never
+// signals the fence (observed hangs on some Android/Mali drivers). Poll in bounded
+// increments instead, up to a total budget, so a stuck driver can no longer freeze the
+// whole app forever - callers already have their own handling for a non-success result.
+static vk::Result wait_for_fences_bounded(vk::Device device, vk::ArrayProxy<const vk::Fence> const &fences, vk::Bool32 wait_all, std::chrono::milliseconds total_budget) {
+    constexpr uint64_t per_wait_ns = 200'000'000ULL; // 0.2s per poll
+    const auto deadline = std::chrono::steady_clock::now() + total_budget;
+    while (true) {
+        const auto result = device.waitForFences(fences, wait_all, per_wait_ns);
+        if (result != vk::Result::eTimeout)
+            return result;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            LOG_ERROR("Timed out after {} ms waiting for a GPU fence - the GPU driver appears to be hung.", total_budget.count());
+            return vk::Result::eTimeout;
+        }
+    }
+}
 
 static void protect_surface(MemState &mem, ColorSurfaceCacheInfo &info) {
     const bool trap_reads = (info.tiling == SurfaceTiling::Linear
@@ -1169,7 +1189,7 @@ bool VKSurfaceCache::check_for_surface(MemState &mem, Address source_address, Ca
         // now we need to wait for the fence, then destroy it along with the command buffer
         // to prevent memory leaks
         CallbackRequestFunction vk_callback = [&state = this->state, fence, surface_cmd]() {
-            auto result = state.device.waitForFences(fence, vk::True, std::numeric_limits<uint64_t>::max());
+            auto result = wait_for_fences_bounded(state.device, fence, vk::True, std::chrono::milliseconds(5000));
             if (result != vk::Result::eSuccess)
                 LOG_ERROR("Could not wait for fences.");
 

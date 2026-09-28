@@ -27,7 +27,27 @@
 #include <util/align.h>
 #include <vkutil/vkutil.h>
 
+#include <chrono>
+
 namespace renderer::vulkan {
+
+// vkWaitForFences with an unbounded timeout can hang forever if the GPU driver never
+// signals the fence (observed hangs on some Android/Mali drivers). Poll in bounded
+// increments instead, up to a total budget, so a stuck driver can no longer freeze the
+// whole app forever - callers already have their own handling for a non-success result.
+static vk::Result wait_for_fences_bounded(vk::Device device, vk::ArrayProxy<const vk::Fence> const &fences, vk::Bool32 wait_all, std::chrono::milliseconds total_budget) {
+    constexpr uint64_t per_wait_ns = 200'000'000ULL; // 0.2s per poll
+    const auto deadline = std::chrono::steady_clock::now() + total_budget;
+    while (true) {
+        const auto result = device.waitForFences(fences, wait_all, per_wait_ns);
+        if (result != vk::Result::eTimeout)
+            return result;
+        if (std::chrono::steady_clock::now() >= deadline) {
+            LOG_ERROR("Timed out after {} ms waiting for a GPU fence - the GPU driver appears to be hung.", total_budget.count());
+            return vk::Result::eTimeout;
+        }
+    }
+}
 
 // return if this format can be used to read a depth stencil buffer
 // Only return the formats we support and make sense for now
@@ -201,7 +221,7 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
             state.general_queue.submit(submit_info, current_fence);
             context->cmdbuffers_to_submit.clear();
 
-            auto result = state.device.waitForFences(current_fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+            auto result = wait_for_fences_bounded(state.device, current_fence, VK_TRUE, std::chrono::milliseconds(5000));
             if (result != vk::Result::eSuccess) {
                 LOG_ERROR("Could not wait for fences.");
                 assert(false);
@@ -222,7 +242,7 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
             }
         } else {
             // wait for the fence, but don't reset it
-            auto result = state.device.waitForFences(staging_buffer->waiting_fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
+            auto result = wait_for_fences_bounded(state.device, staging_buffer->waiting_fence, VK_TRUE, std::chrono::milliseconds(5000));
             if (result != vk::Result::eSuccess) {
                 LOG_ERROR("Could not wait for fences.");
                 assert(false);

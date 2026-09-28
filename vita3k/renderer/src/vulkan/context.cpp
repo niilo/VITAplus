@@ -27,7 +27,27 @@
 #include <util/log.h>
 #include <util/overloaded.h>
 
+#include <chrono>
+
 namespace renderer::vulkan {
+
+// vkWaitForFences with an unbounded timeout can hang forever if the GPU driver never
+// signals the fence (observed hangs on some Android/Mali drivers). Poll in bounded
+// increments instead, up to a total budget, so a stuck driver can no longer freeze the
+// whole app forever - callers already have their own handling for a non-success result.
+static vk::Result wait_for_fences_bounded(vk::Device device, vk::ArrayProxy<const vk::Fence> const &fences, vk::Bool32 wait_all, std::chrono::milliseconds total_budget) {
+    constexpr uint64_t per_wait_ns = 200'000'000ULL; // 0.2s per poll
+    const auto deadline = std::chrono::steady_clock::now() + total_budget;
+    while (true) {
+        const auto result = device.waitForFences(fences, wait_all, per_wait_ns);
+        if (result != vk::Result::eTimeout)
+            return result; // success, or some other error (e.g. device lost) - let the caller handle it as before
+        if (std::chrono::steady_clock::now() >= deadline) {
+            LOG_ERROR("Timed out after {} ms waiting for a GPU fence - the GPU driver appears to be hung.", total_budget.count());
+            return vk::Result::eTimeout;
+        }
+    }
+}
 
 void VKContext::wait_thread_function(const MemState &mem) {
     // try to wait for multiple fences at the same time if possible
@@ -576,7 +596,7 @@ void new_frame(VKContext &context) {
                 return context.last_frame_waited >= previous_frame_timestamp;
             });
         } else {
-            auto result = device.waitForFences(frame.rendered_fences, VK_TRUE, std::numeric_limits<uint64_t>::max());
+            auto result = wait_for_fences_bounded(device, frame.rendered_fences, VK_TRUE, std::chrono::milliseconds(5000));
             if (result != vk::Result::eSuccess) {
                 LOG_ERROR("Could not wait for fences.");
                 assert(false);

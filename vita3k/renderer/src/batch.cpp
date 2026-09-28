@@ -33,6 +33,9 @@
 #include <memory>
 #include <thread>
 
+#include <chrono>
+#include <future>
+
 #ifdef TRACY_ENABLE
 #include <tracy/Tracy.hpp>
 #endif
@@ -291,8 +294,32 @@ void start_render_thread(State &state, DisplayState &display, GxmState &gxm, Mem
 void stop_render_thread(State &state) {
     state.render_abort = true;
     state.command_buffer_queue.abort();
-    if (state.render_thread && state.render_thread->joinable())
-        state.render_thread->join();
+
+    if (state.render_thread && state.render_thread->joinable()) {
+        // The render thread can end up stuck inside a blocking GPU driver call with no
+        // application-level timeout (observed hangs in vkCreateShaderModule /
+        // vkCreateGraphicsPipelines on some Android/Mali drivers). A plain join() here would
+        // then hang the whole app forever on shutdown/relaunch (e.g. "Return to Title"),
+        // instead of just failing to render. We still wait for a normal, clean exit first,
+        // but give up after a timeout and detach rather than block indefinitely - the
+        // abandoned thread keeps running (harmless: the process is either exiting or
+        // relaunching), instead of freezing.
+        auto finished = std::make_shared<std::promise<void>>();
+        std::future<void> finished_future = finished->get_future();
+        std::thread *thread_ptr = state.render_thread.release();
+
+        std::thread([thread_ptr, finished]() {
+            thread_ptr->join();
+            delete thread_ptr;
+            finished->set_value();
+        }).detach();
+
+        if (finished_future.wait_for(std::chrono::seconds(5)) == std::future_status::timeout) {
+            LOG_ERROR("Render thread did not stop within 5 seconds (it is likely stuck in a GPU driver call) "
+                       "- continuing shutdown without waiting for it further.");
+        }
+    }
+
     state.render_thread.reset();
     state.command_buffer_queue.reset();
 }
