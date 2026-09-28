@@ -17,13 +17,13 @@ in ticket 06.
 | Part | Value |
 |---|---|
 | Model strings | `Build.MANUFACTURER` = `AYANEO`, `Build.MODEL` = `Pocket S` |
-| SoC | Snapdragon G3x Gen 2, 4 nm. `Build.SOC_MODEL` and `ro.board.platform`: verify. |
-| GPU | Adreno A32, up to 1 GHz. Vulkan device name `Adreno (TM) A32`, device ID `0x43050A00`. It is a variant of the Adreno 740 design, but its ID differs from the 740 (`0x43050A01`). |
+| SoC | Snapdragon G3x Gen 2, 4 nm. `ro.soc.manufacturer` = `QTI`, `ro.soc.model` = `SG8275`, `ro.board.platform` = `kalama` (checked 2026-09-28). |
+| GPU | Adreno A32, up to 1 GHz. On the test device, the stock driver reports the Vulkan device name `Adreno (TM) 740` (checked 2026-09-28), not `Adreno (TM) A32` as in the gpuinfo report. The device ID is not logged yet. The gpuinfo report gives `0x43050A00`; the Adreno 740 is `0x43050A01`. |
 | Stock driver | 512.676.0 (August 2023), Vulkan 1.3.128 |
 | Turnip | Supports this chip ("FDA32") from Mesa 24.2.0. Older Turnip builds do not know it. |
-| CPU | 8 cores, 1+4+3. The prime core runs at up to 3.36 GHz. Core types and other clocks: verify with `/sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_max_freq`. |
+| CPU | 8 cores. `cpuinfo_max_freq` (checked 2026-09-28): cpu0 to cpu2 at 2.016 GHz, cpu3 to cpu6 at 2.803 GHz, cpu7 (prime) at 3.36 GHz. So 3 small, 4 performance and 1 prime core. |
 | RAM | LPDDR5X-8533, 12 GB or 16 GB. The test device has 16 GB. |
-| Display | 6 inch IPS. 2560x1440 on the Advance model, 1920x1080 on the base model. 60 Hz (verify with `dumpsys display`). |
+| Display | 6 inch IPS. 2560x1440 on the Advance model, 1920x1080 on the base model. The test device has one mode: 1440x2560 at 60 Hz. The panel is portrait in its native orientation; the app log says `native display rotation: ROTATION_90` (checked 2026-09-28). |
 | Cooling | Vapour chamber and fan, 15 W sustained |
 | Modes | Full Power (also called Max), Game, Balanced. Set with the Turbo key or in AYASpace. Power per mode is not published. |
 | Input | Built-in gamepad, AYASpace button, Home button, Turbo key, two extra shoulder buttons. Key codes: ticket 17. |
@@ -102,8 +102,9 @@ Every experiment uses this protocol. Record the results under the ticket's
 - Do not change behavior on other devices unless it is measured there too.
   Device-specific defaults go through the preset in ticket 16.
 - Match this device on `Build.MANUFACTURER`, `Build.MODEL` or the Vulkan
-  device ID `0x43050A00`. Do not match GPU names that contain "740" or
-  "7xx".
+  device ID. Do not match GPU names that contain "740" or "7xx": the
+  stock driver on this device reports `Adreno (TM) 740`, the same name as
+  other devices.
 - Build both targets before a commit: `container/vita3k.sh build` and
   `container/vita3k.sh android release`.
 - Follow the writing standard in `/Users/niilo.ursin/src/CLAUDE.md` for all

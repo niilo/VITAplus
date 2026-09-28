@@ -56,3 +56,31 @@ Under `## Answer`:
    validation value. Later A runs use these.
 
 ## Answer
+
+Progress 2026-09-28 (agent steps 1 to 3 in part, before session H1):
+
+- The device had the official Vita3K 0.2.1 release (Vita3K team key).
+  A build with another key cannot update it. With the user's consent, the
+  agent uninstalled it and installed a debug-key release build. Before
+  that, `files/` (373 MB) was copied to `tmp/device-backup/files/`, and
+  the official APK to `tmp/device-backup/official-0.2.1.apk`. The files
+  are back on the device. The games and saves are on the SD card
+  (`pref-path: /storage/4CDE-C1FC/emu-app-data/psvita/`) and did not
+  change. `MANAGE_EXTERNAL_STORAGE` was allowed again with `appops`.
+- Custom drivers are kept in the app's internal storage, so the uninstall
+  deleted them. The config had `custom-driver-name:
+  Balemuni_Apex_v2_ULTIMATE_SD8Gen2`. It is now `""` (stock driver). The
+  driver zips are in `/sdcard/Download/turnip-drivers/` (Turnip v26.x,
+  mainline-turnip-V31, mrpurple T26 and T30, Balemuni Apex v2).
+- The container build made a new debug key on each run. Fix: commit in
+  `pocket-s/keep-debug-key` (the key is now in the cache volume).
+- The user's config is not the default config. Values that differ include
+  `resolution-multiplier: 3`, `anisotropic-filtering: 16`,
+  `performance-overlay: true`. The baseline "defaults" must be chosen in
+  session H1.
+- Device facts are in `../spec.md` and in ticket 04. The GPU reports the
+  name `Adreno (TM) 740`.
+- 21 games are installed. Candidates: WipEout 2048 (PCSA00015), Uncharted
+  (PCSA00029), Killzone Mercenary (PCSA00107), Ratchet & Clank (PCSF00484),
+  Rayman Legends (PCSE00277), Sly Cooper: Thieves in Time (PCSA00068),
+  LittleBigPlanet (PCSA00549), Sky Force Anniversary (PCSE00865).

@@ -167,6 +167,8 @@ Checked by a fact-check agent on 2026-09-25.
 
 - [01](issues/01-research-plus-and-local-branches.md): the local chain 1838cd88..feb21710 applies to `master`. 9 small Plus commits apply alone. The big Plus memory and kernel work needs 8be36fa1 and cannot be taken alone. Recommended for ticket 02: option 1, single commits.
 - [02](issues/02-decide-code-base.md): keep `master` and cherry-pick (tickets 19 to 23). The ticket 11 present mode rule is used only on Android.
+- [04](issues/04-device-test-harness.md): `device.sh` works on the device. `keys` reaches the game. `config-set` must `chmod 666` the pushed file.
+- [19](issues/19-local-adreno-chain.md) to [23](issues/23-plus-typeless-copies.md): merged. `master` boots a game on the stock driver. `createDevice` failed in 2 of 9 starts with `ErrorFeatureNotPresent`; a retry with logging is in a778c289.
 
 ## Open questions
 

@@ -37,3 +37,6 @@ extra shoulder buttons, AYASpace, Home and Turbo.
    task ticket with the codes and the proposed fix.
 
 ## Answer
+
+Note 2026-09-28: the app log says `1 Controllers Connected`,
+`Controller 0: AYANEO Controller`. So SDL sees the built-in pad.

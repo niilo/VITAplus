@@ -1,6 +1,6 @@
 # 19: Take the local Adreno Vulkan chain
 
-Status: claimed
+Status: resolved
 Claimed: 2026-09-28 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -57,3 +57,33 @@ Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
 after the merge (33c47a42). The Android release build of that `master` passes.
 
 Still to do on the device: boot one game and copy the Vulkan log lines.
+
+Device check on 2026-09-28: the release APK from `master` (with
+a778c289, see ticket 19) boots Ratchet & Clank (PCSF00484) on the stock
+driver to the title screen at 30 FPS. Log lines:
+
+```
+Disabling Vulkan validation layers (may improve performance but provides limited error messages)
+Vulkan device: Adreno (TM) 740
+Driver version: 512.676.0
+Qualcomm Vulkan driver classification: stock/other
+Vulkan capability path: API 1.3.0, timeline semaphore yes, dynamic rendering yes, synchronization2 yes, extended dynamic state no, descriptor indexing yes, maintenance4 yes, pipeline cache control yes, subgroup size 64
+Using a Vulkan timeline semaphore for render completion tracking
+Present mode: Fifo (vSync enabled)
+Using the following memory mapping method: Double buffer
+Pipeline compiler worker policy: 8 logical CPU cores -> 3 workers
+```
+
+Problem found: in 2 of 9 starts, `createDevice` failed with
+`ErrorFeatureNotPresent`, and the app stopped. The other 7 starts, with the
+same APK and config, worked. With `validation-layer: true` the start
+worked and the layer reported no feature error. Commit a778c289 (merge
+886c16b4) retries with fewer features and logs each requested feature
+that the driver does not report. The failure did not happen again in 7
+starts with that build, so the cause is still not known. If it happens
+again, the log names the feature.
+
+Other finding: the version string in the log says
+`4166-a52121af-niilo/pocket-s/11-present-mode-vsync` for APKs built from
+`master`. The build folder keeps the git description from the last
+configure. Record the build commit from `git`, not from the log.

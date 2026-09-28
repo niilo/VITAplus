@@ -1,6 +1,6 @@
 # 04: Add an adb test harness
 
-Status: claimed
+Status: resolved
 Claimed: 2026-09-25 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -66,3 +66,52 @@ the session name (`VITA3K_DEVICE_SESSION`, default `<user>@<host>`).
 
 Still to do on the device (no device was connected on 2026-09-25):
 `info` output, the device checks, and whether `keys` reaches a game.
+
+Device test on 2026-09-28 (Pocket S, stock driver):
+
+`info` output:
+
+```
+ro.product.manufacturer      AYANEO
+ro.product.model             Pocket S
+ro.soc.manufacturer          QTI
+ro.soc.model                 SG8275
+ro.board.platform            kalama
+ro.build.version.release     13
+ro.build.version.sdk         33
+ro.build.id                  TKQ1.230811.002
+uname -r                     5.15.104-android13-8-g05d70b033fc6
+
+CPU max frequency (kHz):
+  cpu0 2016000
+  cpu1 2016000
+  cpu2 2016000
+  cpu3 2803200
+  cpu4 2803200
+  cpu5 2803200
+  cpu6 2803200
+  cpu7 3360000
+
+Display modes:
+  DisplayModeRecord{mMode={id=1, width=1440, height=2560, fps=60.000004, alternativeRefreshRates=[]}
+  mActiveModeId=1
+
+Thermal:
+  Thermal Status: 0
+```
+
+- `install`, `launch`, `stop`, `release`, `log`, `config-get`,
+  `config-set`, `config-guard`, `screenshot` and `thermal` work on the
+  device.
+- `keys` reaches a running game: `keys KEYCODE_BUTTON_START` left the
+  Ratchet & Clank title screen.
+- Fix befbcd94: after `adb push`, `config.yml` belongs to the shell user
+  with mode 644. The app then fails at start with "Failed to initialise
+  config". `config-set` now runs `chmod 666` after the push.
+- Fix f16fd4cb: the device has 104 thermal zones. The old `thermal` read
+  all zone types for every sample, so one line took about 10 seconds. Now
+  one device loop finds the zones once. One line takes about 1.2 seconds.
+- Note: `adb push` of a folder into the app folder fails with "remote
+  secure_mkdirs failed". To restore folders, push to `/data/local/tmp/`
+  and copy with `adb shell cp -r`. Then `chmod` the copied files to 666,
+  or the app cannot write them.
