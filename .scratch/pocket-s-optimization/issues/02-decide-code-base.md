@@ -1,6 +1,7 @@
 # 02: Decide the code base
 
-Status: open
+Status: resolved
+Claimed: 2026-09-28 Claude Code session (Opus 5.5)
 Type: grilling
 Label: ready-for-human
 Blocked by: 01
@@ -29,3 +30,16 @@ Which code does the Pocket S work start from?
    the baseline is taken on the final code base.
 
 ## Answer
+
+The question was asked on 2026-09-28 with two decisions: (1) the code base,
+options 1 and 2 as above; (2) for ticket 11, use FIFO as the v-sync default
+(1) only on Android, or (2) everywhere. The user's answer, word for word:
+
+> 1
+
+The agent reads this as option 1 for both decisions: keep `master` and
+cherry-pick, and use the ticket 11 present mode change only on Android.
+Both were the recommended options.
+
+New tickets for option 1: 19, 20, 21, 22, 23. Ticket 06 is now also
+blocked by them.
