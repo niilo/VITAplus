@@ -687,8 +687,12 @@ void buffer_address_access(spv::Builder &b, const SpirvShaderParameters &params,
     buffer_address = add_uvec2_int(b, buffer_address, addr);
 
     if (component_size == sizeof(uint32_t)) {
-        spv::Id aligned_low_bits = b.createCompositeExtract(buffer_address, i32, 0);
-        aligned_low_bits = b.createBinOp(spv::OpBitwiseAnd, i32, aligned_low_bits, b.makeIntConstant(~0b11));
+        // buffer_address is a uvec2, so the component type is u32. A signed
+        // result type here is invalid SPIR-V. The stock Adreno driver accepts
+        // it, but Turnip fails the pipeline with ErrorOutOfHostMemory.
+        const spv::Id u32 = b.makeUintType(32);
+        spv::Id aligned_low_bits = b.createCompositeExtract(buffer_address, u32, 0);
+        aligned_low_bits = b.createBinOp(spv::OpBitwiseAnd, u32, aligned_low_bits, b.makeUintConstant(~0b11u));
         buffer_address = b.createCompositeInsert(aligned_low_bits, buffer_address, b.getTypeId(buffer_address), 0);
 
         int buffer_idx_vec4 = 0;
