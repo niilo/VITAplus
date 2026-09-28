@@ -28,3 +28,16 @@ Commits, in order: 7531b756, e5f0e276.
    boot, find the commit with `git bisect` and revert it.
 
 ## Answer
+
+Picked 7531b756 and e5f0e276 on `pocket-s/23-plus-typeless-copies` and
+merged to `master`. No conflicts. The first Linux build failed with a file
+copy error in the build folder (`Error copying directory ... icons`). The
+second build passed, with no change.
+
+A part of the merged code was not formatted for clang-format 22. Commit
+33c47a42 formats `pipeline_cache.cpp`.
+
+Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
+after the merge (33c47a42). The Android release build of that `master` passes.
+
+Still to do on the device: boot one game and copy the Vulkan log lines.

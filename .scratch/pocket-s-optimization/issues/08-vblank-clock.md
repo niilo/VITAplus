@@ -44,8 +44,9 @@ Most games wait on this vblank, so its timing sets the frame pacing.
 
 ## Answer
 
-Code done on branch `pocket-s/08-vblank-clock`, commit b238758c. Linux
-and Android release builds pass. `container/vita3k.sh test` passes.
+Code done on branch `pocket-s/08-vblank-clock`, commit b238758c, rebased on
+`master` after ticket 19 as 363f1b83. Linux and Android release builds
+pass. `container/vita3k.sh test` passes.
 
 - Steps 1 to 3 are done. With `perf-log` on, `vblank.csv` has
   `steady_us,wake_error_us` for each tick.

@@ -29,3 +29,11 @@ Commits: 14521654.
    boot, find the commit with `git bisect` and revert it.
 
 ## Answer
+
+Picked 14521654 on `pocket-s/20-plus-stock-double-buffer` and merged to
+`master`. No conflict. The Linux build passes on the branch.
+
+Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
+after the merge (33c47a42). The Android release build of that `master` passes.
+
+Still to do on the device: boot one game and copy the Vulkan log lines.

@@ -28,3 +28,16 @@ Commits, in order: d2ad1479, 6db85423, fc6048a4.
    boot, find the commit with `git bisect` and revert it.
 
 ## Answer
+
+Picked d2ad1479, 6db85423 and fc6048a4 on
+`pocket-s/21-plus-negative-offsets` and merged to `master`. No conflicts.
+
+fc6048a4 did not build: `Ptr(T *pointer, ...)` passes the pointer to
+`host_to_guest(const void *)`, and a function pointer does not convert to
+`const void *`. An extra commit adds a `reinterpret_cast`, as the old code
+had. After that, the Linux build passes.
+
+Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
+after the merge (33c47a42). The Android release build of that `master` passes.
+
+Still to do on the device: boot one game and copy the Vulkan log lines.

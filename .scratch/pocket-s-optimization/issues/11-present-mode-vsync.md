@@ -45,11 +45,12 @@ Measure after: 06
 
 ## Answer
 
-Code done on branch `pocket-s/11-present-mode-vsync`, commit abf7c1de.
-Linux and Android release builds pass.
+Code done on branch `pocket-s/11-present-mode-vsync`, commit abf7c1de, rebased on
+`master` after ticket 19 as a52121af. Linux and Android release builds
+pass. `container/vita3k.sh format-check` passes.
 
-- `select_present_mode()` runs in `create_swapchain()`. v-sync on gives
-  FIFO. v-sync off gives MAILBOX, else FIFO.
+- `select_present_mode()` runs in `create_swapchain()`. On Android, v-sync
+  on gives FIFO. v-sync off gives MAILBOX, else FIFO.
 - `ensure_swapchain()` sets `need_rebuild` when `pending_vsync` differs
   from the current mode.
 - `vita_surface` is resized in `create_swapchain()` when the image count
@@ -58,9 +59,12 @@ Linux and Android release builds pass.
   <n> (minimum <m>)`.
 - The temporary setting is `swapchain-extra-images` (default 1). 0 gives
   `minImageCount`.
-- Note: v-sync is on by default, so the default mode changes from MAILBOX
-  to FIFO on all systems, desktop too. The spec says not to change other
-  devices without a measurement. Decide this before the merge.
+- Ticket 02 answer: the new rule is used only on Android. Other systems
+  keep the old order (MAILBOX, then FIFO_RELAXED, then FIFO), and v-sync
+  does not change it there.
+- The rebase replaces the `select_present_mode()` of 1838cd88 (ticket 19).
+  That version also changed desktop and took IMMEDIATE when v-sync was
+  off.
 
 Still to do: the v-sync switch test and the A/B/A runs on the device after
 ticket 06.

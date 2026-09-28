@@ -28,3 +28,12 @@ Commits, in order: 3776c598, 6ecce835, 9f4c139f.
    boot, find the commit with `git bisect` and revert it.
 
 ## Answer
+
+Picked 3776c598, 6ecce835 and 9f4c139f on
+`pocket-s/22-plus-small-stability` and merged to `master`. No conflicts.
+The Linux build passes on the branch.
+
+Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
+after the merge (33c47a42). The Android release build of that `master` passes.
+
+Still to do on the device: boot one game and copy the Vulkan log lines.

@@ -40,3 +40,20 @@ After the merge, rebase the open branches of tickets 03 and 11 on the new
    boot, find the commit with `git bisect` and revert it.
 
 ## Answer
+
+Picked on `pocket-s/19-local-adreno-chain` and merged to `master`
+(merge f74626e7). All 9 commits picked with `-x`.
+
+- 1838cd88: conflict in `config.h`, because `perf-log` (ticket 05) sits
+  next to `validation-layer`. Kept both lines, with the new default macro.
+- The other 8 commits applied with no conflict.
+- 604ea188 was not formatted for clang-format 22. An extra commit formats
+  `renderer.cpp`.
+
+Branch 03 is now empty after a rebase (see ticket 03). Branches 08 and 11
+are rebased on `master` (see those tickets).
+
+Linux build, `container/vita3k.sh test` and `format-check` pass on `master`
+after the merge (33c47a42). The Android release build of that `master` passes.
+
+Still to do on the device: boot one game and copy the Vulkan log lines.

@@ -43,3 +43,9 @@ Code done on branch `pocket-s/03-validation-layer-default`, commit
 `config/state.h` (`CurrentConfig`) and in `config/src/settings.cpp` (per-game
 XML files without the attribute). Not merged: the measurement in ticket 06 is
 still to do.
+
+Update 2026-09-28: ticket 19 brought 1838cd88 and 64c694ae to `master`.
+They make the same change: `config.h`, `state.h`, `EmulatorConfig.kt` and
+the per-game XML default. A rebase of 9f359dfa on `master` leaves no
+change, so the branch is not merged. The measurement in ticket 06 is still
+to do.
