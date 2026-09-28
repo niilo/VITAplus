@@ -38,6 +38,9 @@
 #include <overlay/display_manager.h>
 
 #include <algorithm>
+#include <cstddef>
+
+#include <fmt/ranges.h>
 #include <mutex>
 #include <unordered_set>
 
@@ -959,16 +962,101 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         if (!support_shader_interlock)
             device_info.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
 
-        try {
-            device = physical_device.createDevice(device_info.get());
-        } catch (vk::NotPermittedError &) {
-            // according to the vk spec, when using a priority higher than medium
-            // we can get this error (although I think it will only possibly happen
-            // for realtime priority)
-            for (auto &queue_info : queue_infos) {
-                queue_info.pNext = nullptr;
+        const auto create_device = [&]() {
+            try {
+                return physical_device.createDevice(device_info.get());
+            } catch (vk::NotPermittedError &) {
+                // according to the vk spec, when using a priority higher than medium
+                // we can get this error (although I think it will only possibly happen
+                // for realtime priority)
+                for (auto &queue_info : queue_infos) {
+                    queue_info.pNext = nullptr;
+                }
+                return physical_device.createDevice(device_info.get());
             }
-            device = physical_device.createDevice(device_info.get());
+        };
+
+        try {
+            device = create_device();
+        } catch (vk::FeatureNotPresentError &) {
+            // The stock Adreno driver 512.676 reports every feature below, but
+            // it can refuse the device with all of them on. Turn the optional
+            // features off one at a time, so the device is created and the log
+            // names the feature that the driver refuses.
+            struct OptionalFeature {
+                const char *name;
+                vk::Bool32 *flag;
+                bool *capability;
+            };
+            auto &core12 = device_info.get<vk::PhysicalDeviceVulkan12Features>();
+            auto &core13 = device_info.get<vk::PhysicalDeviceVulkan13Features>();
+            std::vector<OptionalFeature> optional_features;
+            if (has_vulkan13) {
+                optional_features.push_back({ "pipelineCreationCacheControl", &core13.pipelineCreationCacheControl, &capabilities.pipeline_creation_cache_control });
+                optional_features.push_back({ "maintenance4", &core13.maintenance4, &capabilities.maintenance4 });
+                optional_features.push_back({ "dynamicRendering", &core13.dynamicRendering, &capabilities.dynamic_rendering });
+                optional_features.push_back({ "synchronization2", &core13.synchronization2, &capabilities.synchronization2 });
+            }
+            if (has_vulkan12) {
+                optional_features.push_back({ "descriptorIndexing", &core12.descriptorIndexing, &capabilities.descriptor_indexing });
+                optional_features.push_back({ "timelineSemaphore", &core12.timelineSemaphore, &capabilities.timeline_semaphore });
+                optional_features.push_back({ "shaderFloat16", &core12.shaderFloat16, &support_fsr });
+            }
+
+            LOG_WARN("Vulkan device creation failed with ErrorFeatureNotPresent. Trying again with fewer optional features.");
+
+            // Log each requested feature that the driver does not report. A
+            // feature structure has sType and pNext, then only VkBool32 fields,
+            // so the fields are compared by index.
+            const auto log_missing = [](const char *name, const void *requested, const void *supported, size_t size, size_t offset) {
+                const auto *req = reinterpret_cast<const vk::Bool32 *>(static_cast<const char *>(requested) + offset);
+                const auto *sup = reinterpret_cast<const vk::Bool32 *>(static_cast<const char *>(supported) + offset);
+                for (size_t i = 0; i < (size - offset) / sizeof(vk::Bool32); i++) {
+                    if (req[i] && !sup[i])
+                        LOG_ERROR("Requested but not reported: {} field {}", name, i);
+                }
+            };
+            constexpr size_t chained_offset = offsetof(VkPhysicalDeviceVulkan12Features, samplerMirrorClampToEdge);
+            const auto reported = physical_device.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan12Features, vk::PhysicalDeviceVulkan13Features>();
+            log_missing("VkPhysicalDeviceFeatures", &enabled_features, &reported.get<vk::PhysicalDeviceFeatures2>().features, sizeof(vk::PhysicalDeviceFeatures), 0);
+            if (has_vulkan12)
+                log_missing("VkPhysicalDeviceVulkan12Features", &core12, &reported.get<vk::PhysicalDeviceVulkan12Features>(), sizeof(vk::PhysicalDeviceVulkan12Features), chained_offset);
+            if (has_vulkan13)
+                log_missing("VkPhysicalDeviceVulkan13Features", &core13, &reported.get<vk::PhysicalDeviceVulkan13Features>(), sizeof(vk::PhysicalDeviceVulkan13Features), chained_offset);
+            LOG_INFO("Device extensions: {}", fmt::join(device_extensions, ", "));
+            for (const auto &feature : optional_features) {
+                if (!*feature.flag)
+                    continue;
+                *feature.flag = VK_FALSE;
+                try {
+                    device = create_device();
+                    *feature.capability = false;
+                    LOG_WARN("The Vulkan driver refuses the feature {}. It is off.", feature.name);
+                    break;
+                } catch (vk::FeatureNotPresentError &) {
+                    *feature.flag = VK_TRUE;
+                }
+            }
+
+            if (!device) {
+                // No single feature is the cause. Turn all of them off.
+                for (const auto &feature : optional_features) {
+                    *feature.flag = VK_FALSE;
+                    *feature.capability = false;
+                }
+                LOG_WARN("The Vulkan driver refuses a set of optional features. All of them are off.");
+                try {
+                    device = create_device();
+                } catch (vk::FeatureNotPresentError &) {
+                    device_info.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
+                    device_info.unlink<vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>();
+                    support_shader_interlock = false;
+                    features.support_shader_interlock = false;
+                    support_rasterized_order_access = false;
+                    LOG_WARN("Also without shader interlock and rasterization order access.");
+                    device = create_device();
+                }
+            }
         }
         VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
     }
