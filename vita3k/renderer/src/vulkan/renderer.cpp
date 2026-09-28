@@ -1105,7 +1105,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         | vk::FormatFeatureFlagBits::eSampledImage
         | vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
     support_fsr &= (physical_device.getFormatProperties(vk::Format::eR16G16B16A16Sfloat).optimalTilingFeatures
-        & required_fsr_intermediate_features) == required_fsr_intermediate_features;
+                       & required_fsr_intermediate_features)
+        == required_fsr_intermediate_features;
     const vk::FormatFeatureFlags surface_format_features = physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures;
     const bool use_swapchain_storage = !device_profile.avoid_swapchain_storage
         && static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
@@ -1114,7 +1115,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         const vk::FormatFeatureFlags required_fsr_format_features = vk::FormatFeatureFlagBits::eStorageImage
             | vk::FormatFeatureFlagBits::eTransferSrc;
         support_fsr &= (physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures
-            & required_fsr_format_features) == required_fsr_format_features;
+                           & required_fsr_format_features)
+            == required_fsr_format_features;
     }
 
     return true;
