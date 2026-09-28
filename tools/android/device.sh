@@ -184,10 +184,11 @@ cmd_keys() {
     done
 }
 
-# One adb call per sample. The device script prints the header on the first
-# call and the values on every call. A value that cannot be read is empty.
+# One adb call for the whole run. The device script finds the CPU thermal
+# zones once (there can be more than 100 zones, and a scan takes seconds),
+# prints the header, then prints one line per second. A value that cannot be
+# read is empty.
 thermal_script='
-header=$1
 zones=""
 for z in /sys/class/thermal/thermal_zone*; do
     case "$(cat $z/type 2>/dev/null)" in
@@ -195,37 +196,34 @@ for z in /sys/class/thermal/thermal_zone*; do
     esac
 done
 cpus=$(ls -d /sys/devices/system/cpu/cpu[0-9]* 2>/dev/null)
-if [ "$header" = 1 ]; then
-    line="time_s,thermal_status"
-    for z in $zones; do line="$line,temp_$(cat $z/type)"; done
-    for c in $cpus; do line="$line,freq_${c##*/}"; done
-    echo "$line,gpuclk,gpu_busy_percentage"
-    exit 0
-fi
-status=$(dumpsys thermalservice 2>/dev/null | grep -m 1 -i "thermal status" | grep -o "[0-9][0-9]*" | head -n 1)
-line="$(date +%s),$status"
-for z in $zones; do line="$line,$(cat $z/temp 2>/dev/null)"; done
-for c in $cpus; do line="$line,$(cat $c/cpufreq/scaling_cur_freq 2>/dev/null)"; done
-gpuclk=$(cat /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null)
-busy=$(cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null | tr -d " %")
-echo "$line,$gpuclk,$busy"
+line="time_s,thermal_status"
+for z in $zones; do line="$line,temp_$(cat $z/type)"; done
+for c in $cpus; do line="$line,freq_${c##*/}"; done
+echo "$line,gpuclk,gpu_busy_percentage"
+while true; do
+    status=$(dumpsys thermalservice 2>/dev/null | grep -m 1 -i "thermal status" | grep -o "[0-9][0-9]*" | head -n 1)
+    line="$(date +%s),$status"
+    for z in $zones; do line="$line,$(cat $z/temp 2>/dev/null)"; done
+    for c in $cpus; do line="$line,$(cat $c/cpufreq/scaling_cur_freq 2>/dev/null)"; done
+    gpuclk=$(cat /sys/class/kgsl/kgsl-3d0/gpuclk 2>/dev/null)
+    busy=$(cat /sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null | tr -d " %")
+    echo "$line,$gpuclk,$busy"
+    # The reads above take about 0.5 s.
+    sleep 0.5
+done
 '
 
 cmd_thermal() {
-    local out_file="$1" header line
+    local out_file="$1" line warned=0
     mkdir -p "$(dirname "$out_file")"
-    header="$(adb shell "sh -c '$thermal_script' sh 1" | tr -d '\r')"
-    echo "$header" > "$out_file"
+    : > "$out_file"
     echo "writing $out_file. Stop with Ctrl-C."
-    local warned=0
-    while true; do
-        line="$(adb shell "sh -c '$thermal_script' sh 0" | tr -d '\r')"
+    adb shell "sh -c '$thermal_script'" | tr -d '\r' | while IFS= read -r line; do
         echo "$line" >> "$out_file"
         if [[ "$warned" -eq 0 && ("$line" == *,,* || "$line" == *,) ]]; then
             echo "device.sh: some values cannot be read. They are empty in the CSV." >&2
             warned=1
         fi
-        sleep 1
     done
 }
 
