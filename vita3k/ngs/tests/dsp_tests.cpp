@@ -183,3 +183,127 @@ TEST(ngs_dsp, compressor_does_not_change_a_quiet_signal) {
     for (size_t i = 0; i < samples.size(); i++)
         ASSERT_NEAR(samples[i], original[i], 1.0e-6f) << "sample " << i;
 }
+
+namespace {
+
+// Gain of a filter for a sine, measured after the filter settles.
+float filter_gain(const ngs::dsp::BiquadCoeffs &coeffs, const float frequency) {
+    std::vector<float> samples = stereo_sine(frequency, sample_rate / 4);
+    ngs::dsp::BiquadHistory history;
+    ngs::dsp::process_biquad(samples.data(), sample_rate / 4, coeffs, history);
+    return peak(samples, sample_rate / 8) / 0.5f;
+}
+
+} // namespace
+
+TEST(ngs_dsp, lowpass_passes_low_and_cuts_high_frequencies) {
+    // Values that Uncharted sends: a low-pass at 875 Hz, resonance 0.5.
+    const auto coeffs = ngs::dsp::make_biquad(ngs::dsp::FilterType::LowpassResonant, 874.902f, 0.5f, -89.9f, sample_rate);
+    EXPECT_NEAR(filter_gain(coeffs, 100.0f), 1.0f, 0.05f);
+    EXPECT_LT(filter_gain(coeffs, 8000.0f), 0.03f);
+}
+
+TEST(ngs_dsp, highpass_cuts_low_and_passes_high_frequencies) {
+    const auto coeffs = ngs::dsp::make_biquad(ngs::dsp::FilterType::HighpassResonant, 65.0f, 0.5f, -89.9f, sample_rate);
+    EXPECT_LT(filter_gain(coeffs, 10.0f), 0.1f);
+    EXPECT_NEAR(filter_gain(coeffs, 2000.0f), 1.0f, 0.05f);
+}
+
+TEST(ngs_dsp, peak_filter_uses_gain_in_db) {
+    const auto coeffs = ngs::dsp::make_biquad(ngs::dsp::FilterType::Peak, 1000.0f, 1.0f, 6.0f, sample_rate);
+    EXPECT_NEAR(filter_gain(coeffs, 1000.0f), 2.0f, 0.05f);
+    EXPECT_NEAR(filter_gain(coeffs, 50.0f), 1.0f, 0.05f);
+}
+
+TEST(ngs_dsp, all_filter_types_are_stable_for_extreme_values) {
+    for (uint32_t type = 0; type <= static_cast<uint32_t>(ngs::dsp::FilterType::LowpassResonantNormalized); type++) {
+        for (const float frequency : { -5.0f, 0.0f, 20.1f, 23499.0f, 1.0e9f, NAN }) {
+            for (const float q : { 0.0f, 0.5f, 100.0f, NAN }) {
+                const auto coeffs = ngs::dsp::make_biquad(static_cast<ngs::dsp::FilterType>(type), frequency, q, 24.0f, sample_rate);
+                EXPECT_TRUE(ngs::dsp::biquad_is_valid(coeffs)) << "type " << type << " frequency " << frequency << " q " << q;
+            }
+        }
+    }
+}
+
+namespace {
+
+// Settings that Uncharted sends.
+ngs::dsp::ReverbSettings uncharted_reverb() {
+    ngs::dsp::ReverbSettings settings;
+    settings.room_mb = -952.0f;
+    settings.room_hf_mb = -952.0f;
+    settings.decay_time_s = 2.94371f;
+    settings.decay_hf_ratio = 0.1f;
+    settings.reflections_mb = 1000.0f;
+    settings.reflections_delay_s = 0.3f;
+    settings.reverb_mb = 285.2f;
+    settings.reverb_delay_s = 0.1f;
+    settings.diffusion_percent = 66.67f;
+    settings.density_percent = 47.62f;
+    settings.hf_reference_hz = 13340.666f;
+    settings.early_pattern[0] = 4;
+    settings.early_pattern[1] = 5;
+    settings.early_scalar_percent = 100.0f;
+    settings.dry_mb = -10000.0f;
+    return settings;
+}
+
+} // namespace
+
+TEST(ngs_dsp, reverb_makes_a_tail_that_decays) {
+    const ngs::dsp::ReverbSettings settings = uncharted_reverb();
+    ngs::dsp::Reverb reverb;
+
+    // One impulse, then silence, in grains of 512 frames.
+    const uint32_t grain = 512;
+    std::vector<float> samples(grain * 2, 0.0f);
+    samples[0] = 1.0f;
+    samples[1] = 1.0f;
+
+    float first_second = 0.0f;
+    float fifth_second = 0.0f;
+    const uint32_t grains = 5 * sample_rate / grain;
+    for (uint32_t i = 0; i < grains; i++) {
+        reverb.process(samples.data(), grain, sample_rate, settings);
+        for (const float value : samples) {
+            ASSERT_TRUE(std::isfinite(value));
+            if (i < sample_rate / grain)
+                first_second = std::max(first_second, std::fabs(value));
+            else if (i >= grains - sample_rate / grain)
+                fifth_second = std::max(fifth_second, std::fabs(value));
+        }
+        std::fill(samples.begin(), samples.end(), 0.0f);
+    }
+
+    EXPECT_GT(first_second, 0.01f);
+    EXPECT_LT(first_second, 2.0f);
+    EXPECT_LT(fifth_second, first_second * 0.05f);
+}
+
+TEST(ngs_dsp, reverb_with_dry_only_passes_the_signal) {
+    ngs::dsp::ReverbSettings settings;
+    settings.dry_mb = 0.0f;
+    settings.room_mb = -10000.0f;
+
+    std::vector<float> samples = stereo_sine(440.0f, 1024);
+    const std::vector<float> original = samples;
+    ngs::dsp::Reverb reverb;
+    reverb.process(samples.data(), 1024, sample_rate, settings);
+    for (size_t i = 0; i < samples.size(); i++)
+        ASSERT_FLOAT_EQ(samples[i], original[i]);
+}
+
+TEST(ngs_dsp, reverb_survives_bad_settings) {
+    ngs::dsp::ReverbSettings settings = uncharted_reverb();
+    settings.decay_time_s = NAN;
+    settings.reverb_mb = INFINITY;
+    settings.density_percent = -50.0f;
+    settings.early_pattern[0] = 99;
+
+    std::vector<float> samples = stereo_sine(440.0f, 4096, 1.0f);
+    ngs::dsp::Reverb reverb;
+    reverb.process(samples.data(), 4096, sample_rate, settings);
+    for (const float value : samples)
+        ASSERT_TRUE(std::isfinite(value));
+}
