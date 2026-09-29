@@ -1,8 +1,9 @@
 # 06: Implement the NGS distortion module
 
 Status: open
+Claimed: 2026-09-29 Claude Code session (Opus 5.5)
 Type: task
-Label: ready-for-agent
+Label: needs-info
 
 ## Context
 
@@ -43,5 +44,19 @@ Uncharted logged `Game is using unimplemented distortion audio module` at
 - Test: a unit test in a new `vita3k/ngs/tests/` suite is optional. At a
   minimum, build, run `container/vita3k.sh test`, and play the game on the
   device.
+
+## Answer
+
+Not implemented. No public source describes `fA`, `fB`, `fClip`, `fGate` or the curve. A wrong curve sounds broken.
+
+What was done instead: the module logs the parameters that the game
+sends, up to 16 distinct sets, at info level. The lines start with
+`NGS distortion`. The sound still passes through with no change.
+The helper is `is_new_param_set` in `vita3k/ngs/src/param_log.cpp`.
+
+Next step: play Uncharted (and WipEout 2048) with `log-level: 2`, pull
+`vita3k.log`, and read the values. For example, a `gain` near 1.0 means a
+linear gain, and a `gain` from -12 to 12 means dB. Then decide the units
+and implement the module. The research notes are in the session scratchpad (`ngs-research.md`). Their summary is in `spec.md`.
 
 ## Comments
