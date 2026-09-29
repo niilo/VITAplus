@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <ngs/dsp.h>
 #include <ngs/system.h>
 #include <ngs/types.h>
 
@@ -53,10 +54,16 @@ struct SceNgsReverbParams {
 
 namespace ngs {
 
+struct ReverbRuntimeState : public ModuleRuntimeState {
+    dsp::Reverb reverb;
+};
+
 class ReverbModule : public Module {
 public:
     bool process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) override;
     uint32_t module_id() const override { return 0x5CE7; }
+    std::unique_ptr<ModuleRuntimeState> create_runtime_state() const override;
+    void on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) override;
 
     static constexpr uint32_t get_max_parameter_size() {
         return sizeof(SceNgsReverbParams);

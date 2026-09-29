@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <ngs/dsp.h>
 #include <ngs/system.h>
 #include <ngs/types.h>
 
@@ -66,10 +67,48 @@ struct SceNgsFilterParamsCoEff {
 
 namespace ngs {
 
+// One biquad and its history, for the filter and equalizer modules.
+struct FilterStage {
+    dsp::BiquadHistory history;
+    bool active = false;
+
+    // Run the filter. A stage that was off starts with an empty history.
+    void run(float *samples, uint32_t frames, const dsp::BiquadCoeffs &coeffs);
+};
+
+dsp::BiquadCoeffs filter_coeffs(const SceNgsParamFilter &filter, int32_t sample_rate);
+dsp::BiquadCoeffs filter_coeffs(const SceNgsParamCoEff &coeff);
+bool filter_is_off(const SceNgsParamFilter &filter);
+
+// Count the modules of type T in the rack before `data`, and in total.
+template <typename T>
+void module_position(const ModuleData &data, uint32_t &before, uint32_t &total) {
+    before = 0;
+    total = 0;
+    const auto &modules = data.parent->rack->modules;
+    for (uint32_t i = 0; i < modules.size(); i++) {
+        if (dynamic_cast<const T *>(modules[i].get())) {
+            if (i < data.index)
+                before++;
+            total++;
+        }
+    }
+}
+
+// Return a buffer for output `index` that the caller can change. If another
+// output uses the same buffer, copy it to the scratch memory of `data` first.
+float *own_product(ModuleData &data, uint32_t index);
+
+struct FilterLogicalState : public ModuleLogicalState {
+    FilterStage stage;
+};
+
 class FilterModule : public Module {
 public:
     bool process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) override;
     uint32_t module_id() const override { return 0x5CE4; }
+    std::unique_ptr<ModuleLogicalState> create_logical_state() const override;
+    void on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) override;
 
     static constexpr uint32_t get_max_parameter_size() {
         return std::max(sizeof(SceNgsFilterParams), sizeof(SceNgsFilterParamsCoEff));

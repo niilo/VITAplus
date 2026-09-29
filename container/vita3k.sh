@@ -116,7 +116,7 @@ case "$command" in
         run_in linux bash -c "$ensure_configured && cmake --build build/$preset --config ${1:-RelWithDebInfo}"
         ;;
     test)
-        run_in linux bash -c "$ensure_configured && cmake --build build/$preset --config RelWithDebInfo --target mem-tests module-tests \
+        run_in linux bash -c "$ensure_configured && cmake --build build/$preset --config RelWithDebInfo --target mem-tests module-tests ngs-tests \
             && ctest --test-dir build/$preset --build-config RelWithDebInfo --output-on-failure $*"
         ;;
     format)

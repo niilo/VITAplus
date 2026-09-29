@@ -379,6 +379,9 @@ void deinit(State &ngs, MemState &mem) {
     ngs.definitions = Ptr<VoiceDefinition>(0);
 }
 
+uint32_t effects_mask = ~0u;
+float reverb_level = 0.5f;
+
 bool init_system(State &ngs, const MemState &mem, SceNgsSystemInitParams *parameters, Ptr<void> memspace, const uint32_t memspace_size) {
     // Reserve first memory allocation for our System struct
     System *sys = memspace.cast<System>().get(mem);

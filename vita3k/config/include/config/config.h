@@ -182,6 +182,9 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(std::string, "audio-backend", "SDL", audio_backend)                                            \
     code(int, "audio-volume", 100, audio_volume)                                                        \
     code(bool, "ngs-enable", true, ngs_enable)                                                          \
+    code(bool, "ngs-effects", true, ngs_effects)                                                        \
+    code(int, "ngs-effects-mask", 63, ngs_effects_mask)                                                 \
+    code(int, "ngs-reverb-level", 50, ngs_reverb_level)                                                 \
     code(int, "sys-button", static_cast<int>(SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS), sys_button)          \
     code(int, "sys-lang", static_cast<int>(SCE_SYSTEM_PARAM_LANG_ENGLISH_US), sys_lang)                 \
     code(int, "sys-date-format", (int)SCE_SYSTEM_PARAM_DATE_FORMAT_MMDDYYYY, sys_date_format)           \

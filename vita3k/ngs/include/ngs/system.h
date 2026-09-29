@@ -357,6 +357,22 @@ bool deliver_data_to_master(const MemState &mem, Voice *master, Voice *source, c
 inline constexpr bool default_patch_volume_is_unity = true;
 inline constexpr bool use_implicit_master_routing = true;
 
+// Which of our NGS effects run (settings ngs-effects and ngs-effects-mask). A
+// module that does not run passes the sound through with no change. The
+// envelope and compressor bits are not used: those modules are the Plus ones.
+enum EffectBit : uint32_t {
+    EFFECT_FILTER = 1 << 3,
+    EFFECT_EQUALIZER = 1 << 4,
+    EFFECT_REVERB = 1 << 5,
+};
+extern uint32_t effects_mask;
+inline bool effect_enabled(const EffectBit bit) {
+    return (effects_mask & bit) != 0;
+}
+
+// Wet level of the reverb in percent of the I3DL2 level (setting ngs-reverb-level).
+extern float reverb_level;
+
 bool init_system(State &ngs, const MemState &mem, SceNgsSystemInitParams *parameters, Ptr<void> memspace, const uint32_t memspace_size);
 void release_system(State &ngs, const MemState &mem, System *system);
 bool init_rack(State &ngs, const MemState &mem, System *system, SceNgsBufferInfo *init_info, const SceNgsRackDescription *description);

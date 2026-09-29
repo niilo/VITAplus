@@ -19,6 +19,7 @@
 
 #include "../SceProcessmgr/SceProcessmgr.h"
 
+#include <algorithm>
 #include <kernel/state.h>
 #include <kernel/thread/thread_state.h>
 #include <ngs/state.h>
@@ -390,6 +391,9 @@ EXPORT(SceUInt32, sceNgsSystemInit, Ptr<void> memspace, const uint32_t memspace_
         return 0;
     }
 
+    ngs::effects_mask = emuenv.cfg.ngs_effects ? static_cast<uint32_t>(emuenv.cfg.ngs_effects_mask) : 0;
+    ngs::reverb_level = std::clamp(emuenv.cfg.ngs_reverb_level, 0, 200) / 100.0f;
+    LOG_INFO("NGS effects mask: {:#x}, reverb level: {}%", ngs::effects_mask, emuenv.cfg.ngs_reverb_level);
     if (!ngs::init_system(emuenv.ngs, emuenv.mem, params, memspace, memspace_size)) {
         return RET_ERROR(SCE_NGS_ERROR); // TODO: Better error code
     }
