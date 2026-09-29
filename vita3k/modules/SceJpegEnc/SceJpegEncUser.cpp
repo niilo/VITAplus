@@ -67,14 +67,14 @@ EXPORT(int, sceJpegEncoderCsc, SceJpegEncoderContext *context, Ptr<uint8_t> outB
         return SCE_JPEGENC_ERROR_INVALID_PIXELFORMAT;
     }
 
-    // Games can pass the input format with the SCE_JPEGENC_PIXEL_CSC_ARGB_YCBCR flag set
+    // The SCE_JPEGENC_PIXEL_CSC_ARGB_YCBCR flag belongs to the context format, but ignore it here too
     const int32_t in_format = inPixelFormat & ~SCE_JPEGENC_PIXEL_CSC_ARGB_YCBCR;
-    if (in_format != SCE_JPEGENC_PIXEL_RGBA8888 && in_format != SCE_JPEGENC_PIXEL_BGRA8888) {
+    if (in_format != SCE_JPEGENC_PIXEL_ARGB8888 && in_format != SCE_JPEGENC_PIXEL_ABGR8888) {
         LOG_ERROR_ONCE("sceJpegEncoderCsc: input pixel format {} is not supported", log_hex(inPixelFormat));
         return SCE_JPEGENC_ERROR_INVALID_PIXELFORMAT;
     }
 
-    convert_rgb_to_yuv(inBufferData, outBufferData, context->inWidth, context->inHeight, color_space, inPitch, in_format == SCE_JPEGENC_PIXEL_BGRA8888);
+    convert_rgb_to_yuv(inBufferData, outBufferData, context->inWidth, context->inHeight, color_space, inPitch, in_format == SCE_JPEGENC_PIXEL_ARGB8888);
 
     return 0;
 }

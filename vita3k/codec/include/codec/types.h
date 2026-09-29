@@ -30,8 +30,10 @@ enum SceJpegEncErrorCode : uint32_t {
 };
 
 enum SceJpegEncoderPixelFormat : int32_t {
-    SCE_JPEGENC_PIXEL_RGBA8888 = 0,
-    SCE_JPEGENC_PIXEL_BGRA8888 = 4,
+    // Sony names the 32-bit value: ARGB8888 is 0xAARRGGBB, so the bytes in memory are B, G, R, A.
+    // Uncharted passes 4 for a buffer with the bytes R, G, B, A.
+    SCE_JPEGENC_PIXEL_ARGB8888 = 0,
+    SCE_JPEGENC_PIXEL_ABGR8888 = 4,
     SCE_JPEGENC_PIXEL_YCBCR420 = 8,
     SCE_JPEGENC_PIXEL_YCBCR422 = 9,
     SCE_JPEGENC_PIXEL_CSC_ARGB_YCBCR = 16, // flag: the input needs a color conversion
