@@ -799,6 +799,19 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_tex
                 // The barrier above keeps the store in the General layout, so the copy must use General too
                 cmd_buffer.copyImageToBuffer(info.texture.image, vk::ImageLayout::eGeneral, casted->transition_buffer.buffer, copy_image_buffer);
 
+                // The second copy reads the buffer that the first copy writes. Without this barrier the GPU can
+                // start the read early and copy stale rows (flickering dashes in Uncharted at 1x).
+                vk::BufferMemoryBarrier buffer_barrier{
+                    .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                    .dstAccessMask = vk::AccessFlagBits::eTransferRead,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .buffer = casted->transition_buffer.buffer,
+                    .offset = 0,
+                    .size = VK_WHOLE_SIZE
+                };
+                cmd_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, {}, buffer_barrier, {});
+
                 copy_image_buffer
                     .setBufferOffset(src_byte_offset)
                     .setBufferRowLength(dst_pixel_stride)
