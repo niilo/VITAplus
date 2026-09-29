@@ -1,6 +1,6 @@
 # 01: Make the plus-master branch
 
-Status: claimed
+Status: resolved
 Claimed: 2026-09-29 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -13,5 +13,9 @@ Label: ready-for-agent
 3. Add the tools and docs group from `master`.
 4. Build Linux and the Android release APK. Run the tests and the format
    check. Boot Uncharted on the device.
+
+## Answer
+
+Done: e07fd837. Linux build, tests and format pass. The release APK boots Uncharted on the Pocket S (resolution 2, Turnip, double buffer). The app writes `vita3k.log` by adding to the old file; read the part after the last "session start" line. The Android status bar shows over the game (to check).
 
 ## Comments
