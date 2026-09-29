@@ -15,6 +15,8 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
+#include "SceProcessmgr.h"
+
 #include "kernel/state.h"
 
 #include <module/module.h>
@@ -29,6 +31,16 @@ EXPORT(int, ksceKernelCreateProcessLocalStorage, const char *name, SceSize size)
     // kubridge uses this for per-process exception handler context.
     auto pls_data = alloc(emuenv.mem, size, name) >> 1;
     return pls_data;
+}
+
+EXPORT(int, ksceKernelGetCompiledSdkVersionByPidForDriver, SceUID pid, SceUInt32 *sdk_version) {
+    TRACY_FUNC(ksceKernelGetCompiledSdkVersionByPidForDriver, pid, sdk_version);
+    if (!sdk_version)
+        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
+
+    // Vita3K runs one process, so every pid gets the SDK version of the main module.
+    *sdk_version = CALL_EXPORT(sceKernelGetMainModuleSdkVersion);
+    return 0;
 }
 
 EXPORT(int, ksceKernelGetProcessInfo) {
