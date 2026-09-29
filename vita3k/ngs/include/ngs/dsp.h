@@ -22,6 +22,7 @@
 // All buffers are interleaved stereo float.
 
 #include <cstdint>
+#include <vector>
 
 namespace ngs::dsp {
 
@@ -45,6 +46,28 @@ struct BiquadHistory {
 bool biquad_is_valid(const BiquadCoeffs &coeffs);
 
 void process_biquad(float *samples, uint32_t frames, const BiquadCoeffs &coeffs, BiquadHistory &history);
+
+// The filter types of SceNgsParamFilterMode, in the same order.
+enum class FilterType : uint32_t {
+    Off,
+    LowpassResonant,
+    HighpassResonant,
+    BandpassPeak,
+    BandpassZero,
+    Notch,
+    Peak,
+    HighShelf,
+    LowShelf,
+    LowpassOnePole,
+    HighpassOnePole,
+    Allpass,
+    LowpassResonantNormalized,
+};
+
+// Coefficients from the Audio EQ Cookbook (Robert Bristow-Johnson). `q` is
+// the filter Q. `gain_db` is used only by the peak and shelf types. Bad input
+// values are clamped. Off and unknown types give a filter with no effect.
+BiquadCoeffs make_biquad(FilterType type, float frequency, float q, float gain_db, int32_t sample_rate);
 
 // Multiply the signal by a gain that moves in a straight line from `start` to
 // `end` across the frames. This prevents clicks when the gain changes.
@@ -105,5 +128,55 @@ struct CompressorLevels {
 // normal compressor and the second input for a side-chain compressor.
 CompressorLevels process_compressor(float *samples, const float *key, uint32_t frames, int32_t sample_rate,
     const CompressorSettings &settings, CompressorState &state);
+
+struct ReverbSettings {
+    float room_mb = -10000.0f;
+    float room_hf_mb = 0.0f;
+    float decay_time_s = 1.0f;
+    float decay_hf_ratio = 0.5f;
+    float reflections_mb = -10000.0f;
+    float reflections_delay_s = 0.02f;
+    float reverb_mb = -10000.0f;
+    float reverb_delay_s = 0.04f;
+    float diffusion_percent = 100.0f;
+    float density_percent = 100.0f;
+    float hf_reference_hz = 5000.0f;
+    float dry_mb = 0.0f;
+    uint32_t early_pattern[2] = { 0, 1 }; ///< SceNgsReverbRoom for each output channel
+    float early_scalar_percent = 100.0f;
+};
+
+// Clamp the settings to the I3DL2 ranges.
+ReverbSettings clamp_reverb_settings(const ReverbSettings &settings);
+
+// An I3DL2-style reverb: early reflections from a tapped delay line, and a
+// late reverb from a feedback delay network with high-frequency damping.
+class Reverb {
+public:
+    void reset();
+    void process(float *samples, uint32_t frames, int32_t sample_rate, const ReverbSettings &settings);
+
+private:
+    static constexpr int LINES = 4;
+
+    struct DelayLine {
+        std::vector<float> buffer;
+        uint32_t position = 0;
+
+        void resize(size_t size);
+        void clear();
+        float read(uint32_t delay) const;
+        void write(float value);
+    };
+
+    int32_t sample_rate = 0;
+    DelayLine pre_delay;
+    DelayLine diffusers[2];
+    DelayLine lines[LINES];
+    float damping_state[LINES] = {};
+    float room_hf_state = 0.0f;
+
+    void allocate(int32_t rate);
+};
 
 } // namespace ngs::dsp

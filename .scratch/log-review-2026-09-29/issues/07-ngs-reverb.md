@@ -1,9 +1,9 @@
 # 07: Implement the NGS reverb module
 
-Status: open
+Status: resolved
 Claimed: 2026-09-29 Claude Code session (Opus 5.5)
 Type: task
-Label: needs-info
+Label: ready-for-agent
 Blocked by: 04
 
 ## Context
@@ -61,5 +61,23 @@ Next step: play Uncharted (and WipEout 2048) with `log-level: 2`, pull
 `vita3k.log`, and read the values. For example, a `gain` near 1.0 means a
 linear gain, and a `gain` from -12 to 12 means dB. Then decide the units
 and implement the module. The research notes are in the session scratchpad (`ngs-research.md`). Their summary is in `spec.md`.
+
+### Update, 2026-09-29 (second play session)
+
+Uncharted sent two reverb sets. Example: room -952, room HF -952, decay
+time 2.94, decay HF ratio 0.1, reflections 1000, reflections delay 0.3,
+reverb 285, reverb delay 0.1, diffusion 66.67, density 47.62, HF reference
+13340, patterns 4 and 5, scalar 100, dry -10000. The maximum values (0.3,
+0.1, 1000, 2000) are exactly the I3DL2 maximums. So the units are I3DL2.
+Dry -10000 means the bus output has no dry signal.
+
+Implemented on branch `log-review/ngs-eq-reverb`: `dsp::Reverb`. The
+early reflections are 6 taps per channel after the reflections delay. The
+tap times are a guess, scaled by the room of the pattern and by the early
+reflection scalar. The late reverb is 4 delay lines with a Hadamard mix,
+feedback from the decay time, HF damping from the decay HF ratio, and two
+all-pass diffusers. Room HF is a low-pass on the wet input. The LF
+parameters are not used. Tests pass. Not checked by ear yet. The CPU cost
+is 6 taps and 4 lines per sample.
 
 ## Comments
