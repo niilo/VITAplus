@@ -84,3 +84,6 @@ fastlane/readme.md
 
 # Copilot local config
 .github/copilot-instructions.md
+
+# local test output (logs, CSV, screenshots)
+/tmp/

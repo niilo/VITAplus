@@ -20,7 +20,7 @@ android {
 
 	defaultConfig {
 		// namespace stays org.vita3k.emulator: it is the Java package the JNI symbols are bound to
-		applicationId = "org.vita3kplus.emulator"
+		applicationId = "org.vita3k.emulator"
 		minSdk = 28
 		targetSdk = 35
 		versionCode = 110

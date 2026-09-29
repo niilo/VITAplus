@@ -150,6 +150,15 @@
       }
     },
     {
+      "name": "container-linux",
+      "inherits": "linux-ninja-clang",
+      "displayName": "Linux in Apple container",
+      "description": "Linux build inside the container/linux.Containerfile image, started by container/vita3k.sh",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": true
+      }
+    },
+    {
       "name": "linux-ninja-gnu",
       "inherits": "linux-ninja",
       "displayName": "Linux with Ninja and GNU GCC",
