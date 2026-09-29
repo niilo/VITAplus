@@ -5091,6 +5091,11 @@ NID(sceNearReadReceivedGiftData, 0xB14145DD)
 NID(sceNearRefresh, 0x2ED36EE2)
 NID(sceNearSetGift, 0x146BE236)
 NID(sceNearSetGift2, 0x4CCE6A14)
+// No public names. Firmware 1.000 to 3.570.
+NID(SceNearUtil_49A97D5F, 0x49A97D5F)
+NID(SceNearUtil_69EE6FB3, 0x69EE6FB3)
+NID(SceNearUtil_A412E9CA, 0xA412E9CA)
+NID(SceNearUtil_E608000B, 0xE608000B)
 // Module "SceNet"
 // Library "SceNet"
 NID(sceNetAccept, 0x1ADF9BB1)
@@ -6127,6 +6132,7 @@ NID(sceKernelRegisterProcessTerminationCallback, 0x5EC77870)
 NID(sceKernelUnregisterProcessTerminationCallback, 0x973A4527)
 // Library "SceProcessmgrForDriver"
 NID(ksceKernelCreateProcessLocalStorage, 0x3801D7D6)
+NID(ksceKernelGetCompiledSdkVersionByPidForDriver, 0xD141C076)
 NID(ksceKernelGetProcessInfo, 0x0AFF3EAE)
 NID(ksceKernelGetProcessLocalStorageAddr, 0xEE694840)
 NID(ksceKernelGetProcessLocalStorageAddrForPid, 0xAF80F39C)

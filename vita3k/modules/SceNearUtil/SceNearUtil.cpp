@@ -132,3 +132,19 @@ EXPORT(int, sceNearSetGift) {
 EXPORT(int, sceNearSetGift2) {
     return UNIMPLEMENTED();
 }
+
+EXPORT(int, SceNearUtil_49A97D5F) {
+    return UNIMPLEMENTED();
+}
+
+EXPORT(int, SceNearUtil_69EE6FB3) {
+    return UNIMPLEMENTED();
+}
+
+EXPORT(int, SceNearUtil_A412E9CA) {
+    return UNIMPLEMENTED();
+}
+
+EXPORT(int, SceNearUtil_E608000B) {
+    return UNIMPLEMENTED();
+}
