@@ -34,6 +34,7 @@ enum SceJpegEncoderPixelFormat : int32_t {
     SCE_JPEGENC_PIXEL_BGRA8888 = 4,
     SCE_JPEGENC_PIXEL_YCBCR420 = 8,
     SCE_JPEGENC_PIXEL_YCBCR422 = 9,
+    SCE_JPEGENC_PIXEL_CSC_ARGB_YCBCR = 16, // flag: the input needs a color conversion
     SCE_JPEGENC_PITCH_HW_CSC = 16,
 };
 
