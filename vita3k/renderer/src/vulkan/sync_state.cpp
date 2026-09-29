@@ -242,6 +242,13 @@ void sync_visibility_buffer(VKContext &context, Ptr<uint32_t> buffer, uint32_t s
     }
 
     context.current_visibility_buffer = &ite->second;
+
+    // sync_visibility_index does not check the index while no buffer is set.
+    // An open query belongs to the old buffer, so leave its index alone.
+    if (!context.is_in_query && context.current_query_idx >= static_cast<int>(ite->second.size)) {
+        LOG_WARN_ONCE("Using visibility index {} which is too big for the buffer", context.current_query_idx);
+        context.current_query_idx = 0;
+    }
 }
 
 void sync_visibility_index(VKContext &context, bool enable, uint32_t index, bool is_increment) {

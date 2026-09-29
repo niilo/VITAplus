@@ -20,6 +20,7 @@
 #include <kernel/state.h>
 
 #include "../SceDisplay/SceDisplay.h"
+#include "../SceProcessmgr/SceProcessmgr.h"
 
 TRACY_MODULE_NAME(SceVshBridge);
 
@@ -163,8 +164,14 @@ EXPORT(int, _vshIoMount) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, _vshKernelGetCompiledSdkVersionByPid) {
-    return UNIMPLEMENTED();
+EXPORT(int, _vshKernelGetCompiledSdkVersionByPid, SceUID pid, SceUInt32 *sdk_version) {
+    TRACY_FUNC(_vshKernelGetCompiledSdkVersionByPid, pid, sdk_version);
+    if (!sdk_version)
+        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
+
+    // Vita3K runs one process, so every pid gets the SDK version of the main module.
+    *sdk_version = CALL_EXPORT(sceKernelGetMainModuleSdkVersion);
+    return 0;
 }
 
 EXPORT(SceUID, _vshKernelSearchModuleByName, const char *module_name, const void *buffer) {
