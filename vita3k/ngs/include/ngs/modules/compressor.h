@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <ngs/dsp.h>
 #include <ngs/system.h>
 #include <ngs/types.h>
 
@@ -51,10 +52,17 @@ struct SceNgsCompressorStates {
 
 namespace ngs {
 
+struct CompressorLogicalState : public ModuleLogicalState {
+    dsp::CompressorState compressor;
+};
+
 struct CompressorModule : public Module {
 public:
     bool process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) override;
     uint32_t module_id() const override { return 0x5CE1; }
+    uint32_t get_guest_state_size() const override { return sizeof(SceNgsCompressorStates); }
+    std::unique_ptr<ModuleLogicalState> create_logical_state() const override;
+    void on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) override;
 
     static constexpr uint32_t get_max_parameter_size() {
         return sizeof(SceNgsCompressorParams);
