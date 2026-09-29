@@ -18,7 +18,8 @@ The log showed three groups of small problems. Each group has an issue in
 - 09: follow-up from 03. Key-off stops a voice at once, so the envelope
   release cannot play.
 - 10: Uncharted shows artifacts at resolution multiplier 1. Multiplier 2
-  has no artifacts.
+  has no artifacts. Fixed: a missing buffer barrier in the typeless copy.
+- 11: Uncharted colors are duller than on Vita3K-Plus.
 
 The crashes in `adb logcat -b crash` are from before 00:11. They are the
 Uncharted firmware crash, which is solved (see
