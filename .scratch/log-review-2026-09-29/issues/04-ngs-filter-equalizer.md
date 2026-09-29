@@ -1,9 +1,9 @@
 # 04: Implement the NGS filter and equalizer modules
 
-Status: open
+Status: resolved
 Claimed: 2026-09-29 Claude Code session (Opus 5.5)
 Type: task
-Label: needs-info
+Label: ready-for-agent
 
 ## Context
 
@@ -63,5 +63,21 @@ Next step: play Uncharted (and WipEout 2048) with `log-level: 2`, pull
 `vita3k.log`, and read the values. For example, a `gain` near 1.0 means a
 linear gain, and a `gain` from -12 to 12 means dB. Then decide the units
 and implement the module. The research notes are in the session scratchpad (`ngs-research.md`). Their summary is in `spec.md`.
+
+### Update, 2026-09-29 (second play session)
+
+Uncharted sent these equalizer values (module 3 of the Scream voice):
+filter 0 is mode 2 (high-pass) at 20 to 65 Hz, and filter 3 is mode 1
+(low-pass) at 875 to 23499 Hz. Resonance is always 0.5 and gain is always
+-89.9. The low-pass frequency changes with the distance of the sound. So
+frequency is in Hz, resonance is the Q, and gain is in dB (-89.9 is close
+to the -90 dB floor). The filter modules were always off.
+
+Implemented on branch `log-review/ngs-eq-reverb`: `make_biquad` in
+`dsp.cpp` (Audio EQ Cookbook) for all modes, the filter module (the first
+filter acts on output 0, the second on output 1), and the equalizer (4
+filters in series; the first equalizer acts before the split into
+outputs, and in definitions with one equalizer per output after it,
+equalizer n + 1 acts on output n). Tests pass. Not checked by ear yet.
 
 ## Comments

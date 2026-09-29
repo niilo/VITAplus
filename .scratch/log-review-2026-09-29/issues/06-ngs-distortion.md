@@ -59,4 +59,11 @@ Next step: play Uncharted (and WipEout 2048) with `log-level: 2`, pull
 linear gain, and a `gain` from -12 to 12 means dB. Then decide the units
 and implement the module. The research notes are in the session scratchpad (`ngs-research.md`). Their summary is in `spec.md`.
 
+### Update, 2026-09-29 (second play session)
+
+Uncharted sent one distortion set: A 0, B 0, clip 0, gate 0, wet gain 0,
+dry gain 1. With wet 0 and dry 1, the output is the input. So the
+pass-through is correct for Uncharted. The logging stays in place for
+other games.
+
 ## Comments
