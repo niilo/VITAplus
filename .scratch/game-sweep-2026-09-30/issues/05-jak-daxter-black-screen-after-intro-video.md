@@ -42,3 +42,62 @@ Found on 2026-09-30.
 4. Compare with Vita3K-Plus (`org.vita3kplus.emulator`).
 
 ## Comments
+
+2026-09-30, second look:
+
+- Vita3K-Plus 20588fbf has the crash of issue 01 too, so the black screen
+  cannot be compared with Plus yet. Do not use Plus as a reference here.
+- The screen is still black at 100 seconds. Pressing Start and A does not
+  change it (both screenshots are identical, 25700 bytes).
+- The main thread is not stuck. It runs the frame loop: `r0` in the hang dump
+  is a frame counter (0x165 = 357, and 358 `SetFrameBuf` calls are accepted)
+  and the loop calls `sceGxmWaitEvent` each frame. `sceGxmWaitEvent` is an
+  empty stub (`vita3k/modules/SceGxm/SceGxm.cpp:6052`, it returns at once).
+  It is a suspect: the real call may block until an event, and the game may
+  depend on that wait.
+- The game plays its intro video with the system module
+  `vs0:sys/external/libscemp4.suprx` (loaded as real code, not HLE). The log
+  shows one `receive_h264_frame` error (`AVERROR(EAGAIN)`, "Requires Another
+  Call") at the start and no more video lines after `Changing from Buffering
+  mode to previous state`. The `avPlayer VideoDec`, `AudioDec` and `Demux`
+  threads then wait on conditions with timeouts. So the video may never
+  deliver a frame.
+- Only 2 pipelines compile. The game draws nearly nothing.
+
+Next: (a) log the `sceVideodec*` calls and results for this game, (b) find out
+what the game waits for in `sceGxmWaitEvent`, (c) check whether the video
+frames arrive (`sceAvPlayer` is not used, so look at `SceMp4` and
+`SceVideodec` in `vita3k/modules/`).
+
+2026-09-30, third look (temporary debug logs in `sceAvcdecDecode` and
+`sceGxmSetFragmentTexture`, since removed):
+
+- The video is not the cause. `sceAvcdecDecode` works: 960x544, pixel type
+  `0x20` (YUV420 packed), a frame at every call, about 30 per second, and a
+  mean luma of 47 to 54 (dark, not empty). The clip loops (the media is set
+  to loop), so this is a looping menu background and not an intro that ends.
+- The game does draw. `sceGxmSetFragmentTexture` shows full screen 960x544
+  textures in the formats UBC1, UBC2 and U8U8U8U8, and UI textures (280x200
+  and 196x36, UBC3) that change every frame. So the game logic runs and
+  issues draws. The screen is black anyway.
+- So the fault is in rendering or in presentation, not in the video or in the
+  game logic. The "only 2 pipelines compiled" line is not a sign of a hang:
+  all draws probably share two simple textured-quad shaders
+  (varying masks `0x0003` and `0x0013`).
+- These settings were tried one at a time (each 40 to 100 seconds on the
+  device) and the screen stayed black in all of them: `memory-mapping`
+  double-buffer, `resolution-multiplier` 1, `disable-surface-sync`,
+  `high-accuracy`, `force-full-precision`, `disable-raster-order`,
+  `disable-programmable-blending`, `surface-sync-clamp-rt` off and
+  `shader-cache` off. `memory-mapping: native-buffer` gave a different
+  screenshot size (24202 bytes) and was not checked further. All values are
+  back at the defaults.
+- One `transfer_copy` was logged: surface-synced `0x607299B0` to
+  `0x601FE000`, 960x544, format `0x60000`.
+
+Next: capture a frame with RenderDoc or AGI on the device and look at the
+last draw before the present. Check if the draws write to the color target,
+and if the presented image is the same surface that the game rendered to.
+Also check the UBC texture decode for these textures (the texture cache and
+`vita3k/renderer/src/texture/`). Try the Turnip driver versus the stock
+driver (the box bug in issue 08 depends on the driver).
