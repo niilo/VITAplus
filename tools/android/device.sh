@@ -16,6 +16,9 @@
 #   config-set <package> <key> <val>  stop the app and set <key> in config.yml
 #   config-guard <package> <title id> fail if a per-game config file exists
 #   keys <keycode>...                 send key presses, 300 ms apart
+#   hold <x> <y> [ms]                 hold a touch at a screen position (default
+#                                     300 ms). A plain tap is too short for the
+#                                     games, and key events do not reach them.
 #   thermal <out file>                write one CSV line per second until stopped:
 #                                     thermal status, CPU temperatures, core
 #                                     clocks, GPU clock and GPU busy percent
@@ -178,6 +181,11 @@ cmd_config_guard() {
     echo "no per-game config for $title_id"
 }
 
+cmd_hold() {
+    local x="$1" y="$2" ms="${3:-300}"
+    adb shell input swipe "$x" "$y" "$x" "$y" "$ms"
+}
+
 cmd_keys() {
     local key
     for key in "$@"; do
@@ -293,6 +301,10 @@ case "$command" in
     keys)
         need_args 1 "$@"
         cmd_keys "$@"
+        ;;
+    hold)
+        need_args 2 "$@"
+        cmd_hold "$@"
         ;;
     thermal)
         need_args 1 "$@"

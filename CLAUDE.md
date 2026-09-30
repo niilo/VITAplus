@@ -85,6 +85,17 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
 - `tools/android/device.sh` runs the test loop on an Android device through
   adb: install, launch, config changes, logs, thermal data. Run it with
   `help` for the commands.
+  `device.sh hold <x> <y>` holds a touch for 300 ms. The games take that, but
+  not a plain tap or an adb key event.
+- `tools/android/uncharted_scene.sh <package> <label>` starts Uncharted:
+  Golden Abyss, loads the saved chapter and samples the FPS counter into one
+  picture (`tools/android/fps_sample.py`). Use it to compare a build, a Vulkan
+  driver or a setting in the same scene. Needs an unlocked device. Results go
+  to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` first: with the
+  stock Qualcomm driver the scene runs at 7 FPS (2x) and with the Turnip
+  driver at 30 FPS.
+- Test the Python tools with `python3 tools/android/test_fps_sample.py` and
+  `python3 tools/android/test_perf_summary.py`.
 - A container build cannot run the emulator with a GPU. Use a native macOS
   build (below) to run games.
 
