@@ -1,6 +1,6 @@
 # 01: Show the name VITA+ in the launcher and in the app, keep every path
 
-Status: claimed
+Status: resolved
 Type: task
 Label: ready-for-agent
 
@@ -77,6 +77,14 @@ Device checks (release APK, installed over the current app):
 - `pref-path` is the same. The game list (21 games), the 21 save folders and the
   checksums of the save files of `PCSA00029` are identical before and after. The
   app folder holds the same entries.
-- Not done yet (the device screen was locked): look at the launcher label, start
-  a game with a save file, start Vita3K+ beside it. Then set `resolved`.
+- Launcher: the label is "VITA+", next to "Vita3K+" (the Plus app with its old
+  yellow icon). The names look alike, but the icons differ (blue and yellow).
+- The apps list title is "VITA+" (version `v1.1 (1)`), with the same games.
+- A game with a save: Uncharted: Golden Abyss (`PCSA00029`) shows "Continue"
+  with the saved chapter and loads it (checked in several runs after the install).
+- Vita3K+ (`org.vita3kplus.emulator`) starts Uncharted beside the renamed app
+  and reaches the title screen, without a crash.
+
+Open question for the user: "VITA+" and "Vita3K+" are close. The Plus app keeps
+its own label, because this checkout does not build it.
 

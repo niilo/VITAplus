@@ -1,6 +1,6 @@
 # 03: Put the chosen VITA+ icon in the app
 
-Status: claimed
+Status: resolved
 Type: task
 Label: ready-for-agent
 Blocked by: 02 (resolved)
@@ -88,9 +88,22 @@ manifest entry changes.
   because an adaptive icon resource cannot be a small icon.
 - No monochrome layer (Android 13 themed icons): not added.
 
-Checked so far: the files render correctly on the navy background with circle,
-rounded square and square masks (a preview in the scratchpad), and the build
-and the in-place install pass. Not done yet (the device screen was locked):
-look at the icon in the launcher, the splash screen, the welcome screen, the
-apps list and a notification (start a content install). Then set `resolved`.
+Checked: the files render correctly on the navy background with circle,
+rounded square and square masks (a preview), the build and the in-place install
+pass, and on the device:
+
+- The launcher shows the new blue icon on navy (round mask) with the label
+  "VITA+".
+- The splash screen shows the new picture (caught while it faded in).
+
+Not checked on the device, because the screen is not easy to reach:
+
+- The notification small icon (`ic_stat_vita`). It shows while content installs.
+  Start an install and look at the status bar. The silhouette was checked in a
+  preview only.
+- The welcome screen (only shown at the first setup), the apps list icon (in the
+  about dialog, if it is shown there) and the documents provider roots. They use
+  `ic_launcher_plus`, which is now the new picture.
+- The themed (monochrome) icon of Android 13: there is no monochrome layer, so
+  a themed launcher may show the normal icon or a generic shape.
 
