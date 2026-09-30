@@ -25,3 +25,12 @@ Our commits since upstream bbd5c362, in groups:
 | NGS envelope and compressor (b258b9de) | Keep the Plus versions; port only dsp.h/dsp.cpp and tests |
 | Adreno chain (682bd5e3 to 76870af3, 53fc38db, a778c289) | Separate ticket: measure first |
 | Other (a32b6aed GL hashless cache, 96d8d71d debug key) | Check if Plus has them |
+
+## Found after the move
+
+- In-game photos in Uncharted were green, then black, then had red and
+  blue swapped. Fixed on `plus/jpeg-csc-format` (merged): the CSC flag is
+  in the context format, format 4 means the bytes R, G, B, A, and the photo
+  needs `memory-mapping: page-table` (with double-buffer the game reads an
+  empty buffer). The first photo after a start is still black.
+- A black box over Drake's head on Turnip: issue 08.
