@@ -6,11 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This checkout is `niilo/Vita3K` (`origin`). Since 2026-09-29 the code base
 is Vita3K-Plus (nckstwrt/Vita3K-Plus, read-only remote `plus`, branch
-`plus/all-enhancements`), with our own work on top. The branch is
-`plus-master` until it replaces `master`. The reason and the plan are in
-`.scratch/plus-base/`. The old code base (upstream Vita3K with picked Plus
-commits) is `master` now, later `pre-plus-master`. `upstream` is
-`Vita3K/Vita3K`.
+`plus/all-enhancements`), with our own work on top, on `master`. The reason
+and the plan are in `.scratch/plus-base/`. The old code base (upstream
+Vita3K with picked Plus commits) is the branch `pre-plus-master`.
+`upstream` is `Vita3K/Vita3K`.
 
 Plus does not commit `vita3k/util/include/util/fork_build.h`. The build
 generates a default one (`vita3k/util/CMakeLists.txt`).
