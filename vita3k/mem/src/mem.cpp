@@ -1209,6 +1209,25 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
     crash_lr = static_cast<uintptr_t>(context->uc_mcontext->__ss.__lr);
 #endif
 
+#if defined(__aarch64__) && defined(__ANDROID__)
+    // With pointer authentication the saved lr and the return addresses on the stack carry a
+    // signature in their upper bits. Strip it, or the address cannot be matched to a module.
+    // hint #7 is xpaclri. It works on x30 only and is a no-op without pointer authentication.
+    auto strip_pac = [](uint64_t value) -> uint64_t {
+        uint64_t stripped;
+        asm volatile("mov x16, x30\n\t"
+                     "mov x30, %1\n\t"
+                     "hint #7\n\t"
+                     "mov %0, x30\n\t"
+                     "mov x30, x16"
+            : "=&r"(stripped)
+            : "r"(value)
+            : "x16", "x30");
+        return stripped;
+    };
+    crash_lr = static_cast<uintptr_t>(strip_pac(crash_lr));
+#endif
+
     auto describe = [](uintptr_t addr) -> std::string {
         if (addr == 0)
             return "null";
@@ -1223,6 +1242,21 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
 
     LOG_CRITICAL("[CRASH] fatal signal {} (si_code {}) at address 0x{:X} - pc {} - lr {} - flushing log and aborting",
         sig, info->si_code, reinterpret_cast<uintptr_t>(info->si_addr), describe(crash_pc), describe(crash_lr));
+#if defined(__aarch64__) && defined(__ANDROID__)
+    {
+        // Walk the frame pointer chain. It does not use the unwinder, which can fault on a damaged stack.
+        const uintptr_t sp = static_cast<uintptr_t>(context->uc_mcontext.sp);
+        uintptr_t fp = static_cast<uintptr_t>(context->uc_mcontext.regs[29]);
+        for (int i = 0; i < 16 && fp != 0 && (fp & 0xF) == 0 && fp >= sp && fp - sp < (8u << 20); i++) {
+            const uint64_t *frame = reinterpret_cast<const uint64_t *>(fp);
+            const uintptr_t next_fp = static_cast<uintptr_t>(frame[0]);
+            LOG_CRITICAL("[CRASH] fp frame #{:02}: {}", i, describe(static_cast<uintptr_t>(strip_pac(frame[1]))));
+            if (next_fp <= fp)
+                break;
+            fp = next_fp;
+        }
+    }
+#endif
 #ifndef _WIN32
     {
         struct Bt {
