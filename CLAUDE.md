@@ -2,6 +2,25 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Writing standard
+
+Every piece of English written for this project follows these rules. This
+includes this file, `README.md`, commit messages, code comments, SQLite
+entries, reports, UI strings, and replies to the user.
+
+- Use literal, plain, direct language.
+- Do not use metaphors, similes, analogies, or idioms. Examples of banned
+  wording: "journey", "tapestry", "navigating", "beacon", "dive in",
+  "landscape", "footgun", "bite", "chase", "going in circles", "under the
+  hood".
+- Do not use AI buzzwords, hype words, or decorative adjectives. State facts
+  and concepts exactly as they are.
+- Keep sentences short. Put one idea in each sentence. Order sentences
+  logically.
+- Prefer clarity and precision over style.
+- When you edit existing text that breaks these rules, rewrite it so that it
+  complies.
+
 ## What this repository is
 
 This checkout is `niilo/Vita3K` (`origin`). Since 2026-09-29 the code base
@@ -25,11 +44,6 @@ The Vulkan validation layer is off by default in Plus (`config.h:144`). The
 APK still carries it (`android/prebuilt/`, packaged through `jniLibs`).
 Check for "Enabling vulkan validation layers" in `vita3k.log`. Measure
 speed with release APKs.
-
-The parent file `../CLAUDE.md` describes a different fork (Vita3K Thor). Its
-writing standard applies here. Its tools (`tools/mcp_server.py`,
-`tools/debug_knowledge.py`, `reports/debug_knowledge.sqlite`, `.agents/skills/`)
-do not exist in this checkout.
 
 `AGENTS.md` points to this file and holds no rules of its own.
 `docs/agents/` configures the engineering skills: issues are Markdown files

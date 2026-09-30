@@ -107,8 +107,7 @@ Every experiment uses this protocol. Record the results under the ticket's
   other devices.
 - Build both targets before a commit: `container/vita3k.sh build` and
   `container/vita3k.sh android release`.
-- Follow the writing standard in `/Users/niilo.ursin/src/CLAUDE.md` for all
-  text.
+- Follow the writing standard in `CLAUDE.md` for all text.
 - Users provide their own legally dumped games. Do not add game content to
   the repository.
 
@@ -117,5 +116,5 @@ Every experiment uses this protocol. Record the results under the ticket's
 - Other Android devices, except as a regression check.
 - Game-specific rendering bugs, unless a benchmark title cannot be measured
   without the fix.
-- Rules from the parent `CLAUDE.md` about the AYN Thor. Results from the
-  Thor are not proof for the Pocket S: the GPU ID and driver differ.
+- Rules and results for the AYN Thor. Results from the Thor are not proof
+  for the Pocket S: the GPU ID and driver differ.
