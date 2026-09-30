@@ -134,6 +134,9 @@ bool init(MemState &state, const bool use_page_table) {
         state.page_table = PageTable(new PagePtr[TOTAL_MEM_SIZE / KiB(4)]);
         // we use an absolute offset (it is faster), so each entry is the same
         std::fill_n(state.page_table.get(), TOTAL_MEM_SIZE / KiB(4), state.memory.get());
+        // Nothing is allocated yet, except the null guard page, so every entry is null.
+        state.jit_page_table = PageTable(new PagePtr[TOTAL_MEM_SIZE / KiB(4)]);
+        std::fill_n(state.jit_page_table.get(), TOTAL_MEM_SIZE / KiB(4), nullptr);
     }
 
     return true;
@@ -260,6 +263,13 @@ static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_c
     page.allocated = 1;
     page.size = page_count;
 
+    if (state.use_page_table) {
+        std::atomic_thread_fence(std::memory_order_release);
+        static_assert(STANDARD_PAGE_SIZE == KiB(4), "a page table entry covers one allocation page");
+        for (uint32_t i = page_num; i < page_num + page_count; i++)
+            state.jit_page_table[i] = state.page_table[i];
+    }
+
     if (PAGE_NAME_TRACKING) {
         state.page_name_map.emplace(page_num, name);
     }
@@ -283,6 +293,10 @@ Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned
         AllocMemPage &align_page = state.alloc_table[align_page_num];
         const uint32_t remnant_front = align_page_num - page_num;
         state.allocator.free(page_num, remnant_front);
+        if (state.use_page_table) {
+            for (uint32_t i = page_num; i < align_page_num; i++)
+                state.jit_page_table[i] = nullptr;
+        }
         page.allocated = 0;
         align_page.allocated = 1;
         align_page.size = page.size - remnant_front;
@@ -694,8 +708,10 @@ void add_external_mapping(MemState &mem, Address addr, uint32_t size, uint8_t *a
     note_transition(mem, recopied_any);
 
     std::atomic_thread_fence(std::memory_order_release);
-    for (uint32_t block = 0; block < size / KiB(4); block++)
+    for (uint32_t block = 0; block < size / KiB(4); block++) {
         mem.page_table[addr / KiB(4) + block] = page_table_entry;
+        mem.jit_page_table[addr / KiB(4) + block] = page_table_entry;
+    }
 
     apply_host_protect(original_address, size, MemPerm::None, mem.host_page_size);
     release_external_shadow_pages(original_address, size, mem.host_page_size);
@@ -776,8 +792,10 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
                 recopied_any |= verify_page(mem, arena + (off - run_begin), addr_ptr + off, "remove_external_mapping", mapping.address + off);
             }
             std::atomic_thread_fence(std::memory_order_release);
-            for (uint32_t off = run_begin; off < run_end; off += KiB(4))
+            for (uint32_t off = run_begin; off < run_end; off += KiB(4)) {
                 mem.page_table[(mapping.address + off) / KiB(4)] = mem.memory.get();
+                mem.jit_page_table[(mapping.address + off) / KiB(4)] = mem.memory.get();
+            }
             run_begin = run_end;
         };
 
@@ -810,6 +828,7 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
             recopied_any |= verify_page(mem, dst, addr_ptr + off, "remove_external_mapping(hand-over)", page_addr);
             std::atomic_thread_fence(std::memory_order_release);
             mem.page_table[index] = heir->base - heir->address;
+            mem.jit_page_table[index] = heir->base - heir->address;
         }
         flush_run();
         note_transition(mem, recopied_any);
@@ -869,6 +888,11 @@ void free(MemState &state, Address address) {
     }
 
     assert(!state.use_page_table || state.page_table[address / KiB(4)] == state.memory.get());
+    if (state.use_page_table && !state.preserve_freed_pages) {
+        // Unpublish the pages before they lose their host protection below.
+        for (uint32_t i = page_num; i < page_num + page.size; i++)
+            state.jit_page_table[i] = nullptr;
+    }
     const Address region_start = page_num * STANDARD_PAGE_SIZE;
     const Address region_end = region_start + page.size * STANDARD_PAGE_SIZE;
 
@@ -952,6 +976,7 @@ void deinit_mem(MemState &state) {
     state.allocator.reset();
     state.page_name_map.clear();
     state.page_table.reset();
+    state.jit_page_table.reset();
     state.external_mapping.clear();
     state.use_page_table = false;
     state.host_page_size = 0;

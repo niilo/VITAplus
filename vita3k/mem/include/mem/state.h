@@ -79,6 +79,10 @@ struct MemState {
 
     bool use_page_table = false;
     PageTable page_table;
+    // The table that JIT code uses. It equals page_table, except that the entry of a page that is not
+    // allocated is null. JIT code then calls the memory callbacks for that page, which refuse the access.
+    // With the normal entry the access faults inside JIT code, where Dynarmic has no recovery entry.
+    PageTable jit_page_table;
     std::map<uint64_t, MemExternalMapping, std::greater<>> external_mapping;
     mutable std::mutex external_mapping_mutex;
     mutable std::shared_mutex external_transition_mutex;

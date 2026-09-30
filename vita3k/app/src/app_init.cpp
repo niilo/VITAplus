@@ -17,6 +17,10 @@
 
 #include <app/functions.h>
 
+#include <cstdio>
+#ifdef __ANDROID__
+#include <unistd.h>
+#endif
 #include <exception>
 
 #include <audio/state.h>
@@ -416,6 +420,18 @@ void init_paths(Root &root_paths) {
 }
 
 bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
+#ifdef __ANDROID__
+    // Android discards stdout and stderr. Libraries such as Dynarmic print fault details there,
+    // so keep the text in a file next to vita3k.log.
+    const std::string stdio_log = (root_paths.get_log_path() / "stdio.log").string();
+    if (std::freopen(stdio_log.c_str(), "w", stdout)) {
+        std::setvbuf(stdout, nullptr, _IOLBF, 0);
+        // Share the open file with stdout. Two separate opens would write at separate positions.
+        dup2(fileno(stdout), fileno(stderr));
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+#endif
+
     // Log the escaped exception's message before dying instead of a bare std::terminate().
     std::set_terminate([]() {
         if (auto exc = std::current_exception()) {
@@ -430,6 +446,10 @@ bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
             LOG_CRITICAL("std::terminate called without an active exception");
         }
         logging::flush();
+        // Dynarmic reports a fault in JIT code with fmt::print before it calls std::terminate.
+        // The text stays in the stdio buffer unless it is flushed here.
+        std::fflush(stdout);
+        std::fflush(stderr);
         std::abort();
     });
 

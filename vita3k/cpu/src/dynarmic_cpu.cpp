@@ -644,7 +644,7 @@ std::unique_ptr<Dynarmic::A32::Jit> DynarmicCPU::make_jit() {
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
     config.callbacks = cb.get();
     if (parent->mem->use_page_table) {
-        config.page_table = (log_mem || !cpu_opt) ? nullptr : reinterpret_cast<decltype(config.page_table)>(parent->mem->page_table.get());
+        config.page_table = (log_mem || !cpu_opt) ? nullptr : reinterpret_cast<decltype(config.page_table)>(parent->mem->jit_page_table.get());
         config.absolute_offset_page_table = true;
         // the fast path reads through the first page only (so the page straddling accesses must use the callbacks)
         config.detect_misaligned_access_via_page_table = 16 | 32 | 64;
