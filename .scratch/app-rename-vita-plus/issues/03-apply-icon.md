@@ -3,7 +3,7 @@
 Status: open
 Type: task
 Label: ready-for-agent
-Blocked by: 02
+Blocked by: 02 (resolved)
 
 ## Goal
 
@@ -26,12 +26,14 @@ manifest entry changes.
 
 ## Steps
 
-0. If the choice is from set B (a PNG drawing without layers): use the PNG as
-   the foreground, scaled to about 72 percent of the 108 dp canvas so that it
-   stays in the safe zone, and use a solid color as the background (default
-   `#0A1633`, the navy of the body, or `#FFFFFF` for B3). Render the foreground
-   at the five densities in step 1. Do not cut the PNG into layers.
-1. (Set A) Split the chosen SVG into `ic_launcher_background` and
+0. The user chose B3 (issue 02). Use `icons/set-b/ps-blue-3-ice-screen.png`
+   (512 x 512, transparent) as the foreground, scaled to about 72 percent of the
+   108 dp canvas so that it stays in the safe zone. The background is the solid
+   color `#0A1633` (issue 02 shows why). Render the foreground at the five
+   densities (mdpi 108, hdpi 162, xhdpi 216, xxhdpi 324, xxxhdpi 432 pixels
+   for the full canvas, with the picture at 72 percent inside). Do not cut the
+   PNG into layers. Skip step 1 (it is for set A).
+1. (Set A only) Split the chosen SVG into `ic_launcher_background` and
    `ic_launcher_foreground`. The SVG has the groups `background` and
    `foreground`. Make two SVG files (one group each), render each to a 432 x 432
    PNG (108 dp at xxxhdpi) and scale them down for the other densities

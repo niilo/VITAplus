@@ -1,8 +1,8 @@
 # 02: Choose the icon for VITA+
 
-Status: open
+Status: resolved
 Type: grilling
-Label: ready-for-human
+Label: ready-for-agent
 
 ## Question
 
@@ -58,6 +58,14 @@ the old handheld drawings.
 
 ## Answer
 
-(Fill in: the name, and any change, for example "B2, with a cyan rim".)
+The user chose **B3 (ice screen)** on 2026-09-30, without changes:
+`icons/set-b/ps-blue-3-ice-screen.png`. Ice-white screen (`#CFE8FF`), light blue
+rim, navy body (`#001A4D`), PlayStation blue plus (`#0070D1`).
+
+Background for the adaptive icon: solid navy `#0A1633`. I rendered B3 on navy,
+a PlayStation blue gradient, a dark gradient and white
+(`icons/set-b/b3-backgrounds.png`, circle and rounded square masks, and 48 px).
+Navy and the dark gradient show the light rim best. The blue gradient makes the
+blue body blend into the background, and on white the rim fades. Use navy.
 
 ## Comments
