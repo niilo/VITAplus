@@ -1,4 +1,4 @@
-# 05: Jak and Daxter Collection stays on a black screen after the intro video starts
+# 05: Jak and Daxter Collection: the start menu is drawn black (it reacts to input)
 
 Status: open
 Type: task
@@ -101,3 +101,49 @@ and if the presented image is the same surface that the game rendered to.
 Also check the UBC texture decode for these textures (the texture cache and
 `vita3k/renderer/src/texture/`). Try the Turnip driver versus the stock
 driver (the box bug in issue 08 depends on the driver).
+
+2026-09-30, test by the user on the Pocket S with the built-in controller
+(release APK with the fixes up to `901695f7`). This changes the picture:
+
+**The black screen is the start menu of the collection. It is not a hang.**
+
+- Log, first session: `Jak Collection main...`, `Starting main loop...`,
+  `MBB initVideo load`, then the video player starts (looping menu background,
+  already seen in the third look above) and `StartMenuMusic()` plays the menu
+  music. The menu runs and waits for input.
+- The user pressed X. The menu took it: 39 seconds later the app loads
+  `app0:Jak1.self` (`Main executable Jak1_retail_psp2 (Jak1.self) loaded`) and
+  "Game started" appears a second time in the same log. So the collection
+  starts Jak 1 by loading a second executable inside the same app.
+- So the menu logic, the input and the audio work. Only the drawing of the
+  menu is black: the looping video background and the menu items are not
+  visible. This matches the third look: the game draws textures (UBC and
+  U8U8U8U8, 960x544 and UI sizes), and the screen stays black.
+- My earlier tests pressed Start and A through adb, which did nothing. That
+  did not mean that the game hung. The menu wants X.
+- Automation: in the config, cross is the keyboard key `KeyX` and start is
+  `Enter`. `adb shell input keyevent KEYCODE_X` did not start Jak 1 in one try
+  (45 seconds after the launch, then 25 seconds wait). `KEYCODE_BUTTON_A`,
+  `_X`, `_B`, `_START`, `KEYCODE_DPAD_CENTER` and `KEYCODE_ENTER`, also with
+  `input gamepad keyevent`, did not start it either. A way to send a cross
+  press to the app is needed for device tests. Try a longer key press
+  (`input keyevent --longpress` or `input swipe` as a touch), the overlay
+  buttons of the app (touch at their screen position), or a key binding
+  that adb can reach.
+
+Because the menu and Jak 1 both draw with the same renderer, issue 07 covers
+the in-game picture. The two issues may have one cause.
+
+Revised plan for this issue:
+
+1. Get a reliable input route for device tests (see above).
+2. Capture a frame of the menu (RenderDoc or AGI) and look at the last draws:
+   target, shader, blend state, textures, and their output.
+3. Set `log-active-shaders: true` and read the fragment shaders of the menu
+   draws (the folder `shaderlog` on the device). Find out if their output is
+   zero.
+4. Compare with the texture export (`export-textures: true`) to see if the
+   menu textures decode to real images.
+5. If it is the shader or the blend, fix it in `vita3k/shader/`. If it is the
+   texture, fix it in `vita3k/renderer/src/texture/`.
+
