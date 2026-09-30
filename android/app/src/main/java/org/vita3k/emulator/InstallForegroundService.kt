@@ -278,7 +278,7 @@ class InstallForegroundService : Service() {
 
     private fun buildNotification(status: String) =
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_vita)
             .setContentTitle(getString(R.string.install_progress_title))
             .setContentText(status)
             .setOngoing(true)

@@ -1,6 +1,6 @@
 # 01: Show the name VITA+ in the launcher and in the app, keep every path
 
-Status: open
+Status: claimed
 Type: task
 Label: ready-for-agent
 
@@ -64,3 +64,19 @@ the Vulkan application name, and the default user name.
    gets another label (this checkout does not build that app).
 
 ## Comments
+
+2026-09-30: Done in code (`strings.xml`: `app_name`, `apps_list_app_title`,
+`initial_setup_welcome_title` are "VITA+"). Text about the emulator project is
+unchanged. Nothing else changed: no identifier, path or setting.
+
+Device checks (release APK, installed over the current app):
+
+- `adb install -r`: `Success` without an uninstall. `firstInstallTime` stayed
+  2026-09-28, so it was an update. Both packages are still there
+  (`org.vita3k.emulator`, `org.vita3kplus.emulator`).
+- `pref-path` is the same. The game list (21 games), the 21 save folders and the
+  checksums of the save files of `PCSA00029` are identical before and after. The
+  app folder holds the same entries.
+- Not done yet (the device screen was locked): look at the launcher label, start
+  a game with a save file, start Vita3K+ beside it. Then set `resolved`.
+

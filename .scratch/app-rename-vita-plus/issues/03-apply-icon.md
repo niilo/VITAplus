@@ -1,6 +1,6 @@
 # 03: Put the chosen VITA+ icon in the app
 
-Status: open
+Status: claimed
 Type: task
 Label: ready-for-agent
 Blocked by: 02 (resolved)
@@ -71,3 +71,26 @@ manifest entry changes.
    warning.
 
 ## Comments
+
+2026-09-30: Done in code with B3 and the navy background.
+`icons/set-b/make_android_icons.py` writes the PNG files from
+`ps-blue-3-ice-screen.png`:
+
+- `mipmap-<density>/ic_launcher_foreground.png` (108 dp canvas, picture at
+  72 percent).
+- `mipmap-anydpi-v26/ic_launcher.xml` (adaptive icon), and the color
+  `ic_launcher_background` (`#0A1633`) in `values/colors.xml`.
+- `mipmap/ic_launcher.png` and `mipmap/ic_launcher_plus.png`: the picture itself
+  (512 x 512). `ic_launcher_plus` is used by the splash screen, the welcome
+  screen, the apps list and the documents provider roots.
+- New `drawable-<density>/ic_stat_vita.png`: a white silhouette with the plus cut
+  out. `InstallForegroundService.kt` uses it as the notification small icon,
+  because an adaptive icon resource cannot be a small icon.
+- No monochrome layer (Android 13 themed icons): not added.
+
+Checked so far: the files render correctly on the navy background with circle,
+rounded square and square masks (a preview in the scratchpad), and the build
+and the in-place install pass. Not done yet (the device screen was locked):
+look at the icon in the launcher, the splash screen, the welcome screen, the
+apps list and a notification (start a content install). Then set `resolved`.
+
