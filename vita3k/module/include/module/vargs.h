@@ -49,6 +49,9 @@ public:
 
             return read<T>(cpu, currentLayout, mem);
         } else {
+            // The ARM ABI aligns 8-byte values in a va_list to 8 bytes.
+            if constexpr (sizeof(T) == 8)
+                currentVaList = (currentVaList + 7) & ~Address(7);
             const auto out = *Ptr<T>(currentVaList).get(mem);
             currentVaList += sizeof(T);
             return out;
