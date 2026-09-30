@@ -49,6 +49,10 @@ constexpr MemPerm most_restrictive_perm(MemPerm a, MemPerm b) {
 }
 
 bool init(MemState &state, const bool use_page_table);
+
+// Call it after the first JIT is made. In page-table mode it makes the fault handler of the emulator
+// run before the handler that Dynarmic installs.
+void prioritize_fault_handler(MemState &state);
 void deinit_mem(MemState &state);
 Address alloc(MemState &state, uint32_t size, const char *name, Address start_addr = user_main_memory_start);
 Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned int alignment, Address start_addr = user_main_memory_start);

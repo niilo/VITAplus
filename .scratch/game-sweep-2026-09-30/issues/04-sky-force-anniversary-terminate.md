@@ -1,6 +1,6 @@
-# 04: Sky Force Anniversary aborts in std::terminate while it loads level0
+# 04: Sky Force Anniversary aborts while it loads level0 (JIT fault on a protected page)
 
-Status: open
+Status: resolved
 Type: task
 Label: ready-for-agent
 
@@ -48,3 +48,34 @@ Opening file: app0:/Media/level0 flags=0x1 -> fd 110
    if this is a regression.
 
 ## Comments
+
+2026-09-30: Fixed. The cause was not the missing files or
+`sceKernelWaitExceptionForMono`.
+
+`stdio.log` (see issue 03) showed two faults:
+
+1. "Unhandled SIGSEGV at pc ..." in host code. Symbolicated, it is
+   `VKSurfaceCache::perform_post_surface_sync` ->
+   `swizzle_text_T` (`vita3k/renderer/src/vulkan/surface_cache.cpp:2719`).
+   The renderer thread writes surface data into guest memory that is
+   protected. Our handler recovers from this.
+2. "dynarmic: Segfault happened within JITted code ... wasn't at a fastmem
+   patch location". The JIT code stored (`str w21, [x16, x19]`) to an
+   external mapping (fault address `0x6D34CA0000`, SEGV_ACCERR) that the
+   emulator had write protected. Our handler can recover from this, but
+   Dynarmic's handler runs before it, because Dynarmic installs its SIGSEGV
+   handler with the first JIT, after ours. It finds the JIT block, finds no
+   fastmem patch entry, and calls `std::terminate`.
+
+Fix: `prioritize_fault_handler` (`vita3k/mem/src/mem.cpp`, called from the
+`DynarmicCPU` constructor after the first JIT is made, in page-table mode only)
+installs our handler again, so that it runs first. What it cannot handle goes
+to Dynarmic's handler, which is saved. If Dynarmic's handler recovered (the
+program counter changed), the signal handler returns. Otherwise the crash log
+is written as before. The log line "The SIGSEGV handler runs before the
+handler of Dynarmic" shows that it is active.
+
+Device test (release APK): the game reaches its main menu at 56 FPS. A dialog
+"An error occurred. Error code: 0x0" shows (probably the PSN sign-in). The
+dialog is not a crash.
+

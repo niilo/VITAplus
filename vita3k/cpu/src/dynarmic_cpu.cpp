@@ -674,6 +674,8 @@ DynarmicCPU::DynarmicCPU(CPUState *state, std::size_t processor_id, bool cpu_opt
     , core_id(processor_id)
     , cpu_opt(cpu_opt) {
     jit = make_jit();
+    // Dynarmic installed its fault handler with the first JIT
+    prioritize_fault_handler(*parent->mem);
 }
 
 DynarmicCPU::~DynarmicCPU() = default;

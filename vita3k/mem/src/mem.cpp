@@ -1098,6 +1098,10 @@ static void register_access_violation_handler(const AccessViolationHandler &hand
     }
 }
 
+void prioritize_fault_handler(MemState &) {
+    // The vectored exception handler already runs first.
+}
+
 #else
 
 static thread_local sigjmp_buf t_fault_probe_jmp;
@@ -1133,6 +1137,33 @@ static uintptr_t extract_fault_lr(ucontext_t *context) {
     (void)context;
     return 0;
 #endif
+}
+
+static struct sigaction g_dynarmic_segv;
+static std::atomic<bool> g_forward_to_dynarmic{ false };
+
+static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept;
+
+void prioritize_fault_handler(MemState &state) {
+    // Dynarmic installs its SIGSEGV handler when the first JIT is made, after ours. In page-table mode its
+    // handler sees every fault in JIT code first. A fault on a page that the emulator protects (for example
+    // a write to an external mapping) is not at a fastmem patch location, so Dynarmic terminates the process.
+    // Install our handler again, so that it runs first, and forward what it cannot handle to Dynarmic's.
+    if (!state.use_page_table || g_forward_to_dynarmic.load(std::memory_order_acquire))
+        return;
+    struct sigaction current;
+    if (sigaction(SIGSEGV, nullptr, &current) != 0 || current.sa_sigaction == signal_handler)
+        return;
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_sigaction = signal_handler;
+    if (sigaction(SIGSEGV, &sa, &g_dynarmic_segv) != 0) {
+        LOG_CRITICAL("Failed to take the priority of the SIGSEGV handler");
+        return;
+    }
+    g_forward_to_dynarmic.store(true, std::memory_order_release);
+    LOG_INFO("The SIGSEGV handler runs before the handler of Dynarmic");
 }
 
 static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
@@ -1209,6 +1240,15 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
                 return;
             }
         }
+    }
+
+    // Dynarmic recovers from faults at its fastmem patch locations. See prioritize_fault_handler.
+    if (sig == SIGSEGV && g_forward_to_dynarmic.load(std::memory_order_acquire)
+        && (g_dynarmic_segv.sa_flags & SA_SIGINFO) && g_dynarmic_segv.sa_sigaction != signal_handler) {
+        const uintptr_t pc_before = extract_fault_pc(context);
+        g_dynarmic_segv.sa_sigaction(sig, info, uct);
+        if (extract_fault_pc(context) != pc_before)
+            return; // it recovered: the faulting instruction is skipped or redirected
     }
 
     // Genuine crash so record it in our log and flush as users can rarely logcat.
