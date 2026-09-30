@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VITA+ candidate 5: pixel art V+</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg)"/>
+  </g>
+  <g id="foreground">
+    <rect x="113" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="113" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="333" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="234" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="234" width="20" height="20" fill="#FACC15"/>
+  </g>
+</svg>

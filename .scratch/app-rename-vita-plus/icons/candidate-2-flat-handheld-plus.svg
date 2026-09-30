@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VITA+ candidate 2: flat handheld with a plus</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B132B"/><stop offset="1" stop-color="#1C2541"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg)"/>
+  </g>
+  <g id="foreground">
+    <rect x="112" y="186" width="288" height="140" rx="56" fill="#3A506B" stroke="#5BC0BE" stroke-width="7"/>
+    <rect x="178" y="200" width="156" height="112" rx="10" fill="#0B132B"/>
+    <g fill="#FFD166"><rect x="246" y="222" width="20" height="68" rx="6"/><rect x="222" y="246" width="68" height="20" rx="6"/></g>
+    <circle cx="146" cy="256" r="17" fill="#5BC0BE"/>
+    <g fill="#5BC0BE"><circle cx="368" cy="240" r="9"/><circle cx="384" cy="256" r="9"/><circle cx="368" cy="272" r="9"/><circle cx="352" cy="256" r="9"/></g>
+  </g>
+</svg>

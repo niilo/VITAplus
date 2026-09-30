@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VITA+ candidate 1: V+ monogram</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A0CA3"/><stop offset="1" stop-color="#4361EE"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="156,158 224,158 256,268 288,158 356,158 290,362 222,362" fill="#FFFFFF"/>
+    <g fill="#FFC300"><rect x="316" y="132" width="30" height="92" rx="8"/><rect x="285" y="163" width="92" height="30" rx="8"/></g>
+  </g>
+</svg>

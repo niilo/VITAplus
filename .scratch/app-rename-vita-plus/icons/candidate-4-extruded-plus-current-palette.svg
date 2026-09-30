@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VITA+ candidate 4: extruded plus in the current palette</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6A1B5E"/><stop offset="1" stop-color="#3B0A3A"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg)"/>
+  </g>
+  <g id="foreground">
+    <g fill="#C2185B" transform="translate(0,26)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#EF8A00" transform="translate(0,14)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#F7C600"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+  </g>
+</svg>

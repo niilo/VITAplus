@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>VITA+ candidate 3: face-button shapes forming a plus</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F0C29"/><stop offset="1" stop-color="#302B63"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="256.0,108.0 285.6,159.0 226.4,159.0" fill="none" stroke="#3EE0A8" stroke-width="15" stroke-linejoin="round"/>
+    <circle cx="370" cy="256" r="31" fill="none" stroke="#FF5A5F" stroke-width="15"/>
+    <g stroke="#5AA9FF" stroke-width="15" stroke-linecap="round"><line x1="226" y1="340" x2="286" y2="400"/><line x1="286" y1="340" x2="226" y2="400"/></g>
+    <rect x="114" y="226" width="60" height="60" rx="4" fill="none" stroke="#FF9BD2" stroke-width="15"/>
+    <circle cx="256" cy="256" r="10" fill="#FFFFFF"/>
+  </g>
+</svg>

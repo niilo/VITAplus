@@ -1,0 +1,435 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1800 1800" width="1800" height="1800"><rect width="1800" height="1800" fill="#ECEFF4"/>
+<text x="900" y="62" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="700" text-anchor="middle" fill="#2E3440">VITA+ icon candidates</text>
+<clipPath id="sq0"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath><clipPath id="ci0"><circle cx="256" cy="256" r="256"/></clipPath>
+<clipPath id="sq1"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath><clipPath id="ci1"><circle cx="256" cy="256" r="256"/></clipPath>
+<clipPath id="sq2"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath><clipPath id="ci2"><circle cx="256" cy="256" r="256"/></clipPath>
+<clipPath id="sq3"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath><clipPath id="ci3"><circle cx="256" cy="256" r="256"/></clipPath>
+<clipPath id="sq4"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath><clipPath id="ci4"><circle cx="256" cy="256" r="256"/></clipPath>
+<g transform="translate(40,130) scale(0.859375)"><g clip-path="url(#sq0)"><defs>
+    <linearGradient id="bg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A0CA3"/><stop offset="1" stop-color="#4361EE"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg0)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="156,158 224,158 256,268 288,158 356,158 290,362 222,362" fill="#FFFFFF"/>
+    <g fill="#FFC300"><rect x="316" y="132" width="30" height="92" rx="8"/><rect x="285" y="163" width="92" height="30" rx="8"/></g>
+  </g>
+</g></g>
+<text x="260" y="116" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" text-anchor="middle" fill="#2E3440">Candidate 1</text>
+<g transform="translate(630,130) scale(0.859375)"><g clip-path="url(#sq1)"><defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B132B"/><stop offset="1" stop-color="#1C2541"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg1)"/>
+  </g>
+  <g id="foreground">
+    <rect x="112" y="186" width="288" height="140" rx="56" fill="#3A506B" stroke="#5BC0BE" stroke-width="7"/>
+    <rect x="178" y="200" width="156" height="112" rx="10" fill="#0B132B"/>
+    <g fill="#FFD166"><rect x="246" y="222" width="20" height="68" rx="6"/><rect x="222" y="246" width="68" height="20" rx="6"/></g>
+    <circle cx="146" cy="256" r="17" fill="#5BC0BE"/>
+    <g fill="#5BC0BE"><circle cx="368" cy="240" r="9"/><circle cx="384" cy="256" r="9"/><circle cx="368" cy="272" r="9"/><circle cx="352" cy="256" r="9"/></g>
+  </g>
+</g></g>
+<text x="850" y="116" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" text-anchor="middle" fill="#2E3440">Candidate 2</text>
+<g transform="translate(1220,130) scale(0.859375)"><g clip-path="url(#sq2)"><defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F0C29"/><stop offset="1" stop-color="#302B63"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg2)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="256.0,108.0 285.6,159.0 226.4,159.0" fill="none" stroke="#3EE0A8" stroke-width="15" stroke-linejoin="round"/>
+    <circle cx="370" cy="256" r="31" fill="none" stroke="#FF5A5F" stroke-width="15"/>
+    <g stroke="#5AA9FF" stroke-width="15" stroke-linecap="round"><line x1="226" y1="340" x2="286" y2="400"/><line x1="286" y1="340" x2="226" y2="400"/></g>
+    <rect x="114" y="226" width="60" height="60" rx="4" fill="none" stroke="#FF9BD2" stroke-width="15"/>
+    <circle cx="256" cy="256" r="10" fill="#FFFFFF"/>
+  </g>
+</g></g>
+<text x="1440" y="116" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" text-anchor="middle" fill="#2E3440">Candidate 3</text>
+<g transform="translate(40,690) scale(0.859375)"><g clip-path="url(#sq3)"><defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6A1B5E"/><stop offset="1" stop-color="#3B0A3A"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg3)"/>
+  </g>
+  <g id="foreground">
+    <g fill="#C2185B" transform="translate(0,26)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#EF8A00" transform="translate(0,14)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#F7C600"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+  </g>
+</g></g>
+<text x="260" y="676" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" text-anchor="middle" fill="#2E3440">Candidate 4</text>
+<g transform="translate(630,690) scale(0.859375)"><g clip-path="url(#sq4)"><defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg4)"/>
+  </g>
+  <g id="foreground">
+    <rect x="113" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="113" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="333" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="234" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="234" width="20" height="20" fill="#FACC15"/>
+  </g>
+</g></g>
+<text x="850" y="676" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" text-anchor="middle" fill="#2E3440">Candidate 5</text>
+<text x="1490" y="674" font-family="Helvetica, Arial, sans-serif" font-size="28" font-weight="700" text-anchor="middle" fill="#2E3440">Circle mask and small sizes</text>
+<g transform="translate(1230,700) scale(0.3515625)"><g clip-path="url(#ci0)"><defs>
+    <linearGradient id="bg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A0CA3"/><stop offset="1" stop-color="#4361EE"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg0)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="156,158 224,158 256,268 288,158 356,158 290,362 222,362" fill="#FFFFFF"/>
+    <g fill="#FFC300"><rect x="316" y="132" width="30" height="92" rx="8"/><rect x="285" y="163" width="92" height="30" rx="8"/></g>
+  </g>
+</g></g>
+<g transform="translate(1420,700) scale(0.3515625)"><g clip-path="url(#ci1)"><defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B132B"/><stop offset="1" stop-color="#1C2541"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg1)"/>
+  </g>
+  <g id="foreground">
+    <rect x="112" y="186" width="288" height="140" rx="56" fill="#3A506B" stroke="#5BC0BE" stroke-width="7"/>
+    <rect x="178" y="200" width="156" height="112" rx="10" fill="#0B132B"/>
+    <g fill="#FFD166"><rect x="246" y="222" width="20" height="68" rx="6"/><rect x="222" y="246" width="68" height="20" rx="6"/></g>
+    <circle cx="146" cy="256" r="17" fill="#5BC0BE"/>
+    <g fill="#5BC0BE"><circle cx="368" cy="240" r="9"/><circle cx="384" cy="256" r="9"/><circle cx="368" cy="272" r="9"/><circle cx="352" cy="256" r="9"/></g>
+  </g>
+</g></g>
+<g transform="translate(1610,700) scale(0.3515625)"><g clip-path="url(#ci2)"><defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F0C29"/><stop offset="1" stop-color="#302B63"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg2)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="256.0,108.0 285.6,159.0 226.4,159.0" fill="none" stroke="#3EE0A8" stroke-width="15" stroke-linejoin="round"/>
+    <circle cx="370" cy="256" r="31" fill="none" stroke="#FF5A5F" stroke-width="15"/>
+    <g stroke="#5AA9FF" stroke-width="15" stroke-linecap="round"><line x1="226" y1="340" x2="286" y2="400"/><line x1="286" y1="340" x2="226" y2="400"/></g>
+    <rect x="114" y="226" width="60" height="60" rx="4" fill="none" stroke="#FF9BD2" stroke-width="15"/>
+    <circle cx="256" cy="256" r="10" fill="#FFFFFF"/>
+  </g>
+</g></g>
+<g transform="translate(1230,890) scale(0.3515625)"><g clip-path="url(#ci3)"><defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6A1B5E"/><stop offset="1" stop-color="#3B0A3A"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg3)"/>
+  </g>
+  <g id="foreground">
+    <g fill="#C2185B" transform="translate(0,26)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#EF8A00" transform="translate(0,14)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#F7C600"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+  </g>
+</g></g>
+<g transform="translate(1420,890) scale(0.3515625)"><g clip-path="url(#ci4)"><defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg4)"/>
+  </g>
+  <g id="foreground">
+    <rect x="113" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="113" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="333" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="234" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="234" width="20" height="20" fill="#FACC15"/>
+  </g>
+</g></g>
+<g transform="translate(1230,1100) scale(0.1875)"><g clip-path="url(#ci0)"><defs>
+    <linearGradient id="bg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A0CA3"/><stop offset="1" stop-color="#4361EE"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg0)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="156,158 224,158 256,268 288,158 356,158 290,362 222,362" fill="#FFFFFF"/>
+    <g fill="#FFC300"><rect x="316" y="132" width="30" height="92" rx="8"/><rect x="285" y="163" width="92" height="30" rx="8"/></g>
+  </g>
+</g></g>
+<g transform="translate(1252,1206) scale(0.09375)"><g clip-path="url(#ci0)"><defs>
+    <linearGradient id="bg0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3A0CA3"/><stop offset="1" stop-color="#4361EE"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg0)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="156,158 224,158 256,268 288,158 356,158 290,362 222,362" fill="#FFFFFF"/>
+    <g fill="#FFC300"><rect x="316" y="132" width="30" height="92" rx="8"/><rect x="285" y="163" width="92" height="30" rx="8"/></g>
+  </g>
+</g></g>
+<g transform="translate(1340,1100) scale(0.1875)"><g clip-path="url(#ci1)"><defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B132B"/><stop offset="1" stop-color="#1C2541"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg1)"/>
+  </g>
+  <g id="foreground">
+    <rect x="112" y="186" width="288" height="140" rx="56" fill="#3A506B" stroke="#5BC0BE" stroke-width="7"/>
+    <rect x="178" y="200" width="156" height="112" rx="10" fill="#0B132B"/>
+    <g fill="#FFD166"><rect x="246" y="222" width="20" height="68" rx="6"/><rect x="222" y="246" width="68" height="20" rx="6"/></g>
+    <circle cx="146" cy="256" r="17" fill="#5BC0BE"/>
+    <g fill="#5BC0BE"><circle cx="368" cy="240" r="9"/><circle cx="384" cy="256" r="9"/><circle cx="368" cy="272" r="9"/><circle cx="352" cy="256" r="9"/></g>
+  </g>
+</g></g>
+<g transform="translate(1362,1206) scale(0.09375)"><g clip-path="url(#ci1)"><defs>
+    <linearGradient id="bg1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0B132B"/><stop offset="1" stop-color="#1C2541"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg1)"/>
+  </g>
+  <g id="foreground">
+    <rect x="112" y="186" width="288" height="140" rx="56" fill="#3A506B" stroke="#5BC0BE" stroke-width="7"/>
+    <rect x="178" y="200" width="156" height="112" rx="10" fill="#0B132B"/>
+    <g fill="#FFD166"><rect x="246" y="222" width="20" height="68" rx="6"/><rect x="222" y="246" width="68" height="20" rx="6"/></g>
+    <circle cx="146" cy="256" r="17" fill="#5BC0BE"/>
+    <g fill="#5BC0BE"><circle cx="368" cy="240" r="9"/><circle cx="384" cy="256" r="9"/><circle cx="368" cy="272" r="9"/><circle cx="352" cy="256" r="9"/></g>
+  </g>
+</g></g>
+<g transform="translate(1450,1100) scale(0.1875)"><g clip-path="url(#ci2)"><defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F0C29"/><stop offset="1" stop-color="#302B63"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg2)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="256.0,108.0 285.6,159.0 226.4,159.0" fill="none" stroke="#3EE0A8" stroke-width="15" stroke-linejoin="round"/>
+    <circle cx="370" cy="256" r="31" fill="none" stroke="#FF5A5F" stroke-width="15"/>
+    <g stroke="#5AA9FF" stroke-width="15" stroke-linecap="round"><line x1="226" y1="340" x2="286" y2="400"/><line x1="286" y1="340" x2="226" y2="400"/></g>
+    <rect x="114" y="226" width="60" height="60" rx="4" fill="none" stroke="#FF9BD2" stroke-width="15"/>
+    <circle cx="256" cy="256" r="10" fill="#FFFFFF"/>
+  </g>
+</g></g>
+<g transform="translate(1472,1206) scale(0.09375)"><g clip-path="url(#ci2)"><defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F0C29"/><stop offset="1" stop-color="#302B63"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg2)"/>
+  </g>
+  <g id="foreground">
+    <polygon points="256.0,108.0 285.6,159.0 226.4,159.0" fill="none" stroke="#3EE0A8" stroke-width="15" stroke-linejoin="round"/>
+    <circle cx="370" cy="256" r="31" fill="none" stroke="#FF5A5F" stroke-width="15"/>
+    <g stroke="#5AA9FF" stroke-width="15" stroke-linecap="round"><line x1="226" y1="340" x2="286" y2="400"/><line x1="286" y1="340" x2="226" y2="400"/></g>
+    <rect x="114" y="226" width="60" height="60" rx="4" fill="none" stroke="#FF9BD2" stroke-width="15"/>
+    <circle cx="256" cy="256" r="10" fill="#FFFFFF"/>
+  </g>
+</g></g>
+<g transform="translate(1560,1100) scale(0.1875)"><g clip-path="url(#ci3)"><defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6A1B5E"/><stop offset="1" stop-color="#3B0A3A"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg3)"/>
+  </g>
+  <g id="foreground">
+    <g fill="#C2185B" transform="translate(0,26)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#EF8A00" transform="translate(0,14)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#F7C600"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+  </g>
+</g></g>
+<g transform="translate(1582,1206) scale(0.09375)"><g clip-path="url(#ci3)"><defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6A1B5E"/><stop offset="1" stop-color="#3B0A3A"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg3)"/>
+  </g>
+  <g id="foreground">
+    <g fill="#C2185B" transform="translate(0,26)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#EF8A00" transform="translate(0,14)"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+    <g fill="#F7C600"><rect x="216" y="116" width="80" height="260" rx="22"/><rect x="126" y="206" width="260" height="80" rx="22"/></g>
+  </g>
+</g></g>
+<g transform="translate(1670,1100) scale(0.1875)"><g clip-path="url(#ci4)"><defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg4)"/>
+  </g>
+  <g id="foreground">
+    <rect x="113" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="113" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="333" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="234" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="234" width="20" height="20" fill="#FACC15"/>
+  </g>
+</g></g>
+<g transform="translate(1692,1206) scale(0.09375)"><g clip-path="url(#ci4)"><defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#1E293B"/></linearGradient>
+  </defs>
+  <!-- Adaptive icon layers: the background fills the square, the foreground stays inside the circle of radius 165 around (256,256). -->
+  <g id="background">
+    <rect width="512" height="512" fill="url(#bg4)"/>
+  </g>
+  <g id="foreground">
+    <rect x="113" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="168" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="113" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="267" y="190" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="212" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="135" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="245" y="234" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="256" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="157" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="223" y="278" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="300" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="179" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="201" y="322" width="20" height="20" fill="#5EEAD4"/>
+    <rect x="333" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="168" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="190" width="20" height="20" fill="#FACC15"/>
+    <rect x="311" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="377" y="212" width="20" height="20" fill="#FACC15"/>
+    <rect x="333" y="234" width="20" height="20" fill="#FACC15"/>
+    <rect x="355" y="234" width="20" height="20" fill="#FACC15"/>
+  </g>
+</g></g>
+<text x="1490" y="1290" font-family="Helvetica, Arial, sans-serif" font-size="22" fill="#4C566A" text-anchor="middle">96 px and 48 px launcher sizes</text>
+</svg>
