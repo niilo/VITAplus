@@ -26,7 +26,12 @@ manifest entry changes.
 
 ## Steps
 
-1. Split the chosen SVG into `ic_launcher_background` and
+0. If the choice is from set B (a PNG drawing without layers): use the PNG as
+   the foreground, scaled to about 72 percent of the 108 dp canvas so that it
+   stays in the safe zone, and use a solid color as the background (default
+   `#0A1633`, the navy of the body, or `#FFFFFF` for B3). Render the foreground
+   at the five densities in step 1. Do not cut the PNG into layers.
+1. (Set A) Split the chosen SVG into `ic_launcher_background` and
    `ic_launcher_foreground`. The SVG has the groups `background` and
    `foreground`. Make two SVG files (one group each), render each to a 432 x 432
    PNG (108 dp at xxxhdpi) and scale them down for the other densities

@@ -46,5 +46,6 @@ current app (`org.vita3k.emulator`) and as Vita3K+ (`org.vita3kplus.emulator`).
 ## Issues
 
 1. `01-rename-launcher-label.md`: the name.
-2. `02-choose-icon.md`: pick one of five candidates (`icons/`).
+2. `02-choose-icon.md`: pick one of ten candidates: set A (`icons/set-a/`, new
+   drawings) or set B (`icons/set-b/`, the current icon in PlayStation blue).
 3. `03-apply-icon.md`: put the chosen icon in the app. Blocked by 02.
