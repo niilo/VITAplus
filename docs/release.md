@@ -63,10 +63,51 @@ tools/release/store-signing-key-in-1password.sh        # or: ... "Vault name"
 
 The script makes one Secure Note item, reads the values back, compares them with
 the local files, and then asks if it may delete the local copy. It prints no
-secret. Without the CLI: add `~/.vita-plus-signing/vita-plus-release.p12` to a
-1Password item as a file, copy the password with
-`pbcopy < ~/.vita-plus-signing/store-password.txt`, paste it into the item, and
-clear the clipboard.
+secret.
+
+### Store the key in 1Password by hand (no CLI)
+
+Do this in the 1Password app. Nothing here prints a secret.
+
+1. `open ~/.vita-plus-signing` opens the folder in Finder (it is a hidden folder,
+   so open it this way).
+2. In 1Password: **New Item > Secure Note**. Title: `VITA+ Android release signing key`.
+3. Drag `vita-plus-release.p12` from Finder into the item (or **Add More > Attach
+   a file**). This is the key store.
+4. Add a **Password** field named `store and key password`. Copy the value without
+   showing it: `pbcopy < ~/.vita-plus-signing/store-password.txt`, paste it into
+   the field, then clear the clipboard at once: `pbcopy < /dev/null`.
+5. Add a text field named `key alias` with the value `vita-plus`.
+6. In the notes: `Release signing key of the VITA+ Android app. PKCS12, RSA 4096.
+   Certificate SHA-256 04:C7:CF:C6:...:38:52:2A. If it is lost, installed apps
+   cannot be updated. See docs/release.md.` Save the item.
+7. Check the copy. Click the copy button of the password field in 1Password, then
+   run both lines and compare the two short hashes (they must be equal):
+
+   ```sh
+   pbpaste | tr -d '\n' | shasum -a 256 | cut -c1-12
+   tr -d '\n' < ~/.vita-plus-signing/store-password.txt | shasum -a 256 | cut -c1-12
+   pbcopy < /dev/null
+   ```
+
+   Then check the key store. In 1Password, save the attachment to `~/Downloads`
+   (the item's attachment menu > **Save as...**) and run
+   `shasum -a 256 ~/.vita-plus-signing/vita-plus-release.p12 ~/Downloads/vita-plus-release.p12`.
+   The two hashes must be equal. Delete the file in `~/Downloads` with `rm -P`.
+8. Only when both checks pass, delete the staging folder:
+   `rm -rP ~/.vita-plus-signing`. (The copy in the project folder `.signing/`
+   stays.)
+
+Restore by hand: open the item, save the attachment, and copy the password. Set the
+GitHub secrets from the saved file:
+
+```sh
+base64 -i vita-plus-release.p12 | tr -d '\n' | gh secret set KEYSTORE -R owner/repo
+pbpaste | tr -d '\n' | gh secret set SIGNING_STORE_PASSWORD -R owner/repo   # password copied from 1Password
+pbpaste | tr -d '\n' | gh secret set SIGNING_KEY_PASSWORD -R owner/repo
+printf '%s' vita-plus | gh secret set SIGNING_KEY_ALIAS -R owner/repo
+pbcopy < /dev/null
+```
 
 ### Restore the key from 1Password
 
