@@ -89,6 +89,26 @@ umask 077; mkdir -p ~/.vita-plus-signing
 op item get "$item" --fields "label=keystore (base64)" --reveal | base64 --decode > ~/.vita-plus-signing/vita-plus-release.p12
 ```
 
+### Keys in the project folder (`.signing/`)
+
+So that local work needs no input, the project folder holds a copy of the keys in
+`.signing/` (git ignores it; mode 700, files mode 600):
+
+| File | What |
+| --- | --- |
+| `.signing/dev/debug.keystore` | the dev key. It is the debug key of the Android container cache volume (`vita3k-android-cache`), which signs the app that is installed on the Pocket S. A copy here survives `container/vita3k.sh clean-cache`. |
+| `.signing/release/vita-plus-release.p12` and `signing.env` | the release key and its passwords. The same key as in the GitHub secrets. |
+
+The repository is public, so these files must never be committed.
+`.gitignore` blocks them, and `tools/release/check-no-signing-keys.sh` fails if a
+key store or a private key is tracked. The workflow `No signing keys` runs it on
+every push and pull request.
+
+The dev key is not the release key. An APK that is signed with one cannot update
+an app that is signed with the other. A device that has a dev-signed app needs one
+uninstall before it takes a release-signed APK (the games and saves stay in the
+`pref-path` folder; the app settings and an installed custom driver are lost).
+
 ### How the secrets are protected
 
 - The key, the passwords and the base64 text were never printed, never put in a

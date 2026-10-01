@@ -1,0 +1,18 @@
+name: No signing keys
+
+# The repository is public. This check fails if a key store or a private key is
+# tracked by git. It is not a build, so it runs on every push and pull request.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: bash tools/release/check-no-signing-keys.sh

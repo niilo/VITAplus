@@ -93,3 +93,5 @@ fastlane/readme.md
 *.p12
 *.keystore
 .vita-plus-signing/
+# Local signing keys of the project (dev key and release key). See docs/release.md.
+.signing/

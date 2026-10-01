@@ -94,6 +94,11 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` first: with the
   stock Qualcomm driver the scene runs at 7 FPS (2x) and with the Turnip
   driver at 30 FPS.
+- `.signing/` holds the local signing keys (a dev key and the release key). Git
+  ignores it and the repository is public. Never print, commit, copy, upload or
+  send a file from it, and never put a password from it in a command line.
+  `tools/release/check-no-signing-keys.sh` checks that no key is tracked (CI runs
+  it on every push). See `docs/release.md`.
 - Test the Python tools with `python3 tools/android/test_fps_sample.py` and
   `python3 tools/android/test_perf_summary.py`.
 - A container build cannot run the emulator with a GPU. Use a native macOS
