@@ -98,7 +98,10 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   ignores it and the repository is public. Never print, commit, copy, upload or
   send a file from it, and never put a password from it in a command line.
   `tools/release/check-no-signing-keys.sh` checks that no key is tracked (CI runs
-  it on every push). See `docs/release.md`.
+  it on every push). `container/vita3k.sh android release` uses the dev key from
+  `.signing/dev/` by itself, so an installed APK is always updatable without
+  input. `VITA_SIGN_WITH_RELEASE_KEY=1` uses the release key. See
+  `docs/release.md`.
 - Test the Python tools with `python3 tools/android/test_fps_sample.py` and
   `python3 tools/android/test_perf_summary.py`.
 - A container build cannot run the emulator with a GPU. Use a native macOS

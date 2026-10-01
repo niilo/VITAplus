@@ -86,6 +86,8 @@ run_in() {
         # it, each run makes a new debug key, and Android refuses to update
         # an installed APK that has another key.
         args+=(--arch amd64 --rosetta -v "$android_cache_volume:/cache" -e ANDROID_USER_HOME=/cache/android-user)
+        # VITA_SIGN_WITH_RELEASE_KEY=1 signs the release APK with .signing/release/ (see docs/release.md)
+        args+=(-e "VITA_SIGN_WITH_RELEASE_KEY=${VITA_SIGN_WITH_RELEASE_KEY:-0}")
     else
         ensure_volume "$linux_cache_volume"
         args+=(-v "$linux_cache_volume:/ccache")

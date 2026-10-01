@@ -99,6 +99,26 @@ So that local work needs no input, the project folder holds a copy of the keys i
 | `.signing/dev/debug.keystore` | the dev key. It is the debug key of the Android container cache volume (`vita3k-android-cache`), which signs the app that is installed on the Pocket S. A copy here survives `container/vita3k.sh clean-cache`. |
 | `.signing/release/vita-plus-release.p12` and `signing.env` | the release key and its passwords. The same key as in the GitHub secrets. |
 
+`container/vita3k.sh android release` signs with the dev key. It copies
+`.signing/dev/debug.keystore` into the container cache at the start of every
+build, so the key never changes, also after `clean-cache`. On the very first run
+without a project copy, it copies the key of the cache volume into `.signing/dev/`.
+
+To sign a local APK with the release key (the key of the CI releases), use:
+
+```sh
+VITA_SIGN_WITH_RELEASE_KEY=1 container/vita3k.sh android release build/android-apk-releasekey
+```
+
+Do not install that APK over a dev-signed app (see below). Check which key signed an
+APK with `apksigner verify --print-certs <apk>` (it is in the Android container,
+`/opt/android-sdk/build-tools/*/apksigner`). The two certificate SHA-256 digests are:
+
+| Key | SHA-256 of the certificate |
+| --- | --- |
+| dev | `85028da2c7e4321de4bd4215a45773bddcc8f90629bafd6e19ea07cc6d91cac0` |
+| release | `04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a` |
+
 The repository is public, so these files must never be committed.
 `.gitignore` blocks them, and `tools/release/check-no-signing-keys.sh` fails if a
 key store or a private key is tracked. The workflow `No signing keys` runs it on

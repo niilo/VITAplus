@@ -3,8 +3,16 @@
 # `container/vita3k.sh android [reldebug|release] [output dir]`.
 #
 #   reldebug  both ABIs (arm64-v8a, x86_64), debuggable, no R8. Same as CI.
-#   release   arm64-v8a only, R8 shrinks the code. Signed with the Android
-#             debug key unless the SIGNING_* variables are set.
+#   release   arm64-v8a only, R8 shrinks the code. Signed with the dev key,
+#             or with the release key when VITA_SIGN_WITH_RELEASE_KEY=1.
+#
+# Signing keys live in the folder .signing/ of the project. Git ignores it.
+# See docs/release.md.
+#   .signing/dev/debug.keystore      the dev key. It is the source of truth, so
+#                                    `clean-cache` does not change the key and an
+#                                    installed APK can always be updated.
+#   .signing/release/                the release key (vita-plus-release.p12 and
+#                                    signing.env). The same key as in CI.
 #
 # vcpkg dependencies are installed by the CMake configure step (manifest
 # mode) and reused from the binary cache in the cache volume.
@@ -20,6 +28,39 @@ case "$build_type" in
 esac
 
 mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE" "$VCPKG_DOWNLOADS" "$CCACHE_DIR"
+
+# Dev key: the project copy wins. On the first run the key of the cache volume
+# is copied into the project.
+signing_dir=/src/.signing
+dev_key="$signing_dir/dev/debug.keystore"
+volume_key="${ANDROID_USER_HOME:?ANDROID_USER_HOME is not set}/debug.keystore"
+mkdir -p "$ANDROID_USER_HOME" "$signing_dir/dev"
+chmod 700 "$signing_dir" "$signing_dir/dev"
+if [[ -s "$dev_key" ]]; then
+    cp -f "$dev_key" "$volume_key"
+elif [[ -s "$volume_key" ]]; then
+    cp "$volume_key" "$dev_key"
+    chmod 600 "$dev_key"
+    echo "build-android.sh: copied the dev key of the cache volume to .signing/dev/"
+fi
+
+# Release key: only when asked. Otherwise the SIGNING_* variables stay unset, so
+# the build uses the dev key.
+unset SIGNING_STORE_PATH SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD
+if [[ "${VITA_SIGN_WITH_RELEASE_KEY:-0}" == 1 ]]; then
+    [[ "$build_type" == release ]] || { echo "build-android.sh: the release key is for the release build type only" >&2; exit 1; }
+    release_key="$signing_dir/release/vita-plus-release.p12"
+    [[ -s "$release_key" && -s "$signing_dir/release/signing.env" ]] || {
+        echo "build-android.sh: no release key in .signing/release/. See docs/release.md." >&2
+        exit 1
+    }
+    set -a
+    # shellcheck disable=SC1091
+    . "$signing_dir/release/signing.env"
+    set +a
+    export SIGNING_STORE_PATH="$release_key"
+    echo "build-android.sh: signing with the release key"
+fi
 
 # The root CMakeLists.txt uses ccache when it finds it. The ccache folder
 # is in the cache volume, so a clean build reuses earlier compiles.
