@@ -28,35 +28,134 @@ Run the workflow again for the same tag to replace the files of the release.
 
 CodeQL (`.github/workflows/codeql-analysis.yml`) runs on the same tags.
 
-## Repository secrets for the Android signing key
+## The Android signing key
 
-The Android job fails at once if one of these secrets is missing. A release APK
-must always use the same key. If the key changes, Android refuses to install the
-new APK over the old app, and the user has to uninstall first.
+A release APK must always use the same key. If the key changes, Android refuses
+to install the new APK over the old app, and the user has to uninstall first. If
+the key is lost, no installed app can be updated.
 
-| Secret | Value |
-| --- | --- |
-| `KEYSTORE` | the key store file, as one base64 line |
-| `SIGNING_STORE_PASSWORD` | the key store password |
-| `SIGNING_KEY_ALIAS` | the key alias |
-| `SIGNING_KEY_PASSWORD` | the key password |
+The key was made on 2026-10-01: PKCS12 key store, RSA 4096, valid for 100 years,
+alias `vita-plus`, one random password (192 bits) for the store and the key.
+Certificate SHA-256 fingerprint (public, use it to check a restored key):
 
-Make a key store once and keep it in a safe place (a password manager). If you
-lose it, you cannot update installed apps.
-
-```sh
-keytool -genkeypair -v -keystore vita-plus.jks -alias vita-plus \
-  -keyalg RSA -keysize 4096 -validity 36500
-base64 -i vita-plus.jks | tr -d '\n' | gh secret set KEYSTORE
-gh secret set SIGNING_STORE_PASSWORD
-gh secret set SIGNING_KEY_ALIAS --body vita-plus
-gh secret set SIGNING_KEY_PASSWORD
+```
+04:C7:CF:C6:3A:B6:8D:91:D2:3A:34:10:85:16:06:6B:73:7C:87:E5:52:8F:7B:FF:62:1A:FA:3F:EA:38:52:2A
 ```
 
+### Where the key is
+
+| Place | What | Why |
+| --- | --- | --- |
+| GitHub repository secrets | `KEYSTORE` (base64), `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_PASSWORD`, `SIGNING_KEY_ALIAS` | The release job signs with them. GitHub never shows a secret again, so this is not a backup. |
+| 1Password item "VITA+ Android release signing key" | the same four values | The backup. |
+| `~/.vita-plus-signing/` on the Mac that made the key | the key store and the password files | A temporary copy. Delete it after the 1Password step. |
+
+The Android job stops at once if one of the four secrets is missing.
+
+### Store the key in 1Password (run once)
+
+```sh
+brew install --cask 1password-cli      # once; then in the 1Password app turn on
+                                       # Settings > Developer > Integrate with 1Password CLI
+op whoami                              # must show your account
+tools/release/store-signing-key-in-1password.sh        # or: ... "Vault name"
+```
+
+The script makes one Secure Note item, reads the values back, compares them with
+the local files, and then asks if it may delete the local copy. It prints no
+secret. Without the CLI: add `~/.vita-plus-signing/vita-plus-release.p12` to a
+1Password item as a file, copy the password with
+`pbcopy < ~/.vita-plus-signing/store-password.txt`, paste it into the item, and
+clear the clipboard.
+
+### Restore the key from 1Password
+
+Set the GitHub secrets again (for example in a new repository):
+
+```sh
+R=owner/repo
+item="VITA+ Android release signing key"
+op item get "$item" --fields "label=keystore (base64)" --reveal | gh secret set KEYSTORE -R $R
+op item get "$item" --fields "label=store password" --reveal | gh secret set SIGNING_STORE_PASSWORD -R $R
+op item get "$item" --fields "label=key password" --reveal | gh secret set SIGNING_KEY_PASSWORD -R $R
+op item get "$item" --fields "label=key alias" --reveal | gh secret set SIGNING_KEY_ALIAS -R $R
+```
+
+Get the key store as a file (for example to sign by hand). Use a private folder
+and delete the file after:
+
+```sh
+umask 077; mkdir -p ~/.vita-plus-signing
+op item get "$item" --fields "label=keystore (base64)" --reveal | base64 --decode > ~/.vita-plus-signing/vita-plus-release.p12
+```
+
+### How the secrets are protected
+
+- The key, the passwords and the base64 text were never printed, never put in a
+  command line (`ps` shows command lines) and never written inside a git
+  repository. `gh secret set` read them from standard input.
+- The local folder is outside every repository, mode 700, and the files are mode
+  600. `.gitignore` also blocks `*.jks`, `*.p12`, `*.keystore` and
+  `.vita-plus-signing/`.
+- The workflow runs only for a pushed tag `v*`, so a pull request or a branch
+  push can never reach the secrets. The default token is read-only; only the
+  release job can write. Every action is pinned to an exact commit, so a moved
+  tag cannot change the code that runs next to the secrets.
+- The secrets are given only to three steps of the Android job (the check, the
+  decode and the build). The key store is mode 600 and is deleted after the
+  build, also when the build fails. The job uploads only the artifact folder.
+- GitHub hides the secret values in the logs. A value that the build derives from
+  a secret is not hidden, so no script may print them.
+
+Remaining risks:
+
+- The Gradle build and its libraries run with the secrets in their environment. A
+  harmful library could read them. The remedy is to build unsigned and sign in a
+  last step that has the secrets, which is a larger change of `build.gradle`.
+- Whoever can push a tag to this repository can start a signed build. Limit it
+  with a tag rule: GitHub > Settings > Rules > New tag ruleset > target `v*` >
+  restrict creations.
+- 1Password and the GitHub account are now the weak points. Use two-factor
+  authentication on both.
+
+### Make a key (the first time, or a new one)
+
+The Mac has no Java, so use the JDK container. The password files are made with
+`umask 077` in a private folder; nothing is printed.
+
+```sh
+umask 077; D=~/.vita-plus-signing; mkdir -p "$D"
+openssl rand -hex 24 | tr -d '\n' > "$D/store-password.txt"
+printf '%s' vita-plus > "$D/key-alias.txt"
+container run --rm -v "$D:/work" -w /work eclipse-temurin:17-jdk keytool -genkeypair \
+  -storetype PKCS12 -keystore vita-plus-release.p12 -alias vita-plus -keyalg RSA \
+  -keysize 4096 -validity 36500 -dname "CN=VITA Plus release, O=niilo" \
+  -storepass:file store-password.txt -keypass:file store-password.txt
+base64 -i "$D/vita-plus-release.p12" | tr -d '\n' | gh secret set KEYSTORE -R owner/repo
+gh secret set SIGNING_STORE_PASSWORD -R owner/repo < "$D/store-password.txt"
+gh secret set SIGNING_KEY_PASSWORD   -R owner/repo < "$D/store-password.txt"
+gh secret set SIGNING_KEY_ALIAS      -R owner/repo < "$D/key-alias.txt"
+```
+
+The name must not contain a `+` (it is a special character in certificate names).
+Then run the 1Password script above.
+
+### If the key may have leaked
+
+```sh
+for n in KEYSTORE SIGNING_STORE_PASSWORD SIGNING_KEY_PASSWORD SIGNING_KEY_ALIAS; do gh secret delete $n -R owner/repo; done
+```
+
+Then make a new key and set new secrets (below), and store the new key in
+1Password. Every
+user has to uninstall the old app once, because the signature is different. A
+self-signed key cannot be revoked, so delete the old releases that are signed
+with it.
+
 The APKs that you build in the container (`container/vita3k.sh android release`)
-are signed with the debug key of the container. They cannot be updated by a CI
-APK. Uninstall once when you change from one to the other. The games and saves
-stay, because they are in the `pref-path` folder.
+are signed with the debug key of the container. A CI APK cannot update them.
+Uninstall once when you change from one to the other. The games and saves stay,
+because they are in the `pref-path` folder.
 
 ## Targets and the other platforms
 
