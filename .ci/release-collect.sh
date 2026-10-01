@@ -1,51 +1,45 @@
 #!/usr/bin/env bash
+# Collect the build artifacts into release-assets/ with names that carry the tag.
+# Usage: .ci/release-collect.sh <tag>      (run in the folder that holds the downloaded artifacts)
+# Targets: Android arm64 (Ayaneo Pocket S) and Linux x86_64 (Steam Deck).
 set -euo pipefail
 
-mkdir -p artifacts-master artifacts-store
+tag="${1:-}"
+if [[ -z "$tag" ]]; then
+    echo "Usage: $0 <tag>" >&2
+    exit 1
+fi
 
-repo_root="$(pwd)"
-artifacts_master_dir="$repo_root/artifacts-master"
-artifacts_store_dir="$repo_root/artifacts-store"
+assets_dir="$(pwd)/release-assets"
+mkdir -p "$assets_dir"
 
 mapfile -t artifact_dirs < <(find . -mindepth 1 -maxdepth 1 -type d -name 'vita3k-*' -print | sort)
+if [[ ${#artifact_dirs[@]} -eq 0 ]]; then
+    echo "No artifact directory found" >&2
+    exit 1
+fi
 
 for dir in "${artifact_dirs[@]}"; do
     abs_dir="$(cd "$dir" && pwd)"
-    bin_dir="$abs_dir/bin"
     artifact_name="$(basename "$abs_dir")"
 
     case "$artifact_name" in
         vita3k-*-android)
-            cp "$abs_dir/app.apk" "$artifacts_master_dir/android-latest.apk"
-            cp "$abs_dir/app.apk" "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-android.apk"
-            ;;
-        vita3k-*-macos-x64)
-            cp "$abs_dir"/*.dmg "$artifacts_master_dir/macos-latest.dmg"
-            cp "$abs_dir"/*.dmg "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-macos-intel.dmg"
-            ;;
-        vita3k-*-macos-arm64)
-            cp "$abs_dir"/*.dmg "$artifacts_master_dir/macos-arm64-latest.dmg"
-            cp "$abs_dir"/*.dmg "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-macos-arm64.dmg"
+            cp "$abs_dir/app.apk" "$assets_dir/VITA-Plus-${tag}-android-arm64.apk"
             ;;
         vita3k-*-linux-x64)
-            cp "$abs_dir"/*.AppImage* "$artifacts_master_dir/"
-            cp "$abs_dir"/*.AppImage* "$artifacts_store_dir/"
-            (cd "$bin_dir" && zip -r "$artifacts_master_dir/ubuntu-latest.zip" .)
-            (cd "$bin_dir" && 7z a -mx=9 "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-ubuntu-x86_64.7z" .)
-            ;;
-        vita3k-*-linux-arm64)
-            cp "$abs_dir"/*.AppImage* "$artifacts_master_dir/"
-            cp "$abs_dir"/*.AppImage* "$artifacts_store_dir/"
-            (cd "$bin_dir" && zip -r "$artifacts_master_dir/ubuntu-aarch64-latest.zip" .)
-            (cd "$bin_dir" && 7z a -mx=9 "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-ubuntu-aarch64.7z" .)
-            ;;
-        vita3k-*-windows-x64)
-            (cd "$bin_dir" && zip -r "$artifacts_master_dir/windows-latest.zip" .)
-            (cd "$bin_dir" && 7z a -mx=9 "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-windows-x86_64.7z" .)
-            ;;
-        vita3k-*-windows-arm64)
-            (cd "$bin_dir" && zip -r "$artifacts_master_dir/windows-arm64-latest.zip" .)
-            (cd "$bin_dir" && 7z a -mx=9 "$artifacts_store_dir/vita3k-${BUILD_VARIABLE}-${GIT_SHORT_SHA}-windows-arm64.7z" .)
+            shopt -s nullglob
+            appimages=("$abs_dir"/*.AppImage*)
+            shopt -u nullglob
+            if [[ ${#appimages[@]} -eq 0 ]]; then
+                echo "No AppImage in $artifact_name" >&2
+                exit 1
+            fi
+            for file in "${appimages[@]}"; do
+                # keep the suffix after ".AppImage", for example ".zsync"
+                suffix=".AppImage${file##*.AppImage}"
+                cp "$file" "$assets_dir/VITA-Plus-${tag}-linux-x86_64${suffix}"
+            done
             ;;
         *)
             echo "Unknown artifact directory: $artifact_name" >&2
@@ -54,7 +48,7 @@ for dir in "${artifact_dirs[@]}"; do
     esac
 done
 
-echo "=== artifacts-master ==="
-ls -al artifacts-master/
-echo "=== artifacts-store ==="
-ls -al artifacts-store/
+(cd "$assets_dir" && sha256sum * > SHA256SUMS.txt)
+
+echo "=== release-assets ==="
+ls -al "$assets_dir"

@@ -1,12 +1,14 @@
-name: Build CI
+name: Release build
 
+# Builds run only when a release tag is pushed, for example:
+#   git tag v1.2.0 && git push origin v1.2.0
+# A tag with a dash (v1.2.0-rc1) makes a pre-release.
+# Targets: Android arm64 (Ayaneo Pocket S) and Linux x86_64 (Steam Deck).
+# The code for Windows and macOS stays in the repository, but CI does not build it.
 on:
   push:
-    paths-ignore:
-      - '**.md'
-  pull_request:
-    paths-ignore:
-      - '**.md'
+    tags:
+      - 'v*'
 
 env:
   BUILD_CONFIG: Release
@@ -14,65 +16,9 @@ env:
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
-  desktop-build:
-    name: Desktop (${{ matrix.platform }})
-    runs-on: ${{ matrix.runs_on }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            runs_on: ubuntu-latest
-            platform: linux-x64
-            arch: x86_64
-            cmake_preset: ci-linux-clang-appimage
-            linuxdeploy_command: /usr/local/bin/linuxdeploy-x86_64.AppImage
-            cache_path: ''
-            qt_install_deps: 'true'
-
-          - os: ubuntu-24.04-arm
-            runs_on: ubuntu-24.04-arm
-            platform: linux-arm64
-            arch: aarch64
-            cmake_preset: ci-linux-clang-appimage
-            linuxdeploy_command: /usr/local/bin/linuxdeploy-aarch64.AppImage
-            cache_path: ''
-            qt_install_deps: 'true'
-
-          - os: windows-latest
-            runs_on: windows-latest
-            platform: windows-x64
-            arch: x86_64
-            cmake_preset: ci-windows-msvc
-            vcpkg_root: C:\vcpkg
-            vcpkg_triplet: x64-windows-static-md
-            cache_path: |
-              C:\vcpkg\installed
-              C:\vcpkg\packages
-            qt_install_deps: 'false'
-
-          - os: windows-11-arm
-            runs_on: windows-11-arm
-            platform: windows-arm64
-            cmake_preset: ci-windows-msys2-clang
-            msys2_env: CLANGARM64
-            cache_path: C:\msys2-ccache
-            qt_install_deps: 'false'
-
-          - os: macos-intel
-            platform: macos-x64
-            runs_on: macos-latest
-            cmake_preset: ci-macos-x64
-            cache_path: ~/Library/Caches/ccache
-            qt_install_deps: 'false'
-
-          - os: macos-arm64
-            platform: macos-arm64
-            runs_on: macos-latest
-            cmake_preset: ci-macos-arm64
-            cache_path: ~/Library/Caches/ccache
-            qt_install_deps: 'false'
+  linux-build:
+    name: Linux x86_64 (Steam Deck)
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -80,136 +26,38 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Restore cache
-        uses: actions/cache@v5
-        if: ${{ matrix.cache_path != '' }}
-        with:
-          path: ${{ matrix.cache_path }}
-          key: cache-${{ matrix.platform }}-${{ env.BUILD_CONFIG }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/**', '.ci/**', '.github/workflows/c-cpp.yml', 'vcpkg.json') }}
-          restore-keys: |
-            cache-${{ matrix.platform }}-${{ env.BUILD_CONFIG }}-
-
       - name: Set up build environment (Linux)
-        run: bash ./.ci/setup-linux.sh ${{ matrix.arch }} with-appimage
-        if: startsWith(matrix.platform, 'linux-')
-
-      - name: Set up build environment (macOS)
-        run: bash ./.ci/setup-macos.sh
-        if: startsWith(matrix.platform, 'macos-')
-
-      - name: Set up build environment (Windows MSVC)
-        shell: pwsh
-        env:
-          VCPKG_ROOT: ${{ matrix.vcpkg_root }}
-        run: .\.ci\setup-windows-msvc.ps1 -VcpkgTriplet '${{ matrix.vcpkg_triplet }}'
-        if: matrix.platform == 'windows-x64'
-
-      - uses: TheMrMilchmann/setup-msvc-dev@v4
-        with:
-          arch: ${{ matrix.arch }}
-        if: matrix.platform == 'windows-x64'
+        run: bash ./.ci/setup-linux.sh x86_64 with-appimage
 
       - uses: mozilla-actions/sccache-action@v0.0.10
-        if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'windows-x64'
         with:
           disable_annotations: true
 
-      - name: Set up MSYS2 (Windows ARM)
-        uses: msys2/setup-msys2@v2
-        if: matrix.platform == 'windows-arm64'
-        with:
-          msystem: ${{ matrix.msys2_env }}
-          update: true
-          cache: true
-          install: |
-            git
-          pacboy: |
-            clang:p
-            ccache:p
-            cmake:p
-            lld:p
-            ninja:p
-            boost:p
-            openssl:p
-            curl:p
-            zlib:p
-            qt6-base:p
-            qt6-multimedia:p
-            qt6-svg:p
-            qt6-tools:p
-
-      - name: Reset ccache statistics
-        run: ccache -z
-        if: startsWith(matrix.platform, 'macos-')
-
-      - name: Install Qt 6.11.0 (Windows MSVC)
-        uses: jurplel/install-qt-action@v4
-        if: matrix.platform == 'windows-x64'
-        with:
-          version: ${{ env.QT_VERSION }}
-          modules: qtmultimedia
-          host: windows
-          target: desktop
-          arch: win64_msvc2022_64
-          cache: true
-          install-deps: ${{ matrix.qt_install_deps }}
-          aqtsource: git+https://github.com/miurahr/aqtinstall.git@f383b3c7d9658e881bd8ce8810057393bd934ee1
-
       - name: Install Qt 6.11.0
         uses: jurplel/install-qt-action@v4
-        if: matrix.platform != 'windows-arm64' && matrix.platform != 'windows-x64'
         with:
           version: ${{ env.QT_VERSION }}
           modules: qtmultimedia
           cache: true
-          install-deps: ${{ matrix.qt_install_deps }}
+          install-deps: 'true'
 
-      - name: Build desktop target (Linux/macOS)
+      - name: Build desktop target
         env:
-          VITA3K_LINUXDEPLOY_COMMAND: ${{ matrix.linuxdeploy_command }}
-        run: bash ./.ci/build-desktop.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'macos-')
-
-      - name: Build desktop target (Windows MSVC)
-        shell: bash
-        env:
-          VCPKG_ROOT: ${{ matrix.vcpkg_root }}
-        run: bash ./.ci/build-desktop.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
-        if: matrix.platform == 'windows-x64'
-
-      - name: Build desktop target (Windows ARM MSYS2)
-        shell: msys2 {0}
-        run: bash ./.ci/build-windows-msys2.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
-        if: matrix.platform == 'windows-arm64'
+          VITA3K_LINUXDEPLOY_COMMAND: /usr/local/bin/linuxdeploy-x86_64.AppImage
+        run: bash ./.ci/build-desktop.sh --preset ci-linux-clang-appimage --config ${{ env.BUILD_CONFIG }}
 
       - name: Compute artifact paths
         shell: bash
         run: |
           echo "GIT_SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME=vita3k-$(git rev-parse --short HEAD)-${{ matrix.platform }}" >> "$GITHUB_ENV"
-          echo "ARTIFACT_DIR=artifacts/vita3k-$(git rev-parse --short HEAD)-${{ matrix.platform }}" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=vita3k-$(git rev-parse --short HEAD)-linux-x64" >> "$GITHUB_ENV"
+          echo "ARTIFACT_DIR=artifacts/vita3k-$(git rev-parse --short HEAD)-linux-x64" >> "$GITHUB_ENV"
 
-      - name: Stage desktop artifact (Linux/macOS)
-        run: bash ./.ci/package-desktop.sh --platform ${{ matrix.platform }} --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }} --output-dir "${{ env.ARTIFACT_DIR }}"
-        if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'macos-')
-
-      - name: Stage desktop artifact (Windows MSVC)
-        shell: bash
-        run: bash ./.ci/package-desktop.sh --platform ${{ matrix.platform }} --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }} --output-dir "${{ env.ARTIFACT_DIR }}"
-        if: matrix.platform == 'windows-x64'
-
-      - name: Stage desktop artifact (Windows ARM MSYS2)
-        shell: msys2 {0}
-        run: bash ./.ci/package-desktop.sh --platform ${{ matrix.platform }} --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }} --output-dir "${{ env.ARTIFACT_DIR }}"
-        if: matrix.platform == 'windows-arm64'
-
-      - name: Print ccache statistics
-        run: ccache -s
-        if: startsWith(matrix.platform, 'macos-')
+      - name: Stage desktop artifact
+        run: bash ./.ci/package-desktop.sh --platform linux-x64 --preset ci-linux-clang-appimage --config ${{ env.BUILD_CONFIG }} --output-dir "${{ env.ARTIFACT_DIR }}"
 
       - name: Print sccache statistics
         run: sccache --show-stats
-        if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'windows-x64'
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v7
@@ -218,7 +66,7 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
 
   android-build:
-    name: Android
+    name: Android arm64 (Ayaneo Pocket S)
     runs-on: ubuntu-latest
 
     steps:
@@ -226,6 +74,24 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
+
+      # A release APK must be signed with the same key every time. Android refuses to update an
+      # app that was signed with another key. See docs/release.md for how to make the secrets.
+      - name: Check the signing secrets
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for name in KEYSTORE SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing. Add them (see docs/release.md) and push the tag again."
+            exit 1
+          fi
 
       - name: Restore native dependency cache
         uses: actions/cache@v5
@@ -263,10 +129,7 @@ jobs:
       - name: Decode Android keystore
         env:
           KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
-        run: |
-          if [ -n "$KEYSTORE_ENCODED" ]; then
-            echo "$KEYSTORE_ENCODED" | base64 --decode > /home/runner/keystore.jks
-          fi
+        run: echo "$KEYSTORE_ENCODED" | base64 --decode > /home/runner/keystore.jks
 
       - name: Compute artifact paths
         shell: bash
@@ -295,14 +158,14 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
 
   create-release:
-    needs: [desktop-build, android-build]
+    name: GitHub release
+    needs: [linux-build, android-build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     concurrency:
       group: create-release
       cancel-in-progress: false
-    if: |
-      github.ref == 'refs/heads/master' &&
-      github.repository == 'Vita3K/Vita3K'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -311,42 +174,18 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v8
 
-      - name: Get commit info
-        run: |
-          echo "GIT_SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "BUILD_VARIABLE=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
-          echo "LAST_COMMIT_MESSAGE=$(git log -1 --pretty=format:'%s')" >> "$GITHUB_ENV"
+      - name: Prepare release assets
+        run: bash ./.ci/release-collect.sh "${{ github.ref_name }}"
 
-      - name: Get last committer
+      - name: Create or update the release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          COMMITTER=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-          https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }} \
-          | jq -r '.commit.author.name')
-          echo "COMMITTER_NAME=$COMMITTER" >> "$GITHUB_ENV"
-
-      - name: Prepare release artifacts
-        run: bash ./.ci/release-collect.sh
-
-      - name: Upload to store repository
-        uses: tcnksm/ghr@v0
-        with:
-          tag: ${{ env.BUILD_VARIABLE }}
-          path: artifacts-store/
-          owner: ${{ github.repository_owner }}
-          repository: Vita3K-builds
-          name: "Build: ${{ env.BUILD_VARIABLE }}"
-          body: "Corresponding commit: [${{ env.LAST_COMMIT_MESSAGE }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}) (${{ env.COMMITTER_NAME }})"
-          token: ${{ secrets.STORE_TOKEN }}
-
-      - name: Upload to master repository
-        uses: tcnksm/ghr@v0
-        with:
-          tag: continuous
-          path: artifacts-master/
-          delete: "true"
-          owner: ${{ github.repository_owner }}
-          repository: Vita3K
-          name: "Automatic CI builds"
-          body: "Corresponding commit: ${{ github.sha }}\nVita3K Build: ${{ env.BUILD_VARIABLE }}"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            flags=""
+            if [[ "$TAG" == *-* ]]; then flags="--prerelease"; fi
+            gh release create "$TAG" release-assets/* --title "VITA+ $TAG" --generate-notes --verify-tag $flags
+          fi

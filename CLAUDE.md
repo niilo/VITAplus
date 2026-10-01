@@ -137,8 +137,17 @@ Android uses Gradle, with the native code built through CMake. It needs
 cd android && ./gradlew --stacktrace assembleReldebug
 ```
 
-CI (`.github/workflows/c-cpp.yml`) builds through `.ci/build-desktop.sh
---preset <ci-preset> --config <config>` and `.ci/build-android.sh`.
+Target devices: Android on the Ayaneo Pocket S (arm64) and Linux on the Steam
+Deck (x86_64). The code for Windows and macOS stays in the repository, but CI
+does not build it and nobody tests it.
+
+CI runs only when a release tag `v*` is pushed (`docs/release.md`). The workflow
+`.github/workflows/c-cpp.yml` builds the Steam Deck AppImage through
+`.ci/build-desktop.sh --preset ci-linux-clang-appimage --config Release` and the
+signed Android APK through `.ci/build-android.sh`, then creates a GitHub release
+with `.ci/release-collect.sh`. CodeQL runs on the same tags. The format check
+(`.github/workflows/format.yml`) still runs on every push and pull request,
+because it is not a build.
 
 ## Tests
 

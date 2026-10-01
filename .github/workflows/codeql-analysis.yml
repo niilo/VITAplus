@@ -5,20 +5,11 @@
 # or to provide custom queries or build logic.
 name: "CodeQL"
 
+# CodeQL compiles the whole program, so it runs only for a release tag, like the release build.
 on:
   push:
-    branches: [master]
-    paths-ignore:
-      - '**.md'
-
-  pull_request:
-    # The branches below must be a subset of the branches above
-    branches: [master]
-    paths-ignore:
-      - '**.md'
-
-  schedule:
-    - cron: '0 1 * * 3'
+    tags:
+      - 'v*'
 
 env:
   BUILD_CONFIG: Release
