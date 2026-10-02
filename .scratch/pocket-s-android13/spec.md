@@ -30,6 +30,7 @@ runs first, not the numbering.
 | 22 | The preset. |
 | 23 | Verification and the write-up. |
 | 24 to 28 | Areas this plan's first draft did not cover: GPU power constraint, dynarmic flags, texture upload, descriptor and uniform limits, output surface size. |
+| 29 | The prime core stays at 595 MHz while its maximum is 3360 MHz. Found by ticket 00. |
 
 ## What changed since the old plan
 
