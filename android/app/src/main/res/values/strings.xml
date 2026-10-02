@@ -643,6 +643,8 @@
     <string name="settings_emulator_archive_log_desc">Keep a duplicate of the log file named after the current title when an app runs.</string>
     <string name="settings_emulator_log_compat_warn">Log Compatibility Warnings</string>
     <string name="settings_emulator_log_compat_warn_desc">Log compatibility database related warnings.</string>
+    <string name="settings_emulator_perf_log">Performance Log</string>
+    <string name="settings_emulator_perf_log_desc">Write one line per frame, per present and per scene to CSV files in the perf folder next to vita3k.log. Use this to measure a change. It slows the emulator down.</string>
     <string name="settings_emulator_log_level">Log Level</string>
     <string name="settings_emulator_log_level_desc">Select the verbosity of the logging system.</string>
     <string name="settings_emulator_perf_overlay">Performance Overlay</string>

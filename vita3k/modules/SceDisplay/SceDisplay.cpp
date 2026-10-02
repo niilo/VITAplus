@@ -24,6 +24,9 @@
 #include <packages/functions.h>
 #include <renderer/state.h>
 #include <util/lock_and_find.h>
+#include <util/perf_log.h>
+
+#include <fmt/format.h>
 #include <util/types.h>
 
 #include <util/tracy.h>
@@ -158,6 +161,8 @@ EXPORT(SceInt32, _sceDisplaySetFrameBuf, const SceDisplayFrameBuf *pFrameBuf, Sc
 
     emuenv.display.last_setframe_vblank_count = emuenv.display.vblank_count.load();
     emuenv.frame_count++;
+    if (perf_log::enabled())
+        perf_log::write("frames", "steady_us,title_id", fmt::format("{},{}", perf_log::now_us(), emuenv.io.title_id));
 
     const uint64_t nflip = emuenv.display.setframe_accept_count.fetch_add(1, std::memory_order_relaxed) + 1;
     constexpr bool log_first_flips = false;

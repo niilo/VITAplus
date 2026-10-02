@@ -256,6 +256,11 @@ struct VKContext : public renderer::Context {
 
     bool scene_wrote_depth = false;
     bool scene_has_drawn = false;
+    // Draw calls and the host start time of the current recording, for the
+    // perf-log "scenes" channel. The counter is incremented on every draw
+    // call, also when the setting is off.
+    uint32_t scene_draw_calls = 0;
+    int64_t scene_start_us = 0;
     bool gxmscene_viewport_logged = false;
     float surface_downscale = 1.0f;
     bool scene_macroblock_flushed = false;

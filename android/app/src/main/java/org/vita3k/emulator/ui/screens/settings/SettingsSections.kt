@@ -1714,6 +1714,17 @@ private fun EmulatorSettingsSection(
                 ),
                 onShowHelp = onShowHelp
             )
+            SettingsToggleRow(
+                title = stringResource(R.string.settings_emulator_perf_log),
+                checked = cfg.perfLog,
+                onCheckedChange = { onUpdate { perfLog = it } },
+                help = SettingsHelpEntry(
+                    title = stringResource(R.string.settings_emulator_perf_log),
+                    body = stringResource(R.string.settings_emulator_perf_log_desc),
+                    scope = SettingsScope.Global
+                ),
+                onShowHelp = onShowHelp
+            )
             val logOptions = listOf(
                 stringResource(R.string.settings_opt_trace),
                 stringResource(R.string.settings_opt_debug),
