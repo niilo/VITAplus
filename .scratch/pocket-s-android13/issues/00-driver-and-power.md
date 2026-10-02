@@ -1,6 +1,6 @@
 # 00: Fix the driver and the power constraint before anything else
 
-Status: open
+Status: resolved
 Type: experiment
 Label: ready-for-human
 Blocked by: none
@@ -70,5 +70,90 @@ same code. A plan that leaves this open measures nothing comparable.
 - Ticket 24 either `resolved` or `rejected` with its numbers.
 
 ## Answer
+
+**The stock driver is 1.84 times faster than Turnip on this device.** The
+plan, `CLAUDE.md` and the earlier research all assumed the opposite.
+
+Measured on 2026-10-02 with the release build of this branch, Uncharted
+Golden Abyss (PCSA00029), the same saved chapter, resolution 2, screen filter
+Bilinear, `high-accuracy: false`, one run each, 20 s warm-up skipped:
+
+| Run | Driver | FPS | frame interval p99 | scenes/s | draws/scene |
+| --- | --- | --- | --- | --- | --- |
+| stock-1 | Qualcomm 512.676.0 | 60.02 | 19.87 ms | 480.1 | 34.24 |
+| stock-2 | Qualcomm 512.676.0 | 59.95 | 19.99 ms | 479.4 | 34.25 |
+| turnip-1 | Turnip Balemuni Apex v2 | 32.84 | 33.47 ms | 262.7 | 34.25 |
+| turnip-2 | Turnip Balemuni Apex v2 | 32.68 | 34.89 ms | 261.4 | 34.25 |
+
+The draws per scene are identical to two decimals in all four runs, so the four
+runs are the same scene and the same work. The scenes-per-second ratio,
+480.1 / 262.7 = 1.83, matches the frame-rate ratio, so Turnip is not doing more
+work per frame. It is slower at the same work.
+
+Stock is at the 60 Hz panel cap, so 60 FPS is a floor on its capability, not a
+measurement of it.
+
+### GPU and CPU clocks during the runs
+
+`tools/android/device_clock_sample.sh`, one sample per second:
+
+| | GPU clock mean | GPU busy | CPU prime core (cpu7) |
+| --- | --- | --- | --- |
+| stock | 597 MHz | 62.1 % | 595 MHz in 19 of 22 samples |
+| turnip | 501 MHz | 62.1 % | 595 MHz in 12 of 18 samples |
+
+**The GPU never goes above 680 MHz on either driver**, which is the cap
+`max_gpuclk` reports, while the hardware table lists 1000 MHz. So ticket 24's
+question is live and the cap is real.
+
+GPU busy percentage is the same on both, so the same fraction of time is spent
+with the GPU busy; the difference is how much work fits into that time.
+
+**The prime core sits at 595 MHz while its maximum is 3360 MHz.** The governor
+is `walt` and it leaves cpu7 in a low bin for most of the run. That is a
+separate finding from the driver one and it is worth a ticket of its own:
+nothing in the app asks for the prime core, and the emulator has threads that
+could use it.
+
+### Why this happened, most likely
+
+The stock driver forces `double-buffer` mapping, which the plan called the most
+expensive frame path, and it is still 1.84 times faster. So the double-buffer
+copies are not what limits the stock driver, and the mapping mode is not the
+lever the plan assumed.
+
+Turnip has `support_rasterized_order_access: true` and runs Page Table. Its
+lower clock on the same busy percentage suggests its shaders or its binning
+are the cost. The Balemuni build reports a 4 GB shader cache and 512 KB
+suballocators and calls itself an instruction-level tuned build, so it is a
+tuned build for other emulators and not for this one.
+
+### What this changes
+
+- Every Vulkan ticket in this plan measures on the **stock** driver from here.
+  Ticket 05's `memory-mapping` row becomes a question about Turnip only.
+- Ticket 19, the Turnip autotuner, is worth less. It becomes a question about
+  whether a flag recovers the gap, not a source of wins.
+- Ticket 06's interlock and subpass paths are **not used** on the stock driver,
+  because it has no `rasterization_order_attachment_access` and
+  `support_shader_interlock` is false there too. Its `direct_fragcolor` path is
+  what runs. So ticket 06 measures one path on stock and a different one on
+  Turnip, and stock is the one that matters.
+- Ticket 16, the Adreno shader compiler workaround, targets the stock driver.
+  It is now more relevant, because the stock driver is the one in use.
+- Ticket 07's Turnip hang has to be checked on the stock driver too, since that
+  is what runs now. Its extension list is in the answer of ticket 01.
+- `CLAUDE.md` says the stock driver runs this scene at 7 FPS and Turnip at 30.
+  That is now measured the other way round and the line is corrected.
+
+### Still to do
+
+- The A/B/A protocol from `../spec.md`, three runs each, to put a spread on
+  these numbers. Two runs each already agree within 0.2%.
+- One run at resolution 1, because a 60 FPS stock result may be limited by the
+  panel rather than the GPU.
+- Whether the Balemuni build in particular is slow, or Mesa Turnip in general.
+
+## Comments
 
 ## Comments

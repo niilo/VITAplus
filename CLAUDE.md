@@ -98,9 +98,12 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   Golden Abyss, loads the saved chapter and samples the FPS counter into one
   picture (`tools/android/fps_sample.py`). Use it to compare a build, a Vulkan
   driver or a setting in the same scene. Needs an unlocked device. Results go
-  to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` first: with the
-  stock Qualcomm driver the scene runs at 7 FPS (2x) and with the Turnip
-  driver at 30 FPS.
+  to `tmp/uncharted-scene/<label>/`. An earlier note here said the stock
+  driver ran this scene at 7 FPS and Turnip at 30 FPS. Measured on
+  2026-10-02 it is the other way round: 60 FPS on the stock driver and 33 FPS
+  on Turnip, at resolution 2, with the perf-log setting. See
+  `.scratch/pocket-s-android13/issues/00-driver-and-power.md`. Check
+  `custom-driver-name` before a run.
 - `.signing/` holds the local signing keys (a dev key and the release key). Git
   ignores it and the repository is public. Never print, commit, copy, upload or
   send a file from it, and never put a password from it in a command line.

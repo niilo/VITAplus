@@ -128,16 +128,27 @@ and the dynarmic optimization set (ticket 25).
 
 ## Driver
 
-The stock Qualcomm driver and Turnip are both in play. This repository has
-already measured the difference on this device: the Uncharted scene runs at
-7 FPS on the stock driver and 30 FPS on Turnip, at resolution 2
-(`CLAUDE.md`, `tools/android/uncharted_scene.sh`). That is a 4.3x gap.
+**The stock Qualcomm driver is the one this plan measures on.** Ticket 00
+measured it on 2026-10-02: Uncharted Golden Abyss at resolution 2 gives
+60.02 and 59.95 FPS on the stock driver and 32.84 and 32.68 FPS on Turnip
+(Balemuni Apex v2), with the draws per scene identical in all four runs. The
+stock driver is 1.84 times faster, and it is at the 60 Hz panel cap, so its
+real headroom is not known. Earlier notes in this repository had the two the
+other way round; `CLAUDE.md` is corrected.
 
-Other emulator projects report Turnip as equal to the stock driver on FPS
-and better on correctness. No source for that is named in this repository, so
-treat it as unverified. Ticket 00 confirms the choice on this device with the protocol
-below and writes the result here. Until it does, no later ticket may assume a
-driver.
+The community consensus for other emulators is the opposite again: other
+projects report Turnip as equal to the stock driver on FPS and better on
+correctness. That holds for them and not for this emulator on this device,
+which is what the measurement is for.
+
+Two consequences run through every ticket below:
+
+- The stock driver has no `VK_EXT/ARM_rasterization_order_attachment_access` and
+  no shader interlock, so `direct_fragcolor` is the framebuffer fetch path that
+  runs. The interlock and subpass paths in ticket 06 are Turnip only.
+- The stock driver forces the double-buffer mapping mode, which the old plan
+  called the most expensive frame path. Ticket 05's `memory-mapping` row is
+  therefore a question about Turnip, not about this device.
 
 Turnip facts that matter here, read from Mesa main:
 
