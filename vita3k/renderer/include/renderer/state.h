@@ -136,6 +136,10 @@ struct State {
 
     std::unique_ptr<std::thread> render_thread;
     std::atomic<bool> render_abort{ false };
+    // The nice value the renderer thread sets for itself at start. It lives
+    // here because a thread may only change its own priority, and the thread
+    // is created in one place and started in another.
+    int render_thread_nice = 0;
 
     std::vector<ShadersHash> precompile_queue;
     bool precompile_requested = false;

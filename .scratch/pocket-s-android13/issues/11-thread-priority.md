@@ -66,4 +66,72 @@ If the win is not there, set `Status: rejected` with the numbers.
 
 ## Answer
 
+Code merged to `master` as `556b1da1`. The Linux build, the three googletest
+suites and the format check pass. The Android reldebug APK builds.
+
+### The setting does not work on Android, and that is a finding
+
+The plan assumed that an app could lower the nice value of its own thread with
+no capability. The capability check does pass, but the kernel has a second
+condition: `is_nice_reduction()` in `kernel/sched/core.c` allows a lower value
+only with `CAP_SYS_NICE` or a nonzero `RLIMIT_NICE` soft limit. An app process
+has neither. The tests measured this in the container, which runs as an
+unprivileged uid:
+
+```
+RLIMIT_NICE soft=0 hard=0
+Could not set the nice value of this thread to -1: Inappropriate ioctl for device
+```
+
+Raising the nice value, which is the opposite direction and only lowers the
+priority, always works. So the one direction an app can take is the one this
+ticket does not want.
+
+What is in the code:
+
+- `util::set_thread_nice(int)` in `vita3k/util/`. It returns whether the value
+  was applied and logs the failure once with `strerror(errno)`, so the log on
+  the device says which case it is.
+- The renderer thread sets it for itself at the top of `render_loop`
+  (`renderer/src/batch.cpp`). The value travels through
+  `renderer::State::render_thread_nice` because the thread is created in one
+  place and started in another.
+- The GPU wait thread sets it at the top of `VKContext::wait_thread_function`
+  (`renderer/src/vulkan/context.cpp`). The value travels through
+  `VKState::gpu_wait_thread_nice`, which `VKState::create` fills from the
+  config. `VKState::create` runs before the context is built, so the thread
+  reads a value that is already set.
+- Guest threads keep the default, so they yield to the renderer.
+- The default is 0, which changes nothing.
+
+Four googletests in `vita3k/mem/tests/thread_priority_tests.cpp`. They do not
+assume which way the call goes. They assert that the reported result matches
+the value the thread ends up with, that 0 leaves it alone, that raising the
+value works, and that `RLIMIT_NICE` is printed for the record.
+
+### What this means for the plan
+
+The Android specifics section of `../spec.md` said `setpriority` on the calling
+thread is allowed. That is true of the capability check and false of the
+kernel rule. The line is corrected there.
+
+The ADPF hint in ticket 13 is the remaining lever for CPU placement, and it
+does not depend on this one. If ticket 11 measures no change, ticket 13 is the
+one to spend time on.
+
+### Still to do on the device
+
+- Set `thread-nice-renderer: -10` and read the log line. If the call is
+  refused, this ticket is `rejected` and the log line is the evidence.
+- If it is applied, run A/B/A on the 60 FPS title and the 30 FPS title and
+  record FPS, the frame interval 99th percentile and `cpu-cycles` per frame.
+- `adb shell cat /proc/<pid>/limits` gives `Max nice priority` for the running
+  app, which is the value that decides.
+
+## Comments
+
+2026-10-02: the tests were written first, with the assumption that a lower nice
+value applies. They failed in the container, and the failure is the finding
+above. The tests now assert the contract instead of the assumption.
+
 ## Comments

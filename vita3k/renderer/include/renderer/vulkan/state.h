@@ -77,6 +77,11 @@ struct VKState : public renderer::State {
 
     vma::Allocator allocator;
 
+    // The nice value the GPU wait thread sets for itself at start. 0 means
+    // leave the default. A thread may only change its own priority, so the
+    // value is read from here rather than passed to the thread function.
+    int gpu_wait_thread_nice = 0;
+
     uint32_t general_family_index = 0;
     uint32_t transfer_family_index = 0;
     uint32_t general_queue_last = 0;

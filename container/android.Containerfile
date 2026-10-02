@@ -44,4 +44,11 @@ ENV VCPKG_DEFAULT_BINARY_CACHE=/cache/vcpkg \
     CCACHE_MAXSIZE=20G
 ENV PATH=${VCPKG_ROOT}:${ANDROID_HOME}/cmdline-tools/latest/bin:${PATH}
 
+# The repo is bind-mounted from the host, so the submodules are owned by the
+# host user and git refuses to read them. The FFMPEG build step needs a commit
+# SHA from that submodule to pick the prebuilt it downloads, so mark every
+# directory safe. This is a container-local git config and does not touch the
+# host repository.
+RUN git config --global --add safe.directory '*'
+
 WORKDIR /src

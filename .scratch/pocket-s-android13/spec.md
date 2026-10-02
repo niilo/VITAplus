@@ -25,7 +25,7 @@ runs first, not the numbering.
 | 04 | The baseline. Every other measurement is compared against it. |
 | 05 | The render configuration matrix. Finds the settings and the CPU-or-GPU verdict per title. |
 | 06 to 10 | The Vulkan frame path: framebuffer fetch, visibility queries, macroblock sync, present mode, vblank clock. |
-| 11 to 14 | Host CPU: thread priority, huge pages, ADPF, code cache size. |
+| 11 to 14 | Host CPU: thread priority, huge pages, ADPF, code cache size. Ticket 11 found that Android blocks the nice value, so ADPF in ticket 13 is the remaining lever. |
 | 15 to 21 | More Vulkan and GPU: attachment layouts, the shader compiler workaround, pipeline stutter, screen filters, the Turnip autotuner, the resolution multiplier, thermal measurement. |
 | 22 | The preset. |
 | 23 | Verification and the write-up. |
@@ -114,9 +114,14 @@ and the dynarmic optimization set (ticket 25).
 - Transparent huge pages are in `madvise` mode in the Android 13 GKI defconfig.
   `madvise(MADV_HUGEPAGE)` is therefore the way to ask for 2 MB pages, and
   nothing blocks an app from calling it.
-- `setpriority` on the calling thread is allowed without any capability.
+- `setpriority` on the calling thread passes the capability check, but the
+  kernel allows a lower nice value only with `CAP_SYS_NICE` or a nonzero
+  `RLIMIT_NICE` soft limit, and an app process has neither. So an app cannot
+  raise its own priority by lowering the nice value. It can lower its priority
+  by raising the value, which is the opposite of what ticket 11 needs.
   `pthread_setschedparam` with `SCHED_FIFO` returns `EPERM`. An app cannot
-  change its cgroup or its uclamp values.
+  change its cgroup or its uclamp values. Ticket 11 measured this, and
+  `RLIMIT_NICE` is 0 in a container.
 - `cmd thermalservice` on Android 13 has `override-status` and `reset` only.
   There is no `get-current-status` and no `headroom`.
 

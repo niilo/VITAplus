@@ -393,6 +393,7 @@ bool VKState::init() {
 }
 
 bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &config) {
+    gpu_wait_thread_nice = config.thread_nice_renderer;
     {
         const int64_t last_destroy = g_last_device_destroy_ms.load(std::memory_order_relaxed);
         if (last_destroy != 0) {
