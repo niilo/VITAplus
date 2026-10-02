@@ -55,119 +55,106 @@ same code. A plan that leaves this open measures nothing comparable.
 3. Decide. This repository already measured 7 FPS on the stock driver and
    30 FPS on Turnip for this scene (`CLAUDE.md`). If Turnip wins again, every
    ticket from here measures on Turnip, and every ticket writes one line in its
-   `## Answer` saying what its result means for the stock driver. If it does
-   not win, the rest of the plan measures on the stock driver.
-4. Write the decision into `../spec.md` as one named driver, so every later
-   ticket refers to it instead of repeating itself.
-5. Then do ticket 24, the GPU power constraint, and write its result in the same
-   place.
+   `## Answer
 
-## Acceptance
+**CORRECTED 2026-10-02, second pass. The first answer was wrong.** It was
+measured on the Uncharted title screen, which barely touches the renderer. In
+actual gameplay the order is the other way round: Turnip is 5.2 times faster
+than the stock driver. The user reported this before the second pass, and the
+user was right.
 
-- One driver named in `../spec.md`, with the numbers that named it.
-- For every ticket that follows, a note in `../spec.md` of whether its result
-  is expected to carry over to the other driver.
-- Ticket 24 either `resolved` or `rejected` with its numbers.
+### Gameplay measurement
 
-## Answer
+`tools/android/gameplay_scene.sh` walks the Uncharted menus into the saved
+chapter, then holds the right stick and the movement keys so the camera turns
+and the world has to be re-rendered. The right stick is bound to I, J, K and L
+in the emulator config. Read with `--warmup 120`, which skips the boot and the
+menu walk and leaves the movement window.
 
-**The stock driver is 1.84 times faster than Turnip on this device.** The
-plan, `CLAUDE.md` and the earlier research all assumed the opposite.
-
-Measured on 2026-10-02 with the release build of this branch, Uncharted
-Golden Abyss (PCSA00029), the same saved chapter, resolution 2, screen filter
-Bilinear, `high-accuracy: false`, one run each, 20 s warm-up skipped:
-
-| Run | Driver | FPS | frame interval p99 | scenes/s | draws/scene |
-| --- | --- | --- | --- | --- | --- |
-| stock-1 | Qualcomm 512.676.0 | 60.02 | 19.87 ms | 480.1 | 34.24 |
-| stock-2 | Qualcomm 512.676.0 | 59.95 | 19.99 ms | 479.4 | 34.25 |
-| turnip-1 | Turnip Balemuni Apex v2 | 32.84 | 33.47 ms | 262.7 | 34.25 |
-| turnip-2 | Turnip Balemuni Apex v2 | 32.68 | 34.89 ms | 261.4 | 34.25 |
-
-The draws per scene are identical to two decimals in all four runs, so the four
-runs are the same scene and the same work. The scenes-per-second ratio,
-480.1 / 262.7 = 1.83, matches the frame-rate ratio, so Turnip is not doing more
-work per frame. It is slower at the same work.
-
-Stock is at the 60 Hz panel cap, so 60 FPS is a floor on its capability, not a
-measurement of it.
-
-### GPU and CPU clocks during the runs
-
-`tools/android/device_clock_sample.sh`, one sample per second:
-
-| | GPU clock mean | GPU busy | CPU prime core (cpu7) |
+| | stock, `high-accuracy: false` | stock, `high-accuracy: true` | Turnip |
 | --- | --- | --- | --- |
-| stock | 597 MHz | 62.1 % | 595 MHz in 19 of 22 samples |
-| turnip | 501 MHz | 62.1 % | 595 MHz in 12 of 18 samples |
+| FPS | 5.76 | 6.39 | 29.96 |
+| seconds at target | 0.0% | 6.6% | 100.0% |
+| frame interval p99 | 187.91 ms | 169.84 ms | 43.43 ms |
+| intervals over 50 ms | 287 | 654 over the whole run | 4 |
+| scenes per second | 81.6 | 90.5 | 424.5 |
+| draws per scene | 39.91 | 39.43 | 40.04 |
+| max draws per scene | 337 | 337 | 337 |
 
-**The GPU never goes above 680 MHz on either driver**, which is the cap
-`max_gpuclk` reports, while the hardware table lists 1000 MHz. So ticket 24's
-question is live and the cap is real.
+Draws per scene and the maximum are the same to within rounding in all three
+runs, so it is the same scene and the same work. Turnip does it 5.2 times
+faster.
 
-GPU busy percentage is the same on both, so the same fraction of time is spent
-with the GPU busy; the difference is how much work fits into that time.
+The emulator's own overlay agrees and adds the reason it is hard to miss:
+**GPU 99% on the stock driver and 93% on Turnip, at 5.76 and 29.96 FPS.** Both
+saturate the GPU. The stock driver spends five times the GPU work per frame for
+the same picture.
 
-**The prime core sits at 595 MHz while its maximum is 3360 MHz.** The governor
-is `walt` and it leaves cpu7 in a low bin for most of the run. That is a
-separate finding from the driver one and it is worth a ticket of its own:
-nothing in the app asks for the prime core, and the emulator has threads that
-could use it.
+### Why: the stock driver has no fast framebuffer-fetch path
 
-### Why this happened, most likely
+This is the finding, and it is not what the plan expected. From the app log on
+the stock driver:
 
-The stock driver forces `double-buffer` mapping, which the plan called the most
-expensive frame path, and it is still 1.84 times faster. So the double-buffer
-copies are not what limits the stock driver, and the mapping mode is not the
-lever the plan assumed.
+```
+FeatureState: support_shader_interlock=false support_texture_barrier=false
+              direct_fragcolor=true programmable_blending=true
+```
 
-Turnip has `support_rasterized_order_access: true` and runs Page Table. Its
-lower clock on the same busy percentage suggests its shaders or its binning
-are the cost. The Balemuni build reports a 4 GB shader cache and 512 KB
-suballocators and calls itself an instruction-level tuned build, so it is a
-tuned build for other emulators and not for this one.
+Vita3K emulates programmable blending by reading the color attachment that the
+same pass writes. It has three ways to do that, and the stock driver supports
+none of the two fast ones:
+
+| Path | Needs | Stock | Turnip |
+| --- | --- | --- | --- |
+| rasterization order attachment access | `rasterizationOrderColorAttachmentAccess` | no | yes |
+| shader interlock | `fragmentShaderSampleInterlock` | no | not needed |
+| `direct_fragcolor` | nothing, always available | **yes, the only one** | not used |
+
+`direct_fragcolor` uses a subpass input attachment and puts a
+`vkCmdPipelineBarrier` on the color attachment before **every draw that uses
+programmable blending** (`renderer/src/vulkan/scene.cpp:448`). On a tile-based
+renderer that barrier can force a store and a load out of tile memory.
+
+The stock driver does list `VK_EXT_rasterization_order_attachment_access` and
+`VK_ARM_rasterization_order_attachment_access` among its extensions. The code
+queries the **feature** `rasterizationOrderColorAttachmentAccess`, not the
+extension, and the feature is off. So the extension being present does not help.
+
+`high-accuracy: true` does not give the stock driver a second option. It was
+measured and it changes nothing about the path: `direct_fragcolor=true` still,
+6.39 FPS against 5.76, inside the noise of two runs. The stock driver has one
+path and the plan cannot choose another.
 
 ### What this changes
 
-- Every Vulkan ticket in this plan measures on the **stock** driver from here.
-  Ticket 05's `memory-mapping` row becomes a question about Turnip only.
-- Ticket 19, the Turnip autotuner, is worth less. It becomes a question about
-  whether a flag recovers the gap, not a source of wins.
-- Ticket 06's interlock and subpass paths are **not used** on the stock driver,
-  because it has no `rasterization_order_attachment_access` and
-  `support_shader_interlock` is false there too. Its `direct_fragcolor` path is
-  what runs. So ticket 06 measures one path on stock and a different one on
-  Turnip, and stock is the one that matters.
+- **The plan measures on Turnip.** The earlier correction in this file, which
+  named the stock driver, was itself wrong and is replaced by this answer.
+- `CLAUDE.md` is corrected again. Its current text says 60 FPS on stock and 33
+  on Turnip. The truth is 5.8 and 30.
+- Ticket 06 is no longer a question about three paths. It is a question about
+  one path that the stock driver forces, and it is the largest single
+  performance difference measured on this device.
 - Ticket 16, the Adreno shader compiler workaround, targets the stock driver.
-  It is now more relevant, because the stock driver is the one in use.
-- Ticket 07's Turnip hang has to be checked on the stock driver too, since that
-  is what runs now. Its extension list is in the answer of ticket 01.
-- `CLAUDE.md` says the stock driver runs this scene at 7 FPS and Turnip at 30.
-  That is now measured the other way round and the line is corrected.
+  That is now the slow path, so it matters less.
+- Ticket 05's `disable-programmable-blending` row becomes the most interesting
+  setting on the device, because turning it off removes the per-draw barrier.
+  It loses blending accuracy, so it needs the picture check the ticket already
+  requires.
+- The 680 MHz GPU cap from the first pass still stands and is still ticket 24.
+  Turnip reaches 30 FPS with the GPU at 93%, so the cap is not what limits it.
+- The prime core at 595 MHz is ticket 29 and is unchanged. The overlay shows
+  CPU 43% on Turnip and 23% on stock, so the CPU is not the limit either.
 
-### Caveat on the thermal state
+### Method note, because it nearly caused a wrong answer
 
-`dumpsys thermalservice` reported `Thermal Status: 3`, which is SEVERE, after
-these four runs, with `gpuss-0` at 66700 millidegrees and `skin-msm-therm` at
-55131. Criterion 3 of `../spec.md` wants status 3 or below, so the device was
-at its limit during the later runs.
+The first pass launched the game and read the FPS after 70 seconds. That is the
+title screen. `perf_summary.py` averaged over the whole file by default, which
+mixed the menus and the level, and gave 25 FPS for the stock driver when the
+gameplay figure is 5.76.
 
-The four runs were not spaced by the cooldown step of the protocol, because
-this ticket only needed the driver decision and not a benchmark. The first run
-of each pair is the cooler one, and both pairs agree to within 0.2%, so the
-comparison between drivers holds. The absolute numbers are not a baseline:
-ticket 04 does the protocol properly, with a cooldown and an A/B/A order, on a
-cool device.
-
-### Still to do
-
-- The A/B/A protocol from `../spec.md`, three runs each, to put a spread on
-  these numbers. Two runs each already agree within 0.2%.
-- One run at resolution 1, because a 60 FPS stock result may be limited by the
-  panel rather than the GPU.
-- Whether the Balemuni build in particular is slow, or Mesa Turnip in general.
-
-## Comments
+The fix is `tools/android/gameplay_scene.sh`, which reaches the level and moves
+the camera, plus reading the result with a `--warmup` that skips the menus.
+Every measurement in this plan has to do that. A frame rate measured anywhere
+other than in the game is not a result.
 
 ## Comments

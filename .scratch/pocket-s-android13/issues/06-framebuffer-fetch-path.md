@@ -32,6 +32,31 @@ Turning all three off is what `disable-programmable-blending` does
 (`renderer.cpp:1080`). NetherSX2-Turnip documents that turning framebuffer fetch
 off fixed a PS2 game on Snapdragon.
 
+## What ticket 00 already measured, on this device
+
+This is now the largest performance difference measured on the device, and it
+is one path, not three. Uncharted in gameplay, camera moving, resolution 2:
+
+| Path in use | FPS | p99 interval |
+| --- | --- | --- |
+| `direct_fragcolor`, stock driver | 5.76 | 187.91 ms |
+| rasterization order access, Turnip | 29.96 | 43.43 ms |
+
+The draws per scene are the same, 39.91 against 40.04, so it is the same work.
+The stock driver's feature log says why it has no choice:
+
+```
+FeatureState: support_shader_interlock=false support_texture_barrier=false
+              direct_fragcolor=true programmable_blending=true
+```
+
+So on this device `direct_fragcolor` costs about 5 times what the correct path
+costs. Steps 2 to 4 of this ticket are now about that one number.
+
+`high-accuracy: true` does not help the stock driver. Measured: 6.39 FPS
+against 5.76, inside the noise of two runs, and `direct_fragcolor` is still
+true. Do not spend a run on it again.
+
 ## Risk
 
 Every path here decides whether programmable blending is emulated. A wrong

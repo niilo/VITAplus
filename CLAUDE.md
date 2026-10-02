@@ -98,12 +98,22 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   Golden Abyss, loads the saved chapter and samples the FPS counter into one
   picture (`tools/android/fps_sample.py`). Use it to compare a build, a Vulkan
   driver or a setting in the same scene. Needs an unlocked device. Results go
-  to `tmp/uncharted-scene/<label>/`. An earlier note here said the stock
-  driver ran this scene at 7 FPS and Turnip at 30 FPS. Measured on
-  2026-10-02 it is the other way round: 60 FPS on the stock driver and 33 FPS
-  on Turnip, at resolution 2, with the perf-log setting. See
-  `.scratch/pocket-s-android13/issues/00-driver-and-power.md`. Check
-  `custom-driver-name` before a run.
+  to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` before a run.
+
+- `tools/android/gameplay_scene.sh <package> <label>` is the one to use for a
+  real number. It walks the Uncharted menus into the saved chapter, then holds
+  the right stick and the movement keys so the camera turns and the game has to
+  render new data. The title screen barely touches the renderer, so a frame rate
+  measured there is not a result. Read it with `perf_summary.py --warmup 120`,
+  which skips the boot and the menu walk. See
+  `.scratch/pocket-s-android13/issues/00-driver-and-power.md`.
+  On the Pocket S, gameplay is **5.8 FPS on the stock Qualcomm driver and 30 FPS
+  on Turnip** at resolution 2, with the same draws per scene. The stock driver
+  has neither `rasterization_order_attachment_access` nor shader interlock, so
+  it is forced onto `direct_fragcolor`, which puts a pipeline barrier on the
+  colour attachment before every programmable-blending draw. An earlier note
+  here had the two drivers the other way round, from a title-screen
+  measurement.
 - `.signing/` holds the local signing keys (a dev key and the release key). Git
   ignores it and the repository is public. Never print, commit, copy, upload or
   send a file from it, and never put a password from it in a command line.

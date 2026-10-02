@@ -129,48 +129,59 @@ and the dynarmic optimization set (ticket 25).
 
 ## Driver
 
-**The stock Qualcomm driver is the one this plan measures on.** Ticket 00
-measured it on 2026-10-02: Uncharted Golden Abyss at resolution 2 gives
-60.02 and 59.95 FPS on the stock driver and 32.84 and 32.68 FPS on Turnip
-(Balemuni Apex v2), with the draws per scene identical in all four runs. The
-stock driver is 1.84 times faster, and it is at the 60 Hz panel cap, so its
-real headroom is not known. Earlier notes in this repository had the two the
-other way round; `CLAUDE.md` is corrected.
+**This plan measures on Turnip.** Ticket 00 measured Uncharted Golden Abyss in
+gameplay, with the camera moving, at resolution 2, reading the perf-log with a
+120 s warm-up so the menus are excluded:
 
-The community consensus for other emulators is the opposite again: other
-projects report Turnip as equal to the stock driver on FPS and better on
-correctness. That holds for them and not for this emulator on this device,
-which is what the measurement is for.
+| | stock Qualcomm 512.676.0 | Turnip Balemuni Apex v2 |
+| --- | --- | --- |
+| FPS | 5.76 | 29.96 |
+| seconds at target (30) | 0.0% | 100.0% |
+| frame interval p99 | 187.91 ms | 43.43 ms |
+| scenes per second | 81.6 | 424.5 |
+| draws per scene | 39.91 | 40.04 |
+| GPU busy, from the overlay | 99% | 93% |
 
-Two consequences run through every ticket below:
+Same scene, same draws, 5.2 times faster. Both saturate the GPU, so the stock
+driver spends five times the GPU work per frame for the same picture.
 
-- The stock driver has no `VK_EXT/ARM_rasterization_order_attachment_access` and
-  no shader interlock, so `direct_fragcolor` is the framebuffer fetch path that
-  runs. The interlock and subpass paths in ticket 06 are Turnip only.
-- The stock driver forces the double-buffer mapping mode, which the old plan
-  called the most expensive frame path. Ticket 05's `memory-mapping` row is
-  therefore a question about Turnip, not about this device.
+The cause is the framebuffer-fetch path. Vita3K emulates programmable blending
+by reading the colour attachment the same pass writes, and has three ways to do
+it. The stock driver supports neither fast one:
 
-Turnip facts that matter here, read from Mesa main:
+| Path | Needs | stock | Turnip |
+| --- | --- | --- | --- |
+| rasterization order attachment access | `rasterizationOrderColorAttachmentAccess` | no | yes |
+| shader interlock | `fragmentShaderSampleInterlock` | no | not needed |
+| `direct_fragcolor` | nothing | **the only one available** | not used |
 
-- `VK_EXT_external_memory_host` is absent. The External Host mapping mode is
-  unavailable on both drivers.
-- `VK_KHR_present_wait`, `VK_KHR_dynamic_rendering_local_read`,
-  `VK_EXT_pipeline_creation_cache_control` and
-  `VK_EXT_pipeline_creation_feedback` are present.
-- `VK_KHR_pipeline_binary` is absent.
-- `VK_EXT_memory_priority` is absent.
-- `minUniformBufferOffsetAlignment` is 64. `maxUniformBufferRange` is 64 KiB.
-- The advertised descriptor limits are 16777216 per stage, which hides the real
-  hardware limits. Qualcomm's real limits for A7xx are multiples of 16 unique
-  uniform buffers, textures plus storage buffers, and samplers per pipeline.
-  Using more than 16 of any of them costs fill rate.
-- `TU_DEBUG` and `TU_AUTOTUNE_*` are read through `os_get_option()`, which on
-  Android checks the system property `debug.mesa.tu.debug` first. The Plus
-  `tu-debug` config only sets the environment variable, so it cannot reach
-  the property route.
-- Concurrent binning is off by default in Turnip. `TU_DEBUG=forcecb` or
-  driconf `tu_allow_concurrent_binning=true` turns it on.
+`direct_fragcolor` puts a `vkCmdPipelineBarrier` on the colour attachment
+before every programmable-blending draw (`renderer/src/vulkan/scene.cpp:448`).
+On a tile renderer that can force a store and a load out of tile memory.
+`high-accuracy: true` gives the stock driver no second option; it was measured
+at 6.39 FPS, inside the noise.
+
+The stock driver does list the extension
+`VK_EXT_rasterization_order_attachment_access`, but the code queries the
+feature and the feature is off.
+
+An earlier pass on ticket 00 measured the title screen and had the two drivers
+the other way round, 60 FPS stock and 33 Turnip. That was wrong and is
+recorded in the ticket, because it is the mistake this plan is most likely to
+repeat.
+
+Consequences:
+
+- The stock driver is the slow path. Ticket 06 is the largest single
+  performance difference on this device and it is one path, not three.
+- Ticket 05's `disable-programmable-blending` row is the most interesting
+  setting on the device, because turning it off removes the per-draw barrier.
+- Ticket 05's `memory-mapping` row is a Turnip question, since the stock driver
+  forces double-buffer.
+- Ticket 16 targets the stock driver and matters less.
+- The GPU never goes above its 680 MHz cap on either driver, while the hardware
+  table lists 1000 MHz. Ticket 24. Turnip reaches 30 FPS at 93% GPU, so the cap
+  is not what limits it.
 
 ## Success criteria
 
@@ -236,9 +247,15 @@ Every experiment uses this protocol. Record results under the ticket's
    repeat it once, then write "not valid" and the numbers.
 8. **Record.** Build commit, driver, every setting that differs from the
    defaults, the `perf_summary.py` output for each run, the KGSL
-   `gpu_busy_percentage` mean, and the KGSL `gpuclk_khz` mean.
-9. **Raw files.** Keep logs, CSV files, traces and screenshots under `tmp/`.
-   Do not commit them.
+   `gpu_busy_percentage` mean, and the KGSL `gpuclk` mean.
+9. **Measure in the game, not at a menu.** Use
+   `tools/android/gameplay_scene.sh`, which walks into the saved chapter and
+   then moves the camera, and read the result with a `--warmup` long enough to
+   skip the boot and the menu walk. A frame rate measured on a title screen
+   barely touches the renderer, and that mistake has already produced one
+   wrong conclusion in this plan. Ticket 00 records it.
+10. **Raw files.** Keep logs, CSV files, traces and screenshots under `tmp/`.
+    Do not commit them.
 
 ## Constraints
 
