@@ -23,6 +23,7 @@ if(NOT ANDROID)
 	add_executable(
 		mem-tests
 		tests/allocator_tests.cpp
+		tests/perf_log_tests.cpp
 	)
 
 	target_include_directories(mem-tests PRIVATE include)

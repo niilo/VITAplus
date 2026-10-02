@@ -143,6 +143,7 @@ internal fun rememberSettingsSearchEntries(
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_check_updates, R.string.settings_emulator_check_updates_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_archive_log, R.string.settings_emulator_archive_log_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_log_compat_warn, R.string.settings_emulator_log_compat_warn_desc, scope = SettingsScope.Global))
+            add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_log, R.string.settings_emulator_perf_log_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_log_level, R.string.settings_emulator_log_level_desc, scope = SettingsScope.Global, keywords = "logging trace debug info warning error critical off"))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_overlay, R.string.settings_emulator_perf_overlay_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_overlay_detail, R.string.settings_emulator_perf_overlay_detail_desc, scope = SettingsScope.Global, keywords = "minimum low medium maximum"))

@@ -141,6 +141,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "log-active-shaders", false, log_active_shaders)                                         \
     code(bool, "log-uniforms", false, log_uniforms)                                                     \
     code(bool, "log-compat-warn", false, log_compat_warn)                                               \
+    code(bool, "perf-log", false, perf_log)                                                             \
     code(bool, "validation-layer", false, validation_layer)                                              \
     code(bool, "pstv-mode", false, pstv_mode)                                                           \
     code(bool, "show-mode", false, show_mode)                                                           \

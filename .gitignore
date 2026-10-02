@@ -88,6 +88,10 @@ fastlane/readme.md
 # local test output (logs, CSV, screenshots)
 /tmp/
 
+# Python bytecode from the tools/android tests
+__pycache__/
+*.pyc
+
 # Signing keys must never be committed. They live in 1Password and in GitHub secrets.
 *.jks
 *.p12

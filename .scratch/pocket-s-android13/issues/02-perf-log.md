@@ -1,6 +1,6 @@
 # 02: Port the perf-log setting to the Plus base
 
-Status: open
+Status: resolved
 Type: task
 Label: ready-for-agent
 Blocked by: 01
@@ -74,5 +74,78 @@ its close message points at that session's `## Answer`.
   either carry GPU timestamps or are empty.
 
 ## Answer
+
+Code merged to `master` as `be25c7c1`. The Linux build, the three googletest
+suites and the format check pass. The Android reldebug APK builds.
+
+- `perf-log` is in `config.h`, `native_config.cpp` and `EmulatorConfig.kt`.
+  The Kotlin field is in all four places a field needs: the field itself, the
+  copy, `equals` and `hashCode`.
+- The switch is in the Emulator section of the settings screen, next to the
+  performance overlay, not in the Debug section. On this base the log settings
+  and the overlay all sit in the Emulator section.
+- `perf_log::start()` is called from `load_app_impl`, which is where
+  `d392779e` put it. That is earlier than `run_app`.
+- **Step 4 is not done.** `scenes.csv` carries host time, not a GPU timestamp.
+  A GPU timestamp needs a timestamp query pool and a readback of it, and a
+  readback in the render path cannot be tested without a device. The column is
+  called `record_us` and not `submit_us` so no ticket reads it as GPU cost.
+  `timestampValidBits` and `timestampPeriod` are therefore not recorded either;
+  ticket 01 records them for the device, and a later ticket can add the query
+  pool once someone can measure whether it pays.
+
+### What one row means
+
+- `frames.csv`, one row: one call to `sceDisplaySetFrameBuf`, that is one
+  emulated frame.
+- `presents.csv`, one row: one `vkQueuePresentKHR`.
+- `scenes.csv`, one row: one `vkQueueSubmit`. **Not one GXM scene.** A scene
+  that the guest splits, through a mid-scene flush
+  (`renderer/src/vulkan/scene.cpp:119`) or a macroblock change
+  (`renderer/src/vulkan/context.cpp:745`), submits more than once. The draw
+  counter and the start time reset in `start_recording()`, so each row carries
+  the draws of its own recording. The first draft counted the scene and
+  produced duplicate rows for a split scene; a review found it and it is fixed.
+
+### What the off path costs
+
+`perf_log::write()` returns on `!s_enabled` without taking a lock, so the guest
+thread and the renderer thread pay one atomic load per frame and per present.
+The draw counter in `scene.cpp` is incremented on every draw call, also when
+the setting is off. `stop()` returns early while off, so nothing is built and
+no destructor is registered. `start()` reports a failure to create the writer
+thread instead of leaving the log half on.
+
+### Tests
+
+Seven googletests in `vita3k/mem/tests/perf_log_tests.cpp`, registered in the
+`mem` suite, which is the suite that already links `util`: a write before
+`start()` is dropped, `start()` truncates, each channel has its own file and
+header, `stop()` flushes what is left, `stop()` while off does nothing, two
+starts keep one channel, and `now_us()` advances.
+
+`tools/android/test_perf_summary.py` has seven tests, three of them new: the
+scenes values, a folder with no `scenes.csv`, a `scenes.csv` with rows outside
+the measured window, and the `--csv` output.
+
+### Line references corrected for this base
+
+The ticket cited `context.cpp:639` and `screen_renderer.cpp:574` for the two
+submit sites. On this base the submit is `context.cpp:655` and the present is
+`screen_renderer.cpp:588`.
+
+### Still to do on the device
+
+- A 60 second run writes about `60 * fps` rows to `frames.csv`, one row per
+  present to `presents.csv` and one row per submit to `scenes.csv`.
+- `device.sh pull-perf` pulls the `perf/` folder.
+
+## Comments
+
+2026-10-02: the two tickets this one replaces,
+`.scratch/pocket-s-optimization/issues/05-frame-timing-log.md` and
+`.scratch/plus-base/issues/04-perf-log.md`, are not closed here. The first was
+`claimed` by an earlier session and that session wrote no `## Answer`, so it
+closes with a pointer to this ticket rather than on its own.
 
 ## Comments

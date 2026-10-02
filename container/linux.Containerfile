@@ -20,4 +20,12 @@ RUN dnf -y install --setopt=install_weak_deps=False \
 ENV CCACHE_DIR=/ccache \
     CCACHE_MAXSIZE=20G \
     CCACHE_BASEDIR=/src
+
+# The repo is bind-mounted from the host, so git sees the submodules owned by
+# another uid and refuses to read them. Some build steps need a commit SHA from
+# a submodule (FFMPEG downloads a prebuilt for one), so mark every directory
+# safe. This is a container-local git config and does not touch the host
+# repository.
+RUN git config --global --add safe.directory '*'
+
 WORKDIR /src

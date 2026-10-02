@@ -27,6 +27,9 @@
 
 #include <util/log.h>
 #include <util/overloaded.h>
+#include <util/perf_log.h>
+
+#include <fmt/format.h>
 
 #include <algorithm>
 
@@ -322,6 +325,11 @@ void VKContext::start_recording(bool first_in_scene) {
         LOG_ERROR("Attempt to start recording while already recording");
         return;
     }
+
+    // A scene that the guest splits starts a new recording, so the perf-log
+    // draw count and start time belong to this recording, not to the scene.
+    scene_draw_calls = 0;
+    scene_start_us = perf_log::enabled() ? perf_log::now_us() : 0;
 
     if (render_target == nullptr) {
         LOG_ERROR("Recording started without a set command buffer");
@@ -640,6 +648,18 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     cmdbuffers_to_submit.clear();
     state.frame().rendered_fences.push_back(fence);
     state.submit_serial++; // seq-248
+
+    // One row per submit, not per GXM scene: a scene that the guest splits,
+    // through a mid-scene flush or a macroblock change, submits more than
+    // once. The draw count is the draws of this submit, because
+    // start_recording() resets it. The time is host time from the start of the
+    // recording to the submit, so it does not say how long the GPU was busy. A
+    // GPU timestamp needs a timestamp query pool and a readback of it.
+    if (perf_log::enabled()) {
+        const int64_t record_us = perf_log::now_us() - scene_start_us;
+        perf_log::write("scenes", "steady_us,draws,record_us",
+            fmt::format("{},{},{}", scene_start_us, scene_draw_calls, record_us));
+    }
 
     if (state.features.enable_memory_mapping) {
         // send it to the wait queue
