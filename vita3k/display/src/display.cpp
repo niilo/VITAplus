@@ -44,6 +44,7 @@
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <renderer/state.h>
+#include <util/thread_priority.h>
 
 #include <chrono>
 #include <motion/functions.h>
@@ -95,6 +96,7 @@ static ProcSample sample_process() {
 }
 
 static void freeze_watchdog_thread(EmuEnvState &emuenv) {
+    util::set_thread_name("vita3k-watchdog");
     DisplayState &display = emuenv.display;
     ProcSample prev = sample_process();
     while (!display.abort.load()) {
@@ -122,6 +124,7 @@ static void freeze_watchdog_thread(EmuEnvState &emuenv) {
 }
 
 static void vblank_sync_thread(EmuEnvState &emuenv) {
+    util::set_thread_name("vita3k-vblank");
     DisplayState &display = emuenv.display;
     std::thread watchdog(freeze_watchdog_thread, std::ref(emuenv));
 

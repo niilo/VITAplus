@@ -18,13 +18,28 @@
 
 #include <util/log.h>
 
+#include <cstring>
+
 #ifndef _WIN32
 #include <cerrno>
 #include <sys/resource.h>
 #include <sys/time.h>
 #endif
 
+#ifdef __linux__
+#include <sys/prctl.h>
+#elif defined(__APPLE__)
+#include <pthread.h>
+#endif
+
 namespace util {
+
+#ifdef __linux__
+// Linux stores the name in `comm`, which is TASK_COMM_LEN bytes including the
+// terminating zero. prctl does not report a cut, so a name that does not fit is
+// refused here instead of becoming a prefix that matches another thread.
+static constexpr size_t comm_len = 16;
+#endif
 
 bool set_thread_nice(int nice) {
     if (nice == 0)
@@ -48,6 +63,41 @@ bool set_thread_nice(int nice) {
         return false;
     }
     return true;
+#endif
+}
+
+bool set_thread_name(const char *name) {
+    if (name == nullptr || name[0] == '\0')
+        return false;
+
+#ifdef _WIN32
+    // The Windows equivalent is SetThreadDescription, which needs Windows 10
+    // version 1607. Nothing in this repository measures Windows, so no call is
+    // made and no failure is logged.
+    (void)name;
+    return false;
+#elif defined(__linux__)
+    if (strlen(name) >= comm_len) {
+        LOG_INFO("Thread name '{}' is longer than the {} bytes Linux keeps, so it was not set", name, comm_len - 1);
+        return false;
+    }
+    if (prctl(PR_SET_NAME, name, 0, 0, 0) != 0) {
+        LOG_INFO("Could not set the name of this thread to '{}': {}", name, strerror(errno));
+        return false;
+    }
+    return true;
+#elif defined(__APPLE__)
+    // pthread_setname_np returns the error number itself and does not set
+    // errno, so the returned value is the one to report, not errno.
+    const int err = pthread_setname_np(name);
+    if (err != 0) {
+        LOG_INFO("Could not set the name of this thread to '{}': {}", name, strerror(err));
+        return false;
+    }
+    return true;
+#else
+    (void)name;
+    return false;
 #endif
 }
 

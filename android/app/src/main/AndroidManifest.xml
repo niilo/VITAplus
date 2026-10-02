@@ -101,6 +101,12 @@
         android:requestLegacyExternalStorage="true"
         tools:targetApi="q">
 
+        <!-- simpleperf on a release build needs this. Without it the shell cannot
+             run the on-device profiler inside the app's own uid, and a
+             "simpleperf record" against org.vita3k.emulator from adb shell fails.
+             The tag grants nothing else: no root, no extra permission. -->
+        <profileable android:shell="true" />
+
         <!-- Main Compose UI activity (launcher) -->
         <activity android:name=".MainActivity"
             android:theme="@style/Theme.Vita3K.Starting"

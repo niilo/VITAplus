@@ -55,9 +55,18 @@ their output.
   repository. `gpu_busy_percentage` from KGSL sysfs is the substitute, and it
   is readable without root.
 - Thread names matter: the report separates threads by `comm`, 15 bytes. The
-  renderer thread, the GPU wait thread and the vblank thread get short unique
-  names.
+  renderer thread, the GPU wait thread, the vblank thread and the freeze
+  watchdog get short unique names, `vita3k-render`, `vita3k-gpuwait`,
+  `vita3k-vblank` and `vita3k-watchdog`. A name that does not fit in `comm` is
+  refused and logged rather than truncated, because prctl does not report a cut
+  and a truncated name can collide with another thread in a report.
+- `latency` reads the layer name from `dumpsys SurfaceFlinger --list` instead of
+  hard-coding it. The name carries a hash that changes when the activity is
+  recreated, and the same listing also holds bookkeeping entries for the same
+  package, `ActivityRecord`, `ActivityRecordInputSink`, `WindowToken` and
+  `StartingWindow`, which have to be filtered out or the wrong layer is picked.
 - The measurement protocol in `.scratch/pocket-s-android13/spec.md` needs a CPU
-  temperature for its cooldown step, so the `clocks` command carries one. If no
-  temperature zone is readable without root, the protocol falls back to a fixed
-  wait and says so.
+  temperature for its cooldown step, so the `clocks` command carries one. It is
+  the old `thermal` command under a new name, with the CPU-0 and CPU-1 clusters
+  reported separately. If no temperature zone is readable without root, the
+  command says so and the protocol falls back to a fixed wait.
