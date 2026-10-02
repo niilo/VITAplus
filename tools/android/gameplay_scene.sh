@@ -57,6 +57,16 @@ if adb shell dumpsys window | grep -q 'isKeyguardShowing=true'; then
     exit 1
 fi
 
+# The screen sleeps after about 30 s of nothing, and a run spends most of its
+# time waiting. Without this the device locks in the middle of a run and the
+# game stops. The value is put back when the script finishes.
+prev_timeout="$(adb shell settings get system screen_off_timeout | tr -d '\r')"
+restore_timeout() {
+    [[ "$prev_timeout" =~ ^[0-9]+$ ]] && adb shell settings put system screen_off_timeout "$prev_timeout" > /dev/null 2>&1
+}
+trap 'restore_timeout; '"$device"' release "$package" > /dev/null' EXIT
+adb shell settings put system screen_off_timeout 1800000 > /dev/null 2>&1
+
 # Touch positions are fractions of the landscape screen, the same convention
 # uncharted_scene.sh uses. The game runs in landscape and the device reports
 # the portrait order, so the longer side is the width.
