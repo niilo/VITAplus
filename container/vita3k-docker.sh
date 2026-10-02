@@ -104,6 +104,9 @@ run_in() {
     # differently but accepts the flag, so pass it for both.
     args=(--cpus "$cpus" "${args[@]}")
     if [[ "$flavor" == "android" ]]; then
+        # The Android image installs the SDK, the NDK and vcpkg under /opt as
+        # root, and vcpkg needs to write to its own buildtrees. So this flavor
+        # runs as root and chowns what it produced afterwards.
         ensure_volume "$android_cache_volume"
         # ANDROID_USER_HOME keeps debug.keystore in the cache volume. Without
         # it, each run makes a new debug key, and Android refuses to update an
@@ -113,11 +116,29 @@ run_in() {
         # .signing/release/ (see docs/release.md).
         args+=(-e "VITA_SIGN_WITH_RELEASE_KEY=${VITA_SIGN_WITH_RELEASE_KEY:-0}")
     else
+        # The Linux image has nothing that needs root, so build as the host uid.
+        # The files in build/ then belong to the host user and an incremental
+        # build can reuse them.
         ensure_volume "$linux_cache_volume"
+        args+=(--user "$(id -u):$(id -g)" --env "HOME=/tmp/vita3k-home")
         args+=(-v "$linux_cache_volume:/ccache")
     fi
     [[ -t 0 && -t 1 ]] && args+=(-it)
-    "$engine" run "${args[@]}" "$(image_tag "$flavor")" "$@"
+    local status=0
+    "$engine" run "${args[@]}" "$(image_tag "$flavor")" "$@" || status=$?
+    if [[ "$flavor" == "android" ]]; then
+        chown_paths
+    fi
+    return $status
+}
+
+# An Android build runs as root and writes into build/ and android/app/build/.
+# Hand those folders back to the host user so a later git or cmake command can
+# read and remove them.
+chown_paths() {
+    "$engine" run --rm --user 0:0 -v "$repo_root:/src" --entrypoint /bin/sh \
+        "$(image_tag linux)" -c "chown -R $(id -u):$(id -g) /src/build /src/android 2>/dev/null || true" \
+        > /dev/null 2>&1 || true
 }
 
 configure_cmd="cmake --preset $preset"
