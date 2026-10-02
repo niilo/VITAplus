@@ -1,6 +1,7 @@
 # 11: Raise the priority of the renderer and wait threads
 
-Status: open
+Status: claimed
+Claimed: 2026-10-02 agent session
 Type: task
 Label: ready-for-agent
 Blocked by: 03
