@@ -81,3 +81,4 @@ core. Whether cpu7 then runs fast is a separate question this ticket asks.
 - A verdict: rejected with numbers, or a pointer to the ticket that changes it.
 
 ## Comments
+## Answer
