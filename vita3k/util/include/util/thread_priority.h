@@ -44,4 +44,18 @@ namespace util {
 // failed or when `nice` was 0.
 bool set_thread_nice(int nice);
 
+// Set the name of the calling thread, so a profiler or a trace can separate it
+// from the others. Linux keeps the name in `comm`, which is 16 bytes including
+// the terminating zero, so the kernel cuts anything longer at 15 characters. A
+// trace groups threads by `comm`, so the same name means the same thread in
+// every report.
+//
+// Call this from inside the thread it applies to.
+//
+// Returns true when the name was set. An empty name is refused. A name of 16 or
+// more characters is also refused rather than passed to the kernel, because a
+// cut name can collide with another thread in a report, and a silent collision
+// is harder to see than a refused call.
+bool set_thread_name(const char *name);
+
 } // namespace util

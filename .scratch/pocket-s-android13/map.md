@@ -405,7 +405,7 @@ order changes from what the first draft assumed:
    a second full-panel pass, GMEM versus direct rendering, attachment layouts,
    and the unused input attachment on the raster-order path.
 8. **30**, which needs no baseline and can run at any point.
-6. **07, 08, 09, 10, 16, 17, 20, 21, 23, 25, 26, 27, 29** as their blockers
+9. **07, 08, 09, 10, 16, 17, 21, 23, 25, 26, 27, 29** as their blockers
    clear.
 
 Tickets **11, 12, 14 and 25** are expected to close as rejected or flat, from
@@ -452,6 +452,26 @@ measurement run on them before recording the reason they close.
   where the emulator's watchdog fired, where the thermal status during the run
   was 3 or above, or where the samples covered a menu. The first energy
   baseline attempted was rejected by that rule, which is why the rule exists.
+- 2026-10-03, ticket 03: **the harness is built and three of its four commands
+  run on the device.** `device.sh` gains `perf`, `trace`, `clocks` and
+  `latency`; `clocks` replaces `thermal` so there is one set of sysfs paths. The
+  four host threads now carry short names, so a report separates them. Measured
+  on the device: `trace` produced a 3.5 MB trace carrying `sched_switch`,
+  `power/gpu_frequency`, `gpu_mem_total` and `thermal_temperature`; `clocks`
+  reads every column; `latency` finds the SurfaceFlinger layer. `perf` is not
+  verified, because an APK cannot be built from a git worktree.
+- 2026-10-03, ticket 03: **the Android APK cannot be built from a git
+  worktree.** SDL's `GetGitRevisionDescription.cmake` requires a `.git`
+  *directory* with `HEAD` and `packed-refs`, and a worktree has `.git` as a
+  file. Confirmed pre-existing by building with the branch's only manifest
+  change stashed. `container/vita3k-docker.sh android release` has to run in the
+  main checkout. The same applies to `git submodule update --init --recursive`,
+  which reports success and leaves the working trees empty.
+- 2026-10-03, ticket 03: **the GPU is not pinned to its cap.** With the emulator
+  up and the GPU idle, `gpuclk` reads 220 MHz against a 680 MHz `max_gpuclk`,
+  and it read 680 MHz only while a game was running. So the cap is a ceiling,
+  not a floor, and the energy question for ticket 24 is about what holds the
+  frame rate, not about raising a fixed clock.
 
 ## Fog
 

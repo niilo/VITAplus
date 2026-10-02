@@ -226,6 +226,7 @@ void reset_command_list(CommandList &command_list) {
 }
 
 static void render_loop(renderer::State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
+    util::set_thread_name("vita3k-render");
     util::set_thread_nice(state.render_thread_nice);
 
     if (state.precompile_requested) {

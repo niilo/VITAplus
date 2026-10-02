@@ -1,9 +1,10 @@
 # 03: Build the profiling harness
 
-Status: open
+Status: claimed
 Type: task
 Label: ready-for-agent
 Blocked by: 01
+Claimed: 2026-10-03 cline session (pocket-s-03-profile-harness)
 
 ## Goal## The harness carries the energy axis, not only the frame data
 
@@ -105,4 +106,194 @@ cannot tell whether a change moved GPU time or CPU time. Build the tooling once.
 
 ## Answer
 
+The code part is done on branch `pocket-s-03-profile-harness`. Verified on the
+device (00314BHD01004402, Android 13) for the three commands that need no game
+running: `clocks` and `trace` produce output, `latency` finds the layer.
+`perf` needs a release APK built from this branch, which is the one step left.
+
+### 1. Manifest flag
+
+`<profileable android:shell="true" />` is in
+`android/app/src/main/AndroidManifest.xml`, inside `<application>` and before the
+first activity. Without it the shell cannot run the on-device profiler inside the
+app's own uid, and `adb shell simpleperf record --app org.vita3k.emulator` fails
+on a release build. The tag needs no root and no permission.
+
+### 2. Symbols
+
+`device.sh perf` does the whole loop:
+
+- finds the unstripped `libVita3K.so` under
+  `android/app/build/intermediates/cxx` (newest match, because Gradle puts it
+  under a hash directory), or takes `VITA3K_UNSTRIPPED_LIB`;
+- pushes it to `/data/local/tmp/native_libs/`;
+- records with `--call-graph dwarf --symfs`, because a release build strips
+  frame pointers, so the frame-pointer call graph has nothing to walk;
+- pulls `perf.data` and the symbols into `tmp/perf/<label>/`;
+- builds the binary cache and the HTML report with `binary_cache_builder.py` and
+  `report-sample` from `ANDROID_NDK_HOME`.
+
+The raw `perf.data` and the symbols are the result and are pulled whether or not
+the NDK is present. Only the HTML view needs it.
+
+### 3. Thread names
+
+`util::set_thread_name` is in `vita3k/util/`, next to `set_thread_nice`, because
+both are host thread control. It is called from inside each thread, which is the
+only place a thread may name itself.
+
+| Name | Thread |
+|---|---|
+| `vita3k-render` | `render_loop` (`renderer/src/batch.cpp`) |
+| `vita3k-gpuwait` | `VKContext::wait_thread_function` (`renderer/src/vulkan/context.cpp`) |
+| `vita3k-vblank` | `vblank_sync_thread` (`display/src/display.cpp`) |
+| `vita3k-watchdog` | `freeze_watchdog_thread` (`display/src/display.cpp`) |
+
+The watchdog was not in the ticket. It is started from inside the vblank thread
+and shows up in every trace as an unnamed thread, so it is named here too.
+
+`comm` is 16 bytes including the terminating zero. A name of 16 or more
+characters is **refused** and logged, not truncated: prctl does not report a cut,
+and a truncated name can collide with another thread in a report, which is the
+one failure this function exists to prevent. All four names are 13 to 15
+characters and fit.
+
+On Windows the function returns false and does nothing. Nothing in this
+repository measures Windows, so there is no `SetThreadDescription` call to
+justify. macOS uses `pthread_setname_np`.
+
+### 4. Perfetto
+
+`device.sh trace <package> <label> <secs>` runs the `sched`, `freq`, `gfx`,
+`view`, `hal`, `sync`, `idle`, `power`, `thermal` and `membus` atrace categories
+plus the `sched/sched_switch`, `sched/sched_blocked_reason`,
+`power/cpu_frequency`, `power/gpu_frequency`, `gpu_mem/gpu_mem_total` and
+`thermal/thermal_temperature` ftrace events, and pulls the result to
+`tmp/trace/<label>/trace.pftrace`.
+
+Measured on the device: a 10 second recording of the running emulator produced a
+3.5 MB trace, and `strings` on it finds `sched_switch`, `power/gpu_frequency`,
+`gpu_mem_total`, `thermal_temperature` and `cpu_frequency`.
+
+There is no `vulkan` or `egl` atrace category on Android 13, so none is asked
+for.
+
+### 5. Surface timing
+
+`device.sh latency` reads the layer name from `dumpsys SurfaceFlinger --list`
+rather than hard-coding it, because the name carries a hash that changes when the
+activity is recreated. The bookkeeping entries SurfaceFlinger also lists for the
+same package (`ActivityRecord`, `ActivityRecordInputSink`, `WindowToken`,
+`StartingWindow`) are filtered out, so the app's own surface is selected. The
+name is written to `tmp/latency/<label>/layer.txt` next to the CSV.
+
+Measured on the device: the layer was found and `--latency` answered with a
+refresh period of 16666666 ns, which is 60 Hz. The three per-frame columns were
+all zero, because the device was locked and the app had presented nothing. So the
+command is correct and the CSV is empty for that reason. **An unlocked device with
+the game in play is needed to confirm the columns carry values.**
+
+### 6. Clocks and thermal
+
+The `thermal` command is now `clocks`, and it is the only one. The two disagreed
+about whether the Qualcomm cpufreq files live under `cpu*/cpufreq` or
+`policy*/cpufreq`, and only the first is right on this device, so one command
+means one set of paths. The old name still runs and prints where the new one is,
+so an old command line fails with a message instead of a silent no-op.
+
+Columns, measured on the device in a 3 second run:
+
+```
+second,gpuclk_hz,gpu_busy_pct,max_gpuclk_hz,throttling,temp_gpu_mdeg,
+cpu0_khz,cpu0_max_khz,cpu3_khz,cpu3_max_khz,cpu7_khz,cpu7_max_khz,
+temp_cpu0_mdeg,temp_cpu1_mdeg
+```
+
+Every column carries a value, so the header and the rows agree. `temp_gpu_mdeg`
+reads the KGSL `temp`. `temp_cpu0_mdeg` is the maximum over the `cpu-0-*` zones
+and `temp_cpu1_mdeg` the maximum over the `cpu-1-*` zones, which keeps the two
+clusters apart. An earlier version collapsed them into one number and gave two
+columns the same value.
+
+Sample from the device, with the emulator running and the GPU idle:
+
+```
+gpuclk: mean 680 MHz, min 680 MHz over 3 s
+gpu busy: mean 1.0 percent
+CPU temperature: peak 41.0 C (cpu-0 cluster), 42.0 C (cpu-1 cluster)
+```
+
+This confirms two facts the map already holds and adds one detail:
+
+- `max_gpuclk` is 680 MHz and the observed clock is 680 MHz even when the GPU is
+  idle, so the 1000 MHz in the hardware table is not reachable on this device.
+  Ticket 24.
+- `cpu7_max_khz` is 3360000 and `cpu7_khz` reads 595200, so the prime core runs
+  at 18% of its maximum while the emulator is up. Ticket 29.
+
+`device_clock_sample.sh` and `device_power_sample.sh` were left alone. The first
+was written before the retarget and `clocks` covers it; ticket 29 references it,
+so it is not deleted here.
+
+### 7. ADR
+
+`docs/adr/0001-android-profiling-tools.md` exists and is correct as written. Two
+details it did not mention were learned while running the commands, and are
+added there: the layer name has to be filtered out of the SurfaceFlinger
+bookkeeping entries, and a `comm` name that does not fit is refused rather than
+truncated.
+
+### 8. Tests
+
+Three googletests in `vita3k/mem/tests/thread_priority_tests.cpp`, next to the
+existing four for the nice value: a name that was set reads back, 15 characters
+are accepted and 16 are refused without changing the thread, and an empty name
+and a null pointer are refused. The read-back tests skip off Linux, where
+`PR_GET_NAME` does not exist.
+
+### What is left
+
+- `device.sh perf <package> <label>` has to run against a release APK built from
+  this branch, with the emulator in play, to confirm `perf.data` and the HTML
+  report both come out with symbols resolved.
+- `device.sh latency` has to run against an unlocked device to confirm the three
+  frame columns carry values.
+- Both need the game reachable, so they are the human half of this ticket. The
+  ticket stays `claimed`.
+
 ## Comments
+
+- The submodules were shared with the main checkout and their working trees were
+  empty in this worktree, so `container/vita3k-docker.sh build` first failed on
+  "Submodule external/ffmpeg is empty" and then on "ARCHITECTURE variable is not
+  set up", because `external/dynarmic/CMakeModules/DetectArchitecture.cmake` was
+  missing too. Each was restored with
+  `git --git-dir=<gitdir from the submodule .git file> --work-tree=<path> checkout -f <recorded sha>`.
+  A worktree needs this after `git submodule update --init --recursive`: the
+  update reports success and leaves the working trees empty, because the
+  gitdir link in each submodule is relative and does not resolve from a
+  worktree.
+- `git diff` shows 21 `external/*` lines changed. That is the same artifact and
+  must not be committed. Only `vita3k/`, `tools/`, `android/` and `.scratch/`
+  belong in the commit.
+- **The Android APK cannot be built from a git worktree, for a reason unrelated
+  to this ticket.** SDL's own `external/sdl/cmake/GetGitRevisionDescription.cmake`
+  walks up from its source directory looking for a `.git` **directory**, and then
+  reads `HEAD` and `packed-refs` from it. A worktree has `.git` as a *file*, and
+  the container mounts only the worktree at `/src`, so no `.git` directory exists
+  there at all. The result is `CMake Error: File /src/.git/HEAD does not exist`,
+  and after working around that, `File /src/.git/packed-refs does not exist`.
+
+  This was confirmed to be pre-existing: `container/vita3k-docker.sh android
+  release` was run with this ticket's manifest change stashed, so the tree was
+  clean, and it failed with the same error 7 times in the log. It is not caused
+  by the `<profileable>` tag.
+
+  `processReleaseMainManifest` passes, which is the task that parses the
+  manifest, so the manifest change itself is good. `:app:configureCMakeRelease`
+  is the task that fails, and it fails in SDL.
+
+  **So `device.sh perf` cannot be verified here.** It needs an APK, and the APK
+  needs a normal checkout. On this machine `container/vita3k-docker.sh android
+  release` has to be run in the main checkout at `/home/pielinen/src/VITAplus`,
+  not in a worktree.

@@ -19,11 +19,16 @@
 #include <gtest/gtest.h>
 
 #include <iostream>
+#include <string>
 
 #ifndef _WIN32
 #include <cerrno>
 #include <sys/resource.h>
 #include <sys/time.h>
+#endif
+
+#ifdef __linux__
+#include <sys/prctl.h>
 #endif
 
 namespace {
@@ -124,3 +129,57 @@ TEST(ThreadPriority, RaisingTheNiceValueWorks) {
     util::set_thread_nice(before);
 }
 #endif
+
+// The name of the calling thread, and whether the read worked. Linux keeps it in
+// `comm`, which prctl reads with PR_GET_NAME. There is no equivalent read on the
+// other platforms, so those tests only check the contract of the arguments.
+#ifdef __linux__
+std::string current_thread_name() {
+    char buffer[16] = {};
+    if (prctl(PR_GET_NAME, buffer, 0, 0, 0) != 0)
+        return {};
+    return std::string(buffer);
+}
+#endif
+
+// The point of the function: a report separates threads by name, so a name that
+// was set has to be readable back.
+TEST(ThreadName, TheNameIsReadableBack) {
+#ifdef __linux__
+    ASSERT_TRUE(util::set_thread_name("vita3k-test"));
+    EXPECT_EQ(current_thread_name(), "vita3k-test");
+#else
+    GTEST_SKIP() << "reading the thread name back needs Linux";
+#endif
+}
+
+// A name of exactly 15 characters fits in the 16 bytes Linux keeps. 16 does not,
+// and prctl would cut it silently, which would make two threads look alike in a
+// report, so the function refuses it instead.
+TEST(ThreadName, TheLongestNameThatFitsIsAccepted) {
+#ifdef __linux__
+    const std::string fits(15, 'a');
+    const std::string does_not_fit(16, 'b');
+
+    EXPECT_TRUE(util::set_thread_name(fits.c_str()));
+    EXPECT_EQ(current_thread_name(), fits);
+
+    EXPECT_FALSE(util::set_thread_name(does_not_fit.c_str()));
+    // The refused name must not have touched the thread, so a report still
+    // shows the last name that was accepted.
+    EXPECT_EQ(current_thread_name(), fits);
+
+    // Put the thread back to the name googletest gives it, so a later test in
+    // this process does not inherit a name from this one.
+    util::set_thread_name("gtest-worker");
+#else
+    GTEST_SKIP() << "the comm length limit is a Linux one";
+#endif
+}
+
+// An empty name has nothing to set and a null pointer is not a name. Both are
+// refused rather than guessed at.
+TEST(ThreadName, EmptyAndNullAreRefused) {
+    EXPECT_FALSE(util::set_thread_name(""));
+    EXPECT_FALSE(util::set_thread_name(nullptr));
+}
