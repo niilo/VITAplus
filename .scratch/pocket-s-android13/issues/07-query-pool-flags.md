@@ -52,6 +52,13 @@ This ticket can make the picture wrong without crashing or tripping the
 validation layer. Anything other than the current default is a measurement, not
 a candidate.
 
+**Driver scope.** The plan measures on Turnip, and the hang this ticket is about
+was reported on Turnip: RPCS3 issue 18828 is Adreno 830 with Turnip 26.1.0, and
+PR 19561 fixed it by forcing strict query scopes on Adreno and Turnip. So this
+check belongs on Turnip. Ticket 01 recorded the stock driver's extension list,
+which has `VK_EXT_host_query_reset` and nothing that changes the picture; leave
+the stock driver out.
+
 ## Acceptance
 
 - The flags are written down with the file and line.

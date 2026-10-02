@@ -1,6 +1,6 @@
 # 11: Raise the priority of the renderer and wait threads
 
-Status: claimed
+Status: rejected
 Claimed: 2026-10-02 agent session
 Type: task
 Label: ready-for-agent
@@ -119,14 +119,26 @@ The ADPF hint in ticket 13 is the remaining lever for CPU placement, and it
 does not depend on this one. If ticket 11 measures no change, ticket 13 is the
 one to spend time on.
 
-### Still to do on the device
+### Rejected, and why the ticket closes here
 
-- Set `thread-nice-renderer: -10` and read the log line. If the call is
-  refused, this ticket is `rejected` and the log line is the evidence.
-- If it is applied, run A/B/A on the 60 FPS title and the 30 FPS title and
-  record FPS, the frame interval 99th percentile and `cpu-cycles` per frame.
-- `adb shell cat /proc/<pid>/limits` gives `Max nice priority` for the running
-  app, which is the value that decides.
+The kernel rule is settled by the container measurement above, and ticket 00
+measured that there is nothing to win even if it were not. The emulator overlay
+reads **CPU 23% on the stock driver and 43% on Turnip**, against GPU 99% and
+93%. There is no host-time headroom for a priority change to convert into frame
+rate, so an A/B would measure noise twice.
+
+`util::set_thread_nice` stays in the tree as inert code, default 0. It is small,
+it is correct, and it documents the finding. Nothing depends on it.
+
+One reading is still worth having, because it turns the finding into a device
+fact rather than a container fact:
+
+```
+adb shell cat /proc/<pid>/limits
+```
+
+`Max nice priority` is the value that decides, and it should read 0 on an
+unprivileged app. Record it under `## Comments` and stop. Do not run the A/B.
 
 ## Comments
 

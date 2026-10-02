@@ -12,6 +12,11 @@ and does the bandwidth compression stay on for the color surfaces?
 
 ## The limits, from the vendor
 
+Ticket 01 measured `gpu_model = AdrenoA32`, and Mesa maps that to the `FDA32`
+bucket. Every number below was measured on Adreno 640, 730 or 750, not on this
+part, so treat them as a shape rather than a threshold. Re-measure rather than
+assume, and record where each number came from.
+
 Qualcomm documents the A7xx hardware limits as multiples of 16, not the values
 the driver reports:
 
@@ -59,20 +64,25 @@ and `maxUniformBufferRange` is 64 KiB.
 4. Run A/B/A on the titles that had a crossing pipeline. Record FPS, the frame
    interval 99th percentile, GPU busy percentage and GPU clock.
 5. UBWC: log whether the driver keeps the bandwidth compression on for the
-   color surfaces. The driver decides this, so read it from the driver log or
-   from a counter if one is exposed. Then test the two features the vendor
-   document names as UBWC disablers and that this code uses: the mutable format
-   flag on the F16 surfaces, and the combination of `eSampled` with
-   `eInputAttachment` on one image. Measure before and after, and check the
-   picture on an F16 title.
+   color surfaces. **UBWC is a Qualcomm driver feature and Turnip has no
+   equivalent**, so this step has no answer on the measured driver. Keep it as a
+   stock-driver compatibility note and say so in the answer, rather than leaving
+   it looking open.
+
+   What survives on Turnip is the same question as ticket 06's new step 2: the
+   mutable format flag on the F16 surfaces (`surface_cache.cpp:756-757`) and
+   `eSampled` together with `eInputAttachment` on one image (`:770`) are the two
+   features this code uses that a tile-based driver may pay for. Do not measure
+   that here; ticket 06 owns it and this ticket should cross-reference it.
 
 ## Acceptance
 
 - The per-pipeline counts, with the pipelines that cross a limit named by
   shader hash.
 - A measured result for the sampler merging, or `Status: rejected`.
-- A statement about UBWC for the color surfaces: on or off, and what the app can
-  do about it.
+- For the stock driver only: a statement about UBWC for the color surfaces. Say
+  plainly that the measured driver has no UBWC, so the item does not apply to
+  it.
 
 ## Answer
 

@@ -20,12 +20,18 @@ value the preset should set for this device.
 
 ## Steps
 
-1. Run the A/B/A protocol at 1.0, 1.5, 2.0 and 2.5 on each benchmark title.
+1. **Resolution 2 is already measured on Turnip**: ticket 00 gives 29.96 FPS,
+   100% of seconds at target and a 43.43 ms p99, at 93% GPU busy. That is the
+   reference point, not a row to re-run. So:
+   - on the 30 FPS title, test 2.5 upward only, since 2.0 is known to hold;
+   - on the 60 FPS title, test 1.0, 1.5 and 2.0, because that title does not
+     exist in the current measurements.
    Record FPS, the frame interval 99th percentile, GPU busy percentage and GPU
    clock.
-2. Read the result with the pixel table above, not with FPS alone. A title that
-   holds 30 FPS at 2.5x is spending six times the GPU work for the same frame
-   rate.
+2. Read the result with the pixel table above, not with FPS alone. A title
+   that holds 30 FPS at 2.5x while already sitting at 93% GPU busy at 2.0x is by
+   definition no longer GPU-bound at 2.5x, which is the verdict ticket 05 needs.
+   Write that number down; it answers ticket 05's step 7 for that title.
 3. Find the largest multiplier each title holds its target at, with the frame
    interval 99th percentile still inside criterion 2 of `../spec.md`.
 4. Check that the resolution multiplier and the memory mapping mode interact.

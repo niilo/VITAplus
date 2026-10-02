@@ -9,6 +9,21 @@ Blocked by: 04
 
 How much of a frame goes into uploading textures, and what limits it?
 
+## Driver scope, after ticket 00
+
+The plan measures on Turnip, which is page-table mapped, so the dominant cost
+in `map.md` item 4, a host `memcpy` of every vertex, index and uniform range, is
+**double-buffer only and does not run on the measured driver**. The four-way
+split in step 1 will therefore not look the way that map entry describes. That
+entry is stock-only and the map now says so.
+
+This ticket also owns the GPU timestamp question that ticket 02 left open. Read
+`queueFamilyProperties[general_family_index].timestampValidBits` and the
+physical device `timestampPeriod`, and record both. If `timestampValidBits` is
+not 0, note that `scenes.csv` could carry GPU timestamps through a query pool.
+If it is 0, close the question for good. Ticket 02 promised this to a later
+ticket and named none, so it is here.
+
 ## Context
 
 - `NB_TEXTURE_STAGING_BUFFERS` is 16
@@ -45,9 +60,13 @@ How much of a frame goes into uploading textures, and what limits it?
    ticket is worth anything.
 2. Write to `scenes.csv` from ticket 02: bytes uploaded per scene, the number
    of staging buffer fence waits, and the total time blocked on them.
-3. Fence waits: put `NB_TEXTURE_STAGING_BUFFERS` behind a temporary config
-   value, default 16, and run A/B/A at 16 and 32. Check first that 32 does not
-   push peak memory past what ticket 01 step 5 recorded for this device.
+3. Fence waits: `NB_TEXTURE_STAGING_BUFFERS` is a `constexpr` that sizes a
+   fixed array (`types.h:35`), so a run-time count needs a container that can
+   grow. Read that before deciding whether to change it. If it is changed, run
+   A/B/A at 16 and 32, and check that 32 does not raise peak memory: read
+   `dumpsys meminfo org.vita3k.emulator` while the game runs. Ticket 01 asked
+   for that reading and its answer does not contain it, so it has not been
+   taken yet.
 4. Hashing: wire `hashless-texture-cache` to the Vulkan backend behind a
    temporary config value, default off, and run A/B/A. A wrong picture here
    shows as a stale or a wrong texture, and it does not crash, so take

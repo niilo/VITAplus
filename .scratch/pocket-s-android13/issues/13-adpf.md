@@ -5,11 +5,25 @@ Type: task
 Label: ready-for-agent
 Blocked by: 03
 
-## Goal
+## Goal, after ticket 00
 
-The emulator runs guest threads, a renderer thread, a GPU wait thread, a vblank
-thread and audio threads. The system does not know which ones a frame depends
-on. ADPF is the supported way to say so.
+**Not a frame-rate lever.** Ticket 00 measured the emulator overlay at
+**GPU 99% busy on the stock driver and 93% on Turnip, against CPU 23% and 43%**.
+The frame rate is set by the GPU. Moving a thread to another core cannot change
+it, and the expected result of the A/B is flat.
+
+What this ticket is still for: **ticket 29.** The prime core sits at 595 MHz
+against a 3360 MHz maximum, in most samples of both runs, because
+`top-app/cpu.uclamp.min` reads `0.00` and nothing in the app asks for it. ADPF
+is the only supported way an app can ask. So the question is narrow and worth
+one measurement:
+
+> If the renderer thread lands on cpu7 because ADPF puts it there, does the
+> governor raise the bin?
+
+The answer does not change the frame rate. It decides whether the core is
+reachable at all from inside an app, which is worth knowing before the next
+plan assumes it is not.
 
 ## What is available on Android 13
 
@@ -45,17 +59,20 @@ on. ADPF is the supported way to say so.
 
 ## Measurement
 
-After ticket 04 has a baseline, run A/B/A on the 60 FPS title and the 30 FPS
-title with the setting off and on. Record:
+Run with the setting off and on, on the 30 FPS title, with
+`tools/android/gameplay_scene.sh`. Record:
 
-- FPS, frame interval 99th percentile.
-- CPU clock per cluster from ticket 03. If the hint works, the clock rises
-  earlier in each frame.
-- `cpu-cycles` per frame from simpleperf. If the clock rises and cycles per
-  frame stay flat, the threads are running faster.
+- **The cpu7 clock**, from `tools/android/device.sh clocks`. That is the point
+  of the ticket.
+- FPS, frame interval 99th percentile, and GPU busy percentage. **Record these
+  as expected-flat controls**, not as the outcome. If they do move, that is a
+  surprise worth recording as such.
+- The cgroup `top-app/cpu.uclamp.min` while the game runs, from
+  `/dev/cpuctl/top-app/cpu.uclamp.min`, so the reader can see whether the
+  governor had any floor to work with.
 
-If the CPU clock does not move, the hint is not being honored, and that is worth
-writing down so nobody tries it again.
+A null result on cpu7 closes the question for an app: ticket 11 already closed
+the other route, and there is no third one.
 
 ## Acceptance
 

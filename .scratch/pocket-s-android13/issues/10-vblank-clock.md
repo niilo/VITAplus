@@ -34,6 +34,12 @@ on the old base. Port it.
 
 ## Measurement
 
+**Expect little here.** Ticket 00 measured the 30 FPS title at a 43.43 ms p99,
+already inside criterion 2 of `../spec.md`, at 93% GPU busy. There is little
+headroom for a period change to recover on that title. The 60 FPS title is the
+only one where it could matter, and that title does not exist until ticket 04
+picks it, so this ticket needs ticket 04 as well as ticket 02.
+
 After ticket 04 has a baseline, run A/B/A on the 60 FPS title and the 30 FPS
 title at 16666 and at 16683. Record the wake-up error 99th percentile, the
 frame interval 99th percentile, and GPU clock. Keep a change only if it lowers

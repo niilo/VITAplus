@@ -20,7 +20,15 @@ Blocked by: 22, 07
    - A short "Ayaneo Pocket S" section in `CLAUDE.md`: the recommended driver,
      what the preset sets, how to reset it, and the `setprop` command for any
      Turnip flag that ticket 19 kept. Under 20 lines.
+   - The single fact a future reader needs: **the stock driver is 5.2 times
+     slower in gameplay because it is forced onto `direct_fragcolor`**.
+     `CLAUDE.md` already carries the numbers after ticket 00. Make sure the
+     section states the cause, not only the numbers, because the numbers were
+     wrong twice before this.
    - One line per rejected ticket with its number, so nobody tries it again.
+     That includes two findings living in an open ticket rather than in a
+     rejected one: `high-accuracy: true` is inert on the stock driver, and
+     `disable-programmable-blending` is rejected inside ticket 05.
    - A "what is still slow" list, with the measured cost of each item, so the
      next plan starts from measurements instead of theories.
 6. Close the old tickets that this plan replaces, with a pointer to the ticket

@@ -18,11 +18,11 @@ settings that already exist.
 
 | Setting | Default here | What it changes |
 |---|---|---|
-| `high-accuracy` | `true` | Off: texture viewport on (`renderer.cpp:1088`), subpass-input framebuffer fetch. On: shader interlock, which restarts the render pass per draw (`scene.cpp:463`), and texture viewport off. |
+| `high-accuracy` | `true` | Off: texture viewport on (`renderer.cpp:1088`), subpass-input framebuffer fetch. On: texture viewport off. **It does not switch the fetch path on this device.** Neither driver has `fragmentShaderSampleInterlock`, and Turnip has raster order access, which forces interlock off at `renderer.cpp:863`. Measured inert on stock at 6.39 against 5.76 FPS. |
 | `memory-mapping` | `page-table` | Turnip only. On the stock driver this is forced to `double-buffer` (`renderer.cpp:1112`). `double-buffer` copies guest memory into the GPU-visible buffer per vertex, index and uniform range (`renderer.cpp:2396`, `:2415`, `:2474`). |
 | `disable-surface-sync` | `false` | Off means `perform_surface_sync()` runs at the end of every scene (`vulkan/context.cpp:610`), which ends the scene with a `vkCmdCopyImageToBuffer` (`surface_cache.cpp:2608`). A game that reads back its own color surface breaks with this on. |
 | `surface-sync-clamp-rt` | `true` | Clamps the write-back region to what was drawn. Directly reduces the bytes that step 3 copies. |
-| `disable-programmable-blending` | `false` | Turns off the subpass-input framebuffer fetch path. On a tile renderer a framebuffer fetch also disables LRZ. |
+| `disable-programmable-blending` | `false` | Turns off the subpass-input framebuffer fetch path. On a tile renderer a framebuffer fetch also disables LRZ. **Verdict: rejected**, see below. |
 | `guest-cores` | `3` | How many guest threads run at once. Lower can raise FPS and hurt latency. It has no field in `EmulatorConfig.kt`, so `device.sh config-set` is the only route. |
 | `accurate-thread-scheduling` | `true` | Software scheduling in `kernel/src/thread.cpp`. |
 | `preempt-on-wake` | `false` | Preempts a guest thread on wake, with `preempt-on-wake-us` at 1000. |
@@ -70,35 +70,44 @@ So the settings that are left worth measuring in this ticket are
 ## Steps
 
 1. Ticket 01 found `support_rasterized_order_access: true` under Turnip, so
-   `disable-raster-order` takes effect. On the stock driver the extension is
-   not documented; read ticket 00 for the driver before running.
+   `disable-raster-order` takes effect. On the stock driver the feature is off
+   and ticket 30 owns the question of whether it can be turned on, so this row
+   is not measurable there until then.
 2. Run a full A/B set per setting, one setting at a time, from the baseline
    values. Then run the best three together against the baseline.
-3. For `memory-mapping`, run the full matrix on Turnip. On the stock driver only
-   `double-buffer` and `external-host` are reachable, and ticket 01 records
-   whether `external-host` is available at all (it needs
-   `VK_EXT_external_memory_host`, which neither driver has).
+3. For `memory-mapping`, run the matrix on Turnip: `page-table` against
+   `double-buffer`. `external-host` needs `VK_EXT_external_memory_host`, which
+   neither driver has, so it is not a row. The stock driver forces
+   `double-buffer`, so it is not a row there either.
 4. Record for every run: the `perf_report.py` table from ticket 04, plus
    `scenes.csv` draw counts. A setting that raises FPS but also raises the
    frame interval 99th percentile is a latency regression, and criterion 2
    covers that.
-5. For `high-accuracy`, check the picture too. Turning it off enables texture
-   viewport, which the code comment calls "faster but not entirely accurate".
-   Take one screenshot at each of three fixed save-slot moments in A and again
-   in B, with `tools/android/device.sh screenshot`, and compare them under
+5. For `high-accuracy`, only Turnip remains open, and only one question:
+   does turning texture viewport off cost anything? The stock half is settled:
+   measured inert. Run one A/B on Turnip, and take one screenshot at each of
+   three fixed moments in A and again in B, with
+   `tools/android/device.sh screenshot`, compared under
    `tmp/pocket-s-android13/05/`. Write down the first visible difference, or
    `no difference seen`.
 6. For `disable-surface-sync` and `surface-sync-clamp-rt`, check the picture
    the same way. Both change what is written back to guest memory, and a game
    that reads back its own color surface shows stale or missing content rather
    than a crash.
-7. **State whether each title is CPU-bound or GPU-bound.** For each title, use
-   `gpu_busy_percentage` mean and `task-clock` per frame from ticket 02, plus
-   the renderer thread's share of `cpu-cycles` from a simpleperf report from
-   ticket 03. Call a title CPU-bound when the renderer thread's share of
-   `cpu-cycles` is above 60% and `gpu_busy_percentage` is below 90%. Put the
-   four verdicts in `../spec.md`. Ticket 25 is gated on them, and every later
-   ticket reads its verdict from there.
+7. **State whether each title is GPU-bound.** The prior is already strong:
+   ticket 00 measured GPU 99% busy on stock and 93% on Turnip against CPU 23%
+   and 43%, on a title that held 30 FPS at resolution 2. So expect every title
+   to be GPU-bound, and record the number rather than the label.
+
+   **The threshold below is wrong and is fixed here.** The old rule needed
+   `gpu_busy_percentage` below 90%, which would classify a 93%-busy title as not
+   GPU-bound and close ticket 25 for the wrong reason. Use this instead:
+   - GPU-bound when `gpu_busy_percentage` is 90% or above.
+   - CPU-bound when the renderer thread's share of `cpu-cycles` is above 60%
+     **and** `gpu_busy_percentage` is below 90%.
+   - mixed when both are high; say which one saturates first.
+
+   Put the four verdicts in `../spec.md`. Ticket 25 is gated on them.
 
 ## Acceptance
 

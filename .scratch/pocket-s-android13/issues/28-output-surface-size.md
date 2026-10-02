@@ -16,7 +16,7 @@ The panel is 2560x1440. At a resolution multiplier of 2 the emulator produces
 does it on the GPU, in a second pass over the full panel size. The display
 hardware can also do it, from a surface that is already smaller than the panel.
 
-On a GPU capped at about 1.0 GHz, one full-screen pass at 2560x1440 is 3.7
+On a GPU capped at about the 680 MHz this device actually runs, one full-screen pass at 2560x1440 is 3.7
 million pixels. Whether removing it helps is a measurement, not a rule.
 
 ## Steps

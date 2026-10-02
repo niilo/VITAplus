@@ -51,11 +51,37 @@ FeatureState: support_shader_interlock=false support_texture_barrier=false
 ```
 
 So on this device `direct_fragcolor` costs about 5 times what the correct path
-costs. Steps 2 to 4 of this ticket are now about that one number.
+costs.
+
+## What this ticket is now
+
+**The stock-driver half is ticket 30's, not this ticket's.** Steps 2 to 4 below
+measure the per-draw barrier and the per-draw render pass restart, and both live
+only on the stock driver. On Turnip neither code path runs, so they would return
+zeros and read as success.
+
+This ticket keeps two things:
+
+- **Step 1**, the per-title count of draws that use programmable blending. That
+  is a real number on Turnip and nothing else records it.
+- **A new step 2**, the one experiment nobody owns: `pipeline_cache.cpp:622`
+  binds the colour attachment as an input attachment unconditionally, including
+  when the subpass already carries
+  `eRasterizationOrderAttachmentColorAccessEXT` at `:617`. Declaring an
+  attachment as an input attachment is one of the conditions that pushes a pass
+  out of GMEM. Nobody has tested whether dropping the now-unused input
+  attachment on the raster-order path reduces GPU work. With the GPU at 93%
+  busy, this is the one framebuffer-fetch-side lever left on the measured
+  driver. It also decides whether ticket 19's `forcecb` can ever engage, since
+  concurrent binning needs dependency-free passes, so tickets 15 and 27
+  cross-reference this step rather than repeating it.
 
 `high-accuracy: true` does not help the stock driver. Measured: 6.39 FPS
 against 5.76, inside the noise of two runs, and `direct_fragcolor` is still
 true. Do not spend a run on it again.
+
+`disable-programmable-blending` is measured and rejected, in ticket 05. Do not
+spend a run on it here either.
 
 ## Risk
 
@@ -96,28 +122,28 @@ verdict.
 2. Measure the per-draw barrier and the per-draw render pass restart directly.
    Make each one conditional on a temporary config value, run the A/B/A
    protocol, and record the numbers even if the result is that they are free.
-3. Test `VK_KHR_dynamic_rendering_local_read` as a fourth path behind a
-   temporary config value. It is a large change. Only build it if steps 1 and 2
-   show the fetch path costs more than 5% of frame time on any title.
-   This path needs an extension the plan has not confirmed on either driver.
-   Turnip exposes it. The stock Qualcomm driver is a 2023 build and a 2024
-   extension is unlikely to be in it, so read ticket 01 step 4 first. If the
-   stock driver does not have it, the answer for the stock driver is no, and
-   that goes in the record.
-4. Test whether a two-subpass render pass makes the merge rule apply, behind a
-   temporary config value, if the current pass has an input attachment and
-   could be split. Record the result either way.
-5. Record the LRZ effect: run each benchmark with `disable-programmable-blending`
-   on and off and read `gpu_busy_percentage` and GPU clock, not only FPS. If
-   FPS rises and GPU busy rises too, the GPU is doing more work per frame for
-   the same picture, and that belongs in the record.
+3. **Dropped: `VK_KHR_dynamic_rendering_local_read`.** Turnip is already
+   Vulkan 1.4 and already has rasterization order attachment access, which is the
+   same read-after-write capability with no migration. The tree has no dynamic
+   rendering at all: there is no `vkCmdBeginRendering` anywhere in
+   `vita3k/renderer`. Shipping it would mean moving the whole render-pass model
+   to get something the driver already offers. Out of scope.
+4. **Dropped: the two-subpass merge.** Qualcomm's subpass merge rule needs more
+   than one subpass and there is no evidence here that it would apply on
+   Turnip, whose heuristics are Mesa's. Recorded so nobody repeats the
+   reasoning.
+5. **Dropped: the LRZ reading via `disable-programmable-blending`.** Ticket 05
+   measured it: 29.86 against 29.96 FPS and the picture destroyed. LRZ is still
+   a measurable cost on the stock driver's `direct_fragcolor` path, and that is
+   part of what ticket 30 has to explain.
 
 ## Acceptance
 
-- A table of draws per frame and path per title, and a measured cost for the
-  barrier and for the render pass restart.
-- A verdict on `disable-programmable-blending` for this device, with the
-  visible-artifact risk written down.
+- A table of draws per frame and of draws that use programmable blending, per
+  title, on Turnip.
+- One A/B on Turnip for the new step 2, with the GPU busy percentage mean and
+  the FPS both recorded and the picture compared at three fixed moments. **No
+  measurable change is a valid result** and should be recorded as one.
 
 ## Answer
 

@@ -45,8 +45,13 @@ system property `debug.mesa.tu.debug` before the environment variable. So:
 
 ## Steps
 
-1. Confirm the driver in use is Turnip before running anything here. On the
-   stock driver none of these exist.
+1. The driver is Turnip; ticket 00 settled it. Do not spend a run confirming
+   it.
+
+**Why this ticket moved up.** Turnip takes the fast framebuffer-fetch path and
+the GPU is still at 93% busy. Whether the driver bins into GMEM or renders
+direct is the largest remaining driver-side lever on the measured driver, and
+this is the only ticket that can change it.
 2. Baseline with no extra flags, then A/B/A for `tune_small`, then for
    `profiled_imm`, then for `forcecb`. Run each on the 60 FPS title and the 30
    FPS title.
@@ -57,6 +62,13 @@ system property `debug.mesa.tu.debug` before the environment variable. So:
 4. Record whether GPU clock or GPU busy percentage moved. If the clock moved,
    the driver chose a different mode; if only busy percentage moved, it did
    more work for the same picture.
+5. **Record the counter before running, so a null result has a cause.**
+   Concurrent binning needs dependency-free render passes, and every pass here
+   declares the colour attachment as an input attachment unconditionally
+   (`pipeline_cache.cpp:622`). If `forcecb` does nothing, the likely reason is
+   that dependency, and ticket 06's new step 2 is what would change it. Write
+   down how many renders per scene `scenes.csv` reports for each configuration,
+   so the record says whether the flag engaged at all.
 
 ## Acceptance
 

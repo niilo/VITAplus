@@ -30,17 +30,18 @@ benchmark title use it?
    for the slow path, behind the `perf-log` setting from ticket 02. Read them
    from `scenes.csv`.
 2. Run each benchmark title and record both counters.
-3. For any title with a non-zero counter, run the A/B/A protocol twice. Once
-   with `high-accuracy` off, and once with `high-accuracy` on and
-   `disable-programmable-blending` on. The first run changes two things at once:
-   it turns `use_texture_viewport` on
-   (`vita3k/renderer/src/vulkan/renderer.cpp:1086`) and it switches
-   programmable blending from shader interlock to subpass input
-   (`renderer.cpp:1068`). The second run holds the texture viewport off, so the
-   difference between the two runs is the texture viewport branch at
-   `context.cpp:727`. Report both. `disable-programmable-blending` also loses
-   blending accuracy, so take screenshots at three fixed moments per title in
-   A and B for the second run and write down every difference.
+3. For any title with a non-zero counter, run the A/B/A protocol twice, with
+   `high-accuracy` off and then on, and record both.
+   The second half of the old step used `disable-programmable-blending`, which
+   ticket 05 rejected: it buys nothing and it destroys the picture. So there is
+   no way to separate `use_texture_viewport` from the fetch path on this device,
+   because `high-accuracy` is the only knob and it moves both. **Report that as
+   the limit of what this ticket can separate.**
+   Record also whether `use_texture_viewport` was even on: with
+   `high-accuracy: true` it is off, so the macroblock branch at
+   `context.cpp:727` is not taken at all. If no benchmark title sets
+   `SCE_GXM_RENDER_TARGET_MACROTILE_SYNC`, this ticket closes at step 2, which
+   is the likely outcome.
 4. Do not add a config value that turns macroblock sync off. It changes the
    picture. If the cost is large, write down what the cost is and let the
    later tickets decide.

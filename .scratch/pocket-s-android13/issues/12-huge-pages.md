@@ -28,13 +28,32 @@ syscall per mapping and nothing blocks it on Android.
   that is written to continuously may never be collapsed in time. Measure
   rather than assume.
 
-## Steps
+## Expected outcome: rejected, and do not write the code
 
-0. **Read `AnonHugePages` for both mappings before changing anything.** THP is
-   `always` here, so the guest arena and the JIT cache may already have 2 MB
-   pages. If they do, this ticket is `rejected` with the numbers and nothing
-   else in it is done. That is the likely outcome, and it is worth knowing
-   before any code is written.
+Ticket 01 measured `/sys/kernel/mm/transparent_hugepage/enabled` as `[always]`
+on this device, not the `madvise` mode the GKI defconfig selects. Anonymous
+mappings therefore already get 2 MB pages without any `madvise` call, which
+removes the whole point of this ticket.
+
+**Step 0 is the ticket.** Do the rest only if step 0 surprises you.
+
+0. Read `AnonHugePages` and `KernelPageSize` for both mappings, from inside the
+   app (`/proc/self/smaps`, the app can read its own), and record the mapping
+   base addresses. One reading, no build.
+   - If both mappings already show `AnonHugePages` and `KernelPageSize: 2048`,
+     set `Status: rejected` with the numbers. This is the likely result.
+   - If a mapping shows 4 KiB pages anyway, the interesting case is alignment.
+     THP `always` only gives a 2 MB page to an anonymous mapping faulted inside
+     a 2 MB-aligned contiguous range, and `mem.cpp:97-106` reserves
+     `TOTAL_MEM_SIZE` at a "preferred address" whose alignment is not recorded.
+     Record the base address and the size, and whether the base is 2 MB
+     aligned. That decides whether anything can be done at all.
+
+The `MADV_COLLAPSE` probe is already answered: ticket 01 measured kernel 5.15,
+so the call returns `EINVAL`. Do not add it.
+
+The `khugepaged` collapse rate is not an open question here. With THP `always`
+the pages are allocated at fault time, not collapsed later.
 
 1. The dynarmic code cache. The emulator sets no code cache size
    (`vita3k/cpu/src/dynarmic_cpu.cpp:642-668`), so the `Dynarmic::A32` default

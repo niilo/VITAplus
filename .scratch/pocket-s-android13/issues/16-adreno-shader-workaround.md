@@ -17,6 +17,20 @@ nineteen crashes. The PR shrinks `outs` to 16 `vec4` on Adreno and adds an
 `REG_O_COUNT` is `20 * 4` in `vita3k/shader/src/spirv_recompiler.cpp:64` on
 this base.
 
+## Scope after ticket 00: this is stock-driver compatibility, not a lever
+
+The plan measures on Turnip. Ticket 00 measured the stock driver at 5.76 FPS
+against Turnip's 29.96 in gameplay, so a fix that only helps the stock driver
+cannot move a number in this plan's records.
+
+This ticket is **compatibility work for the driver some users will still be
+on**, not an optimisation. Run it only as a labelled out-of-protocol
+compatibility check on the compile-heavy title, the way ticket 04 keeps one
+stock spot-check. If the answer is "no crash on this GPU", the ticket is
+`rejected` and that is the whole result.
+
+Do not schedule it ahead of a ticket whose result reaches the plan's records.
+
 ## Steps
 
 1. Confirm the shape. Read the declaration of `outs` and the `REG_O_COUNT`

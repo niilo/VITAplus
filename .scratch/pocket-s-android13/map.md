@@ -87,17 +87,20 @@ its own ticket.
 2. **Shader interlock restarts the render pass per draw.** With
    `high-accuracy` on and `VK_EXT_fragment_shader_interlock` present, every
    draw that changes framebuffer-fetch state does `vkCmdEndRenderPass` then
-   `vkCmdBeginRenderPass` (`scene.cpp:463` and `:473`). On a tile renderer
-   that is a store and a load. `high-accuracy` also turns texture viewport off
-   (`renderer.cpp:1088`), which is the mechanism that avoids a copy after a
-   pass.
+   `vkCmdBeginRenderPass` (`scene.cpp:463` and `:473`). **Neither driver on this
+   device reaches this path.** The stock driver reports
+   `support_shader_interlock=false`, and Turnip has rasterization order access,
+   which forces `support_shader_interlock = false` at `renderer.cpp:863`. So
+   this is documented behaviour that does not run here, and `high-accuracy` can
+   only turn texture viewport off. Ticket 05 measured it at 6.39 against 5.76
+   FPS on stock, inside the noise.
 3. **Macroblock sync restarts the render pass per macroblock.** A render
    target with `SCE_GXM_RENDER_TARGET_MACROTILE_SYNC` restarts the pass on
    every macroblock change (`context.cpp:699-736`) and, in the fallback path,
    asks for a render pass that loads and stores depth and stencil every time
    (`context.cpp:709`).
-4. **Double Buffer copies guest memory into the GPU buffer on every draw.** In
-   `double-buffer` mode, `BufferTrapping::access_buffer`
+4. **Double Buffer copies guest memory into the GPU buffer on every draw
+   (stock only).** In `double-buffer` mode, `BufferTrapping::access_buffer`
    (`renderer.cpp:2396`) is called per vertex stream (`scene.cpp:310`), per
    index buffer (`scene.cpp:615`) and per uniform block (`scene.cpp:63`). For a
    range under 12 KiB it does a host `memcpy` from guest memory into the
@@ -106,7 +109,8 @@ its own ticket.
    guest memory into the trapped buffer on the way in (`renderer.cpp:2474`).
    There is no write-back copy in `BufferTrapping`. The dirty flag only
    decides whether the inbound copy happens.
-5. **End of scene write-back.** `can_mprotect_mapped_memory` defaults to `true`
+5. **End of scene write-back (stock only; the copy into the GPU buffer is
+   double-buffer only).** `can_mprotect_mapped_memory` defaults to `true`
    (`surface_cache.h:323`) and is reassigned only on non-Android Linux
    (`renderer.cpp:1134`), so on Android it stays `true` and every surface takes
    the `protect_surface()` branch (`surface_cache.cpp:817-821`).
@@ -118,7 +122,10 @@ its own ticket.
    `BufferSyncRequest` whose handler `memcpy`s the result back into guest
    memory on the wait thread (`context.cpp:137`).
 
-### Stock Adreno downgrades the mapping mode
+### Stock Adreno downgrades the mapping mode (off the measured path)
+
+Everything in this subsection describes the stock driver. The plan measures on
+Turnip, which runs Page Table, so none of it is on the path being optimised.
 
 `renderer.cpp:1112` logs and runs Page Table and Native Buffer as Double Buffer
 when the driver is the stock Adreno one, because the driver crashes on the
@@ -334,6 +341,13 @@ Freedreno documentation, and the Mesa `freedreno` source.
   `VK_EXT_memory_priority` are absent. `minUniformBufferOffsetAlignment` is 64
   and `maxUniformBufferRange` is 64 KiB. Advertised descriptor limits are
   16777216 per stage, which hides the hardware limits.
+- Stock: ticket 01 recorded the full list from the app log. It has
+  `VK_EXT_pipeline_creation_cache_control`, `VK_EXT_pipeline_creation_feedback`,
+  `VK_QCOM_image_processing`, `VK_QCOM_render_pass_transform`,
+  `VK_QCOM_tile_properties`, `VK_KHR_timeline_semaphore` and
+  `VK_KHR_synchronization2`. So pipeline cache control is available on both
+  drivers, and only UBWC is a Qualcomm-only feature. Ticket 27's UBWC half
+  therefore has no answer on the measured driver.
 - Turnip: `TU_DEBUG` and `TU_AUTOTUNE_*` are read through `os_get_option()`,
   which on Android checks the system property `debug.mesa.tu.debug` before the
   environment variable. The environment variable is used when the property is
@@ -369,6 +383,28 @@ Freedreno documentation, and the Mesa `freedreno` source.
   (`renderer.cpp:2388`). It only exists for the stock Qualcomm driver.
   Ticket 05.
 
+## What to run first, after the measurements
+
+Tickets 00, 01 and 02 are done. Ticket 03 is the gate on everything else, so
+it is first. Then, with the GPU known to be the limit at 93 to 99% busy, the
+order changes from what the first draft assumed:
+
+1. **03**, the profiling harness. Gates 04 and everything below it.
+2. **04**, the baseline, on Turnip only, in gameplay.
+3. **05**, the settings that still have an open question: the surface write-back
+   rows and the thread rows. The framebuffer-fetch rows are answered.
+4. **18, 19, 28, 15, 06**, the GPU-side work. These are the real remaining
+   levers, because the GPU is the limit: a second full-panel pass, GMEM versus
+   direct rendering, letting the display hardware scale, attachment layouts, and
+   the unused input attachment on the raster-order path.
+5. **24, 30**, which need no baseline and can run at any point.
+6. **07, 08, 09, 10, 16, 17, 20, 21, 23, 25, 26, 27, 29** as their blockers
+   clear.
+
+Tickets **11, 12, 14 and 25** are expected to close as rejected or flat, from
+the kernel rule and the CPU-busy numbers already measured. Do not spend a
+measurement run on them before recording the reason they close.
+
 ## Decisions so far
 
 - 2026-10-02: the base for this plan is the Plus base, and the plan replaces
@@ -378,23 +414,45 @@ Freedreno documentation, and the Mesa `freedreno` source.
 - 2026-10-02: `perf-log` is ported once, in ticket 02, and the old
   `pocket-s/05-frame-timing-log` and `plus-base/04-perf-log` tickets close
   against it.
+- 2026-10-02, ticket 00: **the plan measures on Turnip.** The stock driver is
+  the slow path. The gap is the framebuffer-fetch path: the stock driver has
+  neither `rasterization_order_attachment_access` nor shader interlock, so it
+  falls back to `direct_fragcolor`, which puts a pipeline barrier on the colour
+  attachment before every programmable-blending draw.
+- 2026-10-02, ticket 00: **the GPU is the limit.** 99% busy on stock and 93% on
+  Turnip, against CPU 23% and 43%. Every CPU ticket is therefore expected to
+  close flat.
+- 2026-10-02, ticket 05: **`disable-programmable-blending` is rejected.** No
+  gain on Turnip, 29.86 against 29.96 FPS, and the picture is destroyed.
+- 2026-10-02, ticket 05: **`high-accuracy: true` is inert on the stock
+  driver.** 6.39 against 5.76 FPS, and `direct_fragcolor` stays true because the
+  driver has no shader interlock to switch to.
+- 2026-10-02, ticket 00: **a measurement outside the game is not a result.**
+  The first ticket 00 pass read a title screen and got the driver order
+  backwards. The protocol now requires `tools/android/gameplay_scene.sh`.
 
 ## Fog
 
-- Which Vulkan driver the benchmark runs will use. The stock driver forces
-  Double Buffer, which is the most expensive frame path. Ticket 00.
-- Whether the device honours an ADPF hint. Ticket 13. This matters more now
-  that ticket 11 found the nice value is refused.
-- Whether the A32 device ID is `0x43050A00` or `0x43050A01`, and whether
-  "Adreno A32" and "Adreno (TM) 740" name one part or two. Ticket 01.
-- Whether the queue family reports any valid timestamp bits, which decides
-  whether `scenes.csv` can carry GPU timestamps. Ticket 02.
-- Which KGSL sysfs paths exist on this kernel, since `device.sh` and the Mesa
-  docs disagree. Ticket 01.
-- Whether a CPU temperature zone is readable without root, which the
-  measurement protocol needs. Ticket 01.
-- Whether the device is CPU-bound or GPU-bound per title. Ticket 05.
-- Whether khugepaged collapses the JIT code cache in time to matter.
-  Ticket 12.
-- Whether ticket 25's gate opened, and on which numbers from ticket 05.
-- Whether Qualcomm honors ADPF hints. Ticket 13.
+- Whether the stock driver lists `VK_EXT_/ARM_rasterization_order_attachment_access`
+  and can be made to enable its feature. Ticket 30. This is the largest open
+  question in the plan.
+- Whether the Vulkan hex device ID, which ticket 01 did not record, is needed
+  for the preset's device matching. Ticket 22, with ticket 01's step 3.
+- Whether `timestampValidBits` and `timestampPeriod` are usable, which decides
+  whether `scenes.csv` can carry GPU timestamps. Ticket 26 now owns it; ticket
+  02 left it open and closed itself.
+- Whether the device is GPU-bound on a title other than the one ticket 00 used.
+  Ticket 05. The prior is GPU-bound: 99% and 93% busy.
+- Whether the device honours an ADPF hint, and whether that moves the prime
+  core out of its low bin. Tickets 29 and 13 together. Ticket 11 found the
+  nice value is refused, so this is the only remaining placement route.
+
+Closed by ticket 00 and 01, kept here so the mistake is not repeated:
+
+- The driver is Turnip. The stock driver is 5.2 times slower in gameplay.
+- The GPU is the limit: 93 to 99% busy, CPU 23 to 43%.
+- The KGSL files are `gpuclk`, `gpu_busy_percentage`, `gpubusy`, `max_gpuclk`,
+  `throttling`, `idle_timer`. `gpuclk_khz` and `busclk_khz` do not exist.
+- The cpufreq files are under `cpu*/cpufreq`, not `policy*`.
+- Transparent huge pages are `always`, not `madvise`.
+- The temperature zones `cpu-0-*` and `cpu-1-*` read without root.

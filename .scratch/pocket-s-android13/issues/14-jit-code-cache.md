@@ -18,18 +18,20 @@ arm64 backend. The default value is in the dynarmic submodule, which is empty in
 this tree, so read it after `git submodule update --init --recursive` and
 record the name, value and line. Do not quote a default from another backend.
 
-## Why it matters
+## Why it matters, after ticket 01
 
-Two costs grow with the reservation:
+The iTLB argument is dead. Transparent huge pages are `always` on this device
+(ticket 01), so the code cache gets 2 MB pages and the instruction TLB pressure
+the ticket was built on does not exist.
 
-- First-touch page faults, if the mapping is not prefaulted.
-- Instruction TLB pressure, if the pages are 4 KiB. Ticket 12 addresses the
-  page size.
+What is left is first-touch page faults, because the cache is not prefaulted.
+That is a one-line `memset` and it belongs in ticket 12's single `smaps`
+reading rather than in a separate ticket. With the GPU at 93% busy there is no
+frame rate at stake: ticket 00 measured CPU 23% and 43%.
 
-Nothing else, because the mapping is lazy and a 64-bit address space is not
-the constraint. If the games use a small part of the reservation, a smaller
-cache does not help. If they use most of it, the faults and the iTLB are real,
-and ticket 12 is the fix rather than a smaller cache.
+**Fold this ticket into ticket 12.** Read the mapping size and its
+`Rss`/`Private_Dirty` alongside `AnonHugePages`, and set this one to `rejected`
+with the numbers.
 
 ## Steps
 

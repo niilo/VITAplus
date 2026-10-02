@@ -3,14 +3,27 @@
 Status: open
 Type: experiment
 Label: ready-for-human
-Blocked by: 04
+Blocked by: none
 
-## Gate
+## Gate, closed by ticket 00
 
-Do this ticket only if ticket 05 states that a title is CPU-bound, with guest
-JIT code in the top functions of a simpleperf report. Otherwise set
-`Status: rejected` and write down the numbers from ticket 05 that closed the
-gate.
+Do this ticket only if a title is CPU-bound, with guest JIT code in the top
+functions of a simpleperf report.
+
+**Ticket 00 already closed the gate.** The emulator overlay reads GPU 99% busy
+on the stock driver and 93% on Turnip, against CPU 23% and 43%. The frame rate
+is set by the GPU. Set `Status: rejected` and record those numbers here.
+
+Do not wait for ticket 05 to run a full matrix first. Ticket 05's own threshold
+would also misclassify a 93%-busy title as not-CPU-bound, because it requires
+`gpu_busy_percentage` below 90%, so the gate would close for the wrong reason
+even if it were deferred.
+
+If the gate is ever reopened, run `Unsafe_IgnoreGlobalMonitor` alone. It is the
+only flag whose mechanism matches the code: it removes the shared monitor from
+the optimization set, and every guest exclusive access takes that monitor.
+`Unsafe_ReducedErrorFP` and `Unsafe_InaccurateNaN` also change float results,
+which is a correctness risk for a measured gain of nothing.
 
 This replaces `.scratch/pocket-s-optimization/issues/09-dynarmic-flags.md`,
 which is open on the old base and has never been measured.

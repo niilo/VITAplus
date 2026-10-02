@@ -15,29 +15,34 @@ and which Snapdragon CPU features can save clock cycles.
 
 ## Shape of the plan
 
-29 tickets in `issues/`, numbered from `00`. The dependency graph decides what
-runs first, not the numbering.
+30 tickets in `issues/`, numbered from `00`. The dependency graph decides what
+runs first, not the numbering. Tickets 00, 01 and 02 are resolved; every other
+row below is work that has not been done.
 
 | Tickets | What they do |
 | --- | --- |
-| 00 | Choose the driver and the GPU power constraint. Every measurement after it runs on one configuration. |
-| 01, 02, 03 | Record the device facts, port `perf-log`, build the profiling harness. |
+| 00 | Choose the driver. Resolved: the plan measures on Turnip. The GPU power constraint was not answered and is ticket 24. |
+| 01, 02 | Device facts and the perf-log port. Both resolved. |
+| 03 | The profiling harness. It gates the baseline, so it is the first open ticket. |
 | 04 | The baseline. Every other measurement is compared against it. |
-| 05 | The render configuration matrix. Finds the settings and the CPU-or-GPU verdict per title. |
+| 05 | The render configuration matrix. The framebuffer-fetch rows are already answered; the write-back and thread rows are not. |
 | 06 to 10 | The Vulkan frame path: framebuffer fetch, visibility queries, macroblock sync, present mode, vblank clock. |
-| 11 to 14 | Host CPU: thread priority, huge pages, ADPF, code cache size. Ticket 11 found that Android blocks the nice value, so ADPF in ticket 13 is the remaining lever. |
+| 11 to 14 | Host CPU. **All four are expected to close as rejected or inert.** Ticket 00 measured the GPU at 93 to 99% busy and the CPU at 23 to 43%, and ticket 11 found the kernel refuses the nice value. Ticket 12 is expected to be rejected outright because transparent huge pages are already `always` here. Ticket 13 survives only as the delivery mechanism for ticket 29's core-placement question, and its frame-rate outcome is expected to be flat. |
 | 15 to 21 | More Vulkan and GPU: attachment layouts, the shader compiler workaround, pipeline stutter, screen filters, the Turnip autotuner, the resolution multiplier, thermal measurement. |
 | 22 | The preset. |
 | 23 | Verification and the write-up. |
-| 24 to 28 | Areas this plan's first draft did not cover: GPU power constraint, dynarmic flags, texture upload, descriptor and uniform limits, output surface size. |
+| 24 to 28 | Areas this plan's first draft did not cover: GPU power constraint, dynarmic flags, texture upload, descriptor and uniform limits, output surface size. With the GPU saturated, 18, 19, 20, 24 and 28 are the real remaining levers. |
 | 29 | The prime core stays at 595 MHz while its maximum is 3360 MHz. Found by ticket 00. |
+| 30 | Why the stock driver cannot use rasterization order attachment access, and whether it can be made to. Found by ticket 00; the largest unowned question in the plan. |
 
 ## What changed since the old plan
 
 The old plan assumed the old code base. On the Plus base:
 
 - `high-accuracy` defaults to `true` (upstream: `false`). It turns off texture
-  viewport and turns on shader interlock.
+  viewport and would turn on shader interlock, except that neither driver on
+  this device has `fragmentShaderSampleInterlock`, so it does neither. Measured
+  inert on the stock driver at 6.39 against 5.76 FPS.
 - `memory-mapping` defaults to `page-table` on Android. On the stock Adreno
   driver the renderer logs the downgrade and runs it as `double-buffer`
   (`vita3k/renderer/src/vulkan/renderer.cpp:1112`).
@@ -45,22 +50,27 @@ The old plan assumed the old code base. On the Plus base:
 - `guest-cores` defaults to `3` and `accurate-thread-scheduling` to `true`.
   Neither has been measured on this device.
 - `async-pipeline-compilation` defaults to `false` (upstream: `true`).
-- `perf-log` is gone. It was only on the old base
-  (`pocket-s/05-frame-timing-log`, `d392779e`). `tools/android/perf_summary.py`
-  and `tools/android/test_perf_summary.py` are still here, and
-  `device.sh pull-perf` still exists, but nothing writes the CSV files.
+- `perf-log` was gone too. It only ever existed on the old base
+  (`pocket-s/05-frame-timing-log`, `d392779e`). Ticket 02 ported it: it is now in
+  `config.h`, `native_config.cpp`, `EmulatorConfig.kt` and the settings screen,
+  and it writes `frames.csv`, `presents.csv` and `scenes.csv`. Every measurement
+  in this plan needs it on.
+
+Two of the six settings above have since been measured and neither is a lever:
+`high-accuracy` is inert, and `disable-programmable-blending` is rejected
+(ticket 05).
 
 ## Hardware
 
-To be confirmed on the device by ticket 01. What the vendor and the driver
-name say today:
+Ticket 01 measured all of this on the device on 2026-10-02. The vendor and the
+driver names, and what the device reports:
 
 | Part | Value | Source |
 |---|---|---|
 | SoC | Snapdragon G3x Gen 2. `ro.soc.model` = `SG8275`, `ro.board.platform` = `kalama` | `pocket-s-optimization/spec.md`, checked 2026-09-28 |
-| CPU | 8 cores, ARMv9.0-A: 1 Cortex-X3, 2 Cortex-A715, 2 Cortex-A710, 3 Cortex-A510 | AYANEO product page; Arm core pages |
-| CPU clocks | X3 3.36 GHz, A715 and A710 2.8 GHz, A510 2.02 GHz | AYANEO; `cpuinfo_max_freq` checked 2026-09-28 |
-| GPU | Adreno A32, up to 1.0 GHz. The stock driver reports `Adreno (TM) 740`. Mesa maps this part to `FDA32`, the same bucket as Adreno 740. | `pocket-s-optimization/spec.md`; Mesa `freedreno_devices.py` |
+| CPU | 8 cores, ARMv9.0-A: 1 Cortex-X3, 2 Cortex-A715, 2 Cortex-A710, 3 Cortex-A510. Measured clusters: `related_cpus` gives cpu0 to cpu2, cpu3 to cpu6, cpu7. Governor `walt`. | ticket 01 |
+| CPU clocks | cpu0 to cpu2 2016 MHz, cpu3 to cpu6 2803.2 MHz, cpu7 3360 MHz. Under load the big cluster reaches 1843 MHz and cpu7 sits at 595 MHz. | ticket 01 `cpuinfo_max_freq`, ticket 00 |
+| GPU | Adreno A32. `gpu_model` reads `AdrenoA32`, the stock driver reports `Adreno (TM) 740`, and Mesa maps the part to `FDA32`, the same bucket as Adreno 740. The frequency table lists 1000 MHz as the top bin, `max_gpuclk` reads 680 MHz, and the observed maximum under load is 680 MHz. | ticket 01 |
 | RAM | LPDDR5X-8533, 16 GB on the test device | `pocket-s-optimization/spec.md` |
 | Display | 6 inch IPS, 2560x1440, 60 Hz, one mode | `pocket-s-optimization/spec.md` |
 | Cooling | vapour chamber over 5180 mm2, fan, 15 W sustained (vendor claim) | AYANEO |
@@ -72,13 +82,20 @@ with different names. Ticket 01 settles which names the device reports.
 
 ### ARM features on this part
 
-The cores report ARMv9.0-A. LSE2, SB, BTI and PAuth are mandatory in that
-version, so they are present. `dc ZVA` is mandatory from Armv8.2, and i8mm is
-mandatory from Armv8.6. SSBS is optional in every Arm version, so the version
-does not decide it. FP16 arithmetic (`FHM`), DotProd, FlagM2 and SSBS are
-optional, so the architecture version does not decide them either. MTE is
-optional. SVE is not expected. Ticket 01 reads `/proc/cpuinfo` and settles every
-one of them.
+The cores report ARMv9.0-A. Ticket 01 read `/proc/cpuinfo`; the same line is on
+all eight cores:
+
+```
+atomics asimdhp asimddp flagm flagm2 ssbs sb paca pacg i8mm bf16 bti dit
+```
+
+Present: `atomics` (LSE), `asimdhp` (FP16), `asimddp` (DotProd), `flagm2`,
+`ssbs`, `sb`, `paca`/`pacg` (PAuth), `i8mm`, `bf16`, `bti`, `dit`. Absent:
+`sve`, `mte`.
+
+`i8mm` and `bf16` are past the ARMv9.0-A baseline, so the architecture version
+would not have decided them. That is why the earlier wording was replaced by the
+measurement.
 
 The guest is ARMv7 (`vita3k/cpu/src/dynarmic_cpu.cpp:644` sets
 `ArchVersion::v7`), so the host's LSE2, FP16 and DotProd instructions never
@@ -86,9 +103,13 @@ appear in JIT output. Those features can only help the emulator's own C++ code,
 which is shader translation, texture decode and format conversion. No ticket
 in this plan measures those, so no ticket claims a gain from them.
 
-The host CPU levers that remain are the ones with tickets: the code cache page
-size (ticket 12), the thread priority (ticket 11), the ADPF hint (ticket 13),
-and the dynarmic optimization set (ticket 25).
+With the GPU at 93 to 99% busy and the CPU at 23 to 43%, none of those is
+expected to move the frame rate, and ticket 00 measured it. The CPU tickets are
+about recording the answer, not about recovering frames, and they should be run
+at low effort.
+
+The CPU questions that survive are the prime core in ticket 29 and the
+placement hint that would deliver it, ticket 13.
 
 ## What this means for CPU work
 
@@ -98,9 +119,13 @@ appear in JIT output. Those features can only help the emulator's own C++ code,
 which is shader translation, texture decode and format conversion. No ticket
 in this plan measures those, so no ticket claims a gain from them.
 
-The host CPU levers that remain are the ones with tickets: the code cache page
-size (ticket 12), the thread priority (ticket 11), the ADPF hint (ticket 13),
-and the dynarmic optimization set (ticket 25).
+With the GPU at 93 to 99% busy and the CPU at 23 to 43%, none of those is
+expected to move the frame rate, and ticket 00 measured it. The CPU tickets are
+about recording the answer, not about recovering frames, and they should be run
+at low effort.
+
+The CPU questions that survive are the prime core in ticket 29 and the
+placement hint that would deliver it, ticket 13.
 
 ### Android 13 limits that shape the plan
 
@@ -223,9 +248,11 @@ Every experiment uses this protocol. Record results under the ticket's
    temporary config value and switch it with `tools/android/device.sh
    config-set`. Compare two builds only when the ticket says that is not
    possible.
-3. **Driver.** Name the driver in every record: stock, or Turnip with the file
-   name and build. `custom-driver-name` selects it. Never compare runs on
-   different drivers.
+3. **Driver.** The reference driver is **Turnip**. Name it in every record,
+   with the file name and build, and record `perf-log: true` beside it. Stock
+   appears only in ticket 30 and in the two labelled spot-checks ticket 04
+   allows. Never mix drivers inside one result set: ticket 00 already lost a
+   conclusion to exactly that.
 4. **Device state.** Charger connected, battery at 50% or more, airplane mode
    on, brightness fixed at 50%, Ayaneo mode as named in ticket 04, run
    `adb shell am kill-all` before the set. Run `device.sh config-guard` so no
@@ -238,9 +265,10 @@ Every experiment uses this protocol. Record results under the ticket's
 6. **Order.** Run A, B, A, B, A. Each run: reach the scene, wait 30 seconds,
    record 60 seconds. Between runs stop the app and wait until the CPU
    temperature read by `tools/android/device.sh clocks` is within 2 degrees C of
-   the first run's start temperature, or 3 minutes, whichever comes first. If
-   no CPU temperature zone is readable without root, ticket 01 says so and the
-   protocol uses the 3 minute wait alone.
+   the first run's start temperature, or 3 minutes, whichever comes first.
+   Ticket 01 found that the zones named `cpu-0-*` and `cpu-1-*` read without
+   root, so the temperature is available. The zones named `pa`, `sdr*`, `mmw*`,
+   `epm*` and `pmr735d*` return `Invalid argument` and are skipped.
 7. **Validity.** The set is valid if the three A averages are within 3% of
    each other. B differs from A only if its difference from the A mean is
    larger than the A spread (maximum minus minimum). If the set is not valid,

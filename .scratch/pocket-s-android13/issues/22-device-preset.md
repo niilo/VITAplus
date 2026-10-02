@@ -3,7 +3,7 @@
 Status: open
 Type: task
 Label: ready-for-human
-Blocked by: 05, 09, 12, 13, 17, 18, 19, 20, 21
+Blocked by: 05, 09, 17, 18, 19, 20, 21, 24, 26, 27, 28
 
 ## Goal
 
@@ -31,21 +31,27 @@ This replaces `.scratch/pocket-s-optimization/issues/16-device-preset.md`.
    19, cannot be set from the app. Leave them out of the preset. Put the
    `setprop` command in the `CLAUDE.md` section that ticket 23 writes, and say
    in the answer that they are not in the preset and why.
-6. Nine settings have no field in `EmulatorConfig.kt`: `guest-cores`,
-   `cpu-pool-size`, `hashless-texture-cache`, `disable-programmable-blending`,
-   `surface-sync-clamp-rt`, `preempt-on-wake`, `preempt-on-wake-us`,
-   `disable-raster-order` and, after ticket 02, `perf-log`. Several of them are
-   in this plan's measurement set. If the preset sets one, record that it
-   reaches the app through `config.yml` only, which is a different path from
-   every other preset value, and check that the preset code writes it there.
+6. **Eight** settings have no field in `EmulatorConfig.kt`: `guest-cores`,
+  `cpu-pool-size`, `hashless-texture-cache`, `disable-programmable-blending`,
+  `surface-sync-clamp-rt`, `preempt-on-wake`, `preempt-on-wake-us` and
+  `disable-raster-order`. `perf-log` is **not** among them: ticket 02 added the
+  field and a switch. Several of the eight are in this plan's measurement set.
+  If the preset sets one, record that it reaches the app through `config.yml`
+  only, which is a different path from every other preset value, and check that
+  the preset code writes it there.
 7. Keep the existing `config.yml` on an installed app untouched. Only a first
-   launch gets the preset.
+  launch gets the preset.
+8. **The driver needs a decision, and it is the one this preset cannot make.**
+  The measured driver is Turnip, and the driver pack lives in the app's internal
+  data directory, so it is lost on every uninstall (ticket 01). An app cannot
+  ship it, and it cannot check for the pack before the first launch, because
+  `custom-driver-name` is read before the renderer exists. Decide and record:
+  does the preset write a `custom-driver-name` at all, and if so, what happens on
+  a device where that pack is not installed? Or does it leave it empty and rely
+  on the stock driver, which ticket 00 measured at 5.76 FPS? Whichever is
+  chosen, say in `CLAUDE.md` that the Turnip pack must be installed once through
+  the app's own GPU settings, and that it does not survive an uninstall.
 
-## Acceptance
-
-- A Pocket S with no `config.yml` gets the preset on first launch.
-- An existing install keeps every value it has.
-- Each value in the preset names its ticket and its measured number.
 
 ## Answer
 

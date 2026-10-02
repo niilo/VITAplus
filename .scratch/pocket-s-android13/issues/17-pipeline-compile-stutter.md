@@ -37,10 +37,13 @@ stage (`shaders.cpp:164-167`), and a precompile pass runs from that list
 
 ## Steps
 
-1. Measure the stutter first. From ticket 02, `frames.csv` gives the frame
-   interval distribution. Compare a cold run against a warm run on the same
-   scene and count intervals over 1.5 times the target frame time. This is the
-   number to reduce.
+1. Measure the stutter first, **in the game**. From ticket 02, `frames.csv`
+   gives the frame interval distribution. Use `tools/android/gameplay_scene.sh`,
+   not a title screen: ticket 00's first pass measured a title screen and
+   reported 25 FPS for a run whose gameplay figure is 5.76, which is how the
+   driver order got inverted once already. Compare a cold run against a warm run
+   on the same scene and count intervals over 1.5 times the target frame time.
+   That is the number to reduce.
 2. Count compiles per scene with a counter behind `perf-log`, and log the
    compile duration per pipeline. The longest single compile sets the worst
    hitch.
@@ -48,21 +51,19 @@ stage (`shaders.cpp:164-167`), and a precompile pass runs from that list
    `true` upstream. Upstream PR 3169 says to turn it off for the few games with
    long-standing graphical problems. Run A/B/A on the benchmark titles and
    record FPS, the frame interval 99th percentile, and the maximum interval.
-4. Use `VK_EXT_pipeline_creation_cache_control` where it is present: mark
-   pipelines that are already in the disk cache as fail-fast, so a cache hit
-   never enters the driver. Combine with the refused-pipeline list that Plus
-   already keeps. Measure. The extension is absent from the stock driver's
-   documented set, so read ticket 01 step 4 before building anything on it.
-5. Time the per-compile log line that Plus adds on the stock Adreno driver.
-   It is unconditional and not behind a config value: the `LOG_INFO` at
-   `vita3k/renderer/src/vulkan/pipeline_cache.cpp:1211` is guarded only by
-   `state.is_adreno_stock`. Put it behind a config value,
-   default on, and run A/B/A. At info level there are other unconditional lines
-   in the frame path as well, so compare against a run at `log-level: 1` as
-   well, since ticket 05 covers that setting for the same reason.
-6. A full precompile that builds pipelines before the first frame needs a new
-   file format. Only plan it if steps 1 to 5 leave a large number and there is
-   time. Say so in the answer rather than starting it silently.
+4. Use `VK_EXT_pipeline_creation_cache_control`: mark pipelines that are already
+   in the disk cache as fail-fast, so a cache hit never enters the driver.
+   **It is available on both drivers**: ticket 01 recorded it in the stock
+   driver's extension list, and Mesa exposes it on Turnip. Combine with the
+   refused-pipeline list that Plus already keeps, and measure.
+5. **Dropped: timing the per-compile log line.** That line
+   (`pipeline_cache.cpp:1211`) is guarded by `state.is_adreno_stock`, so it never
+   executes on the measured driver. It belongs to ticket 16's stock-only track.
+6. **Out of scope.** A full precompile needs a new file format. The driver side
+   already has an answer to the same problem: the Balemuni build in use raises
+   the Mesa shader cache to 4 GB and the pipeline suballocator to 512 KB for
+   exactly this. If steps 1 to 4 leave a large number, record it as the starting
+   point for the next plan rather than starting the work here.
 
 ## Acceptance
 

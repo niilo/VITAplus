@@ -63,6 +63,19 @@ driver. Ticket 22 owns the preset.
 6. Add a temporary setting `swapchain-extra-images`, default 1, so 0 gives
    `minImageCount`.
 
+## The present mode list is not collected yet
+
+Ticket 01 step 7 asked for one `LOG_INFO` in
+`vita3k/renderer/src/vulkan/screen_renderer.cpp` that prints the whole
+`getSurfacePresentModesKHR` result, and its answer does not report it. So the
+list this ticket needs is not on record. The only mode on record is
+`Present mode: Mailbox` under Turnip, from tickets 00 and 01. The stock driver's
+is not recorded.
+
+Add that one log line as step 0, behind the `perf-log` setting from ticket 02,
+and read the list from `vita3k.log` before the A/B. It is one line of code and
+no run is wasted on it.
+
 ## Measurement
 
 Do not start until ticket 04 has a baseline. Run A/B/A on the 60 FPS title and
