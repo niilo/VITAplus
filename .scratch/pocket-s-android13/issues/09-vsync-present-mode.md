@@ -19,6 +19,24 @@ This is the same work as `.scratch/pocket-s-optimization/issues/11-present-mode-
 claimed, with the code on `origin/pocket-s/11-present-mode-vsync` (`a52121af`)
 built on the old base. Port it.
 
+## Why this matters more after the retarget to energy
+
+A 30 FPS game on a 60 Hz panel presents every other vsync. MAILBOX lets the
+renderer run free and discard frames; FIFO ties each present to a vsync, so the
+GPU can idle between presents instead of being woken and then throwing the work
+away. Waking a GPU for 60 frames a second to use 30 of them is energy spent for
+nothing.
+
+That is a whole-device effect, not only the emulator's, which makes it larger
+than anything in the GPU-side tickets. Combine it with
+`ANativeWindow_setFrameRate` from ticket 28: telling SurfaceFlinger that the app
+produces 30 FPS can move the panel and the system scheduling as well as the
+renderer.
+
+Steadiness is now a gate rather than a score, so the late-frame fraction from
+criterion 2 of `../spec.md` belongs in the record next to the power figure.
+
+
 ## Risk
 
 `v-sync` defaults to `true`, so a change that keys the present mode on `v-sync`

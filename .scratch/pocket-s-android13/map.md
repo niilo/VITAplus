@@ -393,11 +393,18 @@ order changes from what the first draft assumed:
 2. **04**, the baseline, on Turnip only, in gameplay.
 3. **05**, the settings that still have an open question: the surface write-back
    rows and the thread rows. The framebuffer-fetch rows are answered.
-4. **18, 19, 28, 15, 06**, the GPU-side work. These are the real remaining
-   levers, because the GPU is the limit: a second full-panel pass, GMEM versus
-   direct rendering, letting the display hardware scale, attachment layouts, and
-   the unused input attachment on the raster-order path.
-5. **24, 30**, which need no baseline and can run at any point.
+4. **24**, the GPU clock. Under the energy target this is the largest single
+   question: what is the lowest clock that still holds a steady frame rate. Test
+   the three Ayaneo power modes before writing any code.
+5. **09, 28**, pacing and the frame rate hint. For a 30 FPS game on a 60 Hz
+   panel, FIFO and `ANativeWindow_setFrameRate` can move the whole device, not
+   only the renderer.
+6. **20**, resolution. Resolution 1.0 is a quarter of the pixels of 2.0, so
+   "how low can we go and still hold steady" is now the question.
+7. **18, 19, 15, 06**, the GPU-side work, for the same frame at less energy:
+   a second full-panel pass, GMEM versus direct rendering, attachment layouts,
+   and the unused input attachment on the raster-order path.
+8. **30**, which needs no baseline and can run at any point.
 6. **07, 08, 09, 10, 16, 17, 20, 21, 23, 25, 26, 27, 29** as their blockers
    clear.
 
@@ -430,6 +437,21 @@ measurement run on them before recording the reason they close.
 - 2026-10-02, ticket 00: **a measurement outside the game is not a result.**
   The first ticket 00 pass read a title screen and got the driver order
   backwards. The protocol now requires `tools/android/gameplay_scene.sh`.
+- 2026-10-03: **the target is energy per played frame, not frame rate.** Steady
+  30 FPS on a locked game, 60 where the rate is unlocked, and the lowest power
+  that holds both. Energy never buys playability: criterion 1 is a gate, and a
+  change that saves power and misses the frame rate or the steadiness is
+  rejected.
+- 2026-10-03: **the 29.96 FPS reference run does not meet the new
+  playability gate.** Its p99 interval is 43.43 ms against a 33.33 ms frame
+  time, so the emulator is missing vsyncs on a game that is meant to be locked
+  to 30. Fixing that is now a correctness issue, not a speed one.
+- 2026-10-03: **every measurement carries power and passes a validity check.**
+  `tools/android/device_power_sample.sh` reads device power as the battery
+  current times the voltage, and `tools/android/run_is_valid.sh` rejects a run
+  where the emulator's watchdog fired, where the thermal status during the run
+  was 3 or above, or where the samples covered a menu. The first energy
+  baseline attempted was rejected by that rule, which is why the rule exists.
 
 ## Fog
 

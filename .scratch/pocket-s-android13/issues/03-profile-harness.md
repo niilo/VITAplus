@@ -5,6 +5,22 @@ Type: task
 Label: ready-for-agent
 Blocked by: 01
 
+## Goal## The harness carries the energy axis, not only the frame data
+
+Everything here existed to answer "is it faster". The plan now asks "does it
+cost less", so the harness has to produce power beside frames, or the protocol
+cannot be followed. `tools/android/device_power_sample.sh` and
+`tools/android/run_is_valid.sh` were written for that and are the reason a
+rejected energy run never became a number.
+
+Every measurement in this plan therefore runs three commands, not one:
+
+```
+tools/android/gameplay_scene.sh <pkg> <label>      # frames, presents, scenes
+tools/android/device_power_sample.sh <csv> <secs>   # power, clocks, thermal
+tools/android/run_is_valid.sh <dir> <csv>           # may this be quoted
+```
+
 ## Goal
 
 Every ticket after this one needs CPU and GPU numbers, not just FPS. FPS alone

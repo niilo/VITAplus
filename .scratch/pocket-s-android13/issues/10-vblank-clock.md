@@ -22,6 +22,19 @@ This is the same work as `.scratch/pocket-s-optimization/issues/08-vblank-clock.
 claimed, with the code on `origin/pocket-s/08-vblank-clock` (`363f1b83`) built
 on the old base. Port it.
 
+## Why this is a playability ticket now, not a speed one
+
+Steady 30 FPS is a hard requirement under the retarget, and the current period
+is wrong for it. `TARGET_MICRO_PER_FRAME` is 16666 us, which is 60.002 Hz, while
+the panel runs at 59.94 Hz and the Vita at about 59.94 Hz. A 14 us error per
+frame is a vsync every few thousand frames, which is exactly the "few late
+frames" that criterion 2 measures.
+
+The target does not move the frame rate, so this is unlikely to be an energy
+win. It is on the list because a game that is meant to be locked to 30 FPS and
+misses vsyncs is not playable, and energy never buys that back.
+
+
 ## Steps
 
 1. `git show 363f1b83` and port it. Read it first.

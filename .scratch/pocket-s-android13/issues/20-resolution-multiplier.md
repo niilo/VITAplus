@@ -18,6 +18,21 @@ value the preset should set for this device.
 | 2.0 | 1920x1088 | 4.00x |
 | 2.5 | 2400x1360 | 6.25x |
 
+## Steps## Why this is a first-order energy question now
+
+The pixel count scales with the square of the multiplier, and on a GPU that is
+already at 93% busy the pixels are most of the work. Resolution 1.0 is a quarter
+of the pixels of resolution 2.0 and 2.5 is 6.25 times them.
+
+So the question is no longer "how high can we go" but **"how low can we go and
+still hold a steady frame rate, and does the picture survive"**. A title that
+holds a steady 30 FPS at resolution 1.0 has just removed three quarters of the
+pixel work, which is the largest single energy lever in this plan if it
+applies.
+
+Read that as a picture-quality decision with an energy saving attached, not as
+a speed test. Criterion 4 of `../spec.md` is what protects the picture.
+
 ## Steps
 
 1. **Resolution 2 is already measured on Turnip**: ticket 00 gives 29.96 FPS,

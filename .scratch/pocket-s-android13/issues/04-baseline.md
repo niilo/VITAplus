@@ -10,6 +10,28 @@ Blocked by: 00, 02, 03
 Know where the device is today, on the Plus base, so every later change has
 something to compare with. Nothing after this ticket is measurable without it.
 
+## Agent steps## What the baseline has to contain after the retarget
+
+For each title, the target frame rate (30 for a console-locked game, 60 for an
+unlocked one) and four numbers over the same 60 second window:
+
+| | why |
+| --- | --- |
+| average FPS | criterion 1 |
+| frame interval p99 **and the fraction of late frames** | criterion 2 |
+| mean device power in watts | criterion 3, the thing being optimised |
+| GPU clock mean and GPU busy percentage | says whether a change moved the GPU or the CPU |
+
+Without the power figure the baseline cannot answer any question this plan now
+asks. Without the late-frame fraction it cannot answer whether a change kept
+playability.
+
+The title set needs **one console-locked 30 FPS title and one unlocked title**.
+A single 30 FPS title cannot exercise criterion 1 for the 60 case, and the two
+have different criteria. Uncharted is the 30 FPS title; `PCSA00015` (WipEout
+2048) and `PCSA00097` (Sly 2) are the candidates for the unlocked one and
+only a person who knows the games can say which they are.
+
 ## Agent steps
 
 0. Read this first. The reference driver is **Turnip**, decided by ticket 00.

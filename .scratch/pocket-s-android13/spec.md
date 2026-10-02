@@ -2,10 +2,31 @@
 
 ## Goal
 
-Raise the frame rate and hold it steady on the Ayaneo Pocket S, and reduce
-the work the emulator asks the GPU and the CPU to do. Every change must be
-measured on the device with the protocol below. A change without a
-measurement is not done.
+**Minimise the energy the emulator uses per played frame, without making the
+game less playable.**
+
+Concretely, in this order:
+
+- A game locked to 30 FPS must hold a steady 30 FPS. Not an average of 30:
+  every frame on time, with no late frames.
+- A game with an unlocked frame rate must reach 60 FPS where the hardware
+  allows.
+- Subject to those two, the device must draw as little power as possible.
+
+Frame rate on its own is not the goal and a higher frame rate is not
+automatically better. A change that raises the frame rate and raises the power
+is a regression. A change that lowers the power and holds the frame rate
+steadily is a win, even when the average frame rate does not move.
+
+Measured on 2026-10-02, before this retarget: Uncharted, Turnip, resolution 2,
+29.96 FPS with a 43.43 ms p99 interval and 93% GPU busy. The 43.43 ms p99
+**fails** the steadiness bar in this spec. Under the old goal that run passed;
+under this one it is a playability defect to fix. The energy half of the plan
+had not been measured at all.
+
+Every change must be measured on the device with the protocol below. A change
+without a measurement is not done. A measurement from a run that fails
+`tools/android/run_is_valid.sh` is not a measurement.
 
 This plan replaces `.scratch/pocket-s-optimization/`. That plan was written
 against the old code base. The base is now Vita3K-Plus (`.scratch/plus-base/`),
@@ -210,31 +231,65 @@ Consequences:
 
 ## Success criteria
 
-Ticket 04 records the baseline. Each title gets a target of 30 or 60 FPS
-there. Criteria are measured on a second play of the scene, with a warm shader
-cache, in the Ayaneo mode named in ticket 04.
+Ticket 04 records the baseline. Each title declares its target: 30 FPS for a
+game the console locked to 30, 60 for an unlocked one. A title that targets 30
+and a title that targets 60 are held to **different criteria**, and a change is
+judged on each against its own target.
 
-1. **Frame rate held.** At least 95% of recorded seconds have
-   `fps >= target - 1`. A recorded second is one line of `frames.csv`, counted
-   into its second by `steady_us`.
-2. **Steady frames.** Over the 60 second record of one run, the 99th
-   percentile of frame intervals is at most 1.5 times the target frame time.
-3. **No heat drop.** In a 20 minute run, the average FPS of minutes 18 to 20
-   is within 3% of the average of minutes 1 to 3, and the Android thermal
-   status stays at 3 (SEVERE) or below. The values are 0 none, 1 light,
-   2 moderate, 3 severe, 4 critical, 5 emergency, 6 shutdown.
-4. **No regression.** On every title the average FPS is not lower than the
-   baseline by more than the spread of the A runs.
-5. **GPU work is understood.** Every change in this plan is recorded with the
-   GPU busy percentage and the GPU clock from `/sys/class/kgsl/kgsl-3d0/`, so
-   a reader can tell whether a change moved GPU time or CPU time.
-6. **No desktop regression.** `container/vita3k.sh test` passes, the format
-   check passes, and a title from ticket 04 is checked on a desktop build
-   before the plan closes. `gpu_busy_percentage` does not exist there, so this
-   check is a correctness check, not a speed check.
+Measured on the second play of the scene, warm caches, on a cool device, in the
+Ayaneo mode named in ticket 04, over the 60 second record of one run.
 
-A title that cannot meet 1 or 2 counts as a success if it improves over the
-baseline by more than the A spread and meets 3 and 4. Record why.
+1. **Playability first, and it is a gate, not a score.** A change is only
+   admissible if it holds both of these, on each title:
+   - the target frame rate for that title, and
+   - the steadiness of criterion 2, which is the part the emulator controls.
+
+   A change that improves energy and misses either is **rejected**, whatever it
+   saves. Energy never buys playability.
+
+2. **Steady frames.** Over the 60 second record, the 99th percentile of frame
+   intervals is at most 1.5 times the target frame time, so at most 50 ms for a
+   30 FPS title, and the mean interval is within 5% of the target frame time.
+   On a 60 Hz panel the quantum is 16.67 ms, so a 30 FPS frame that lands one
+   vsync late measures 50 ms. Criterion 2 is therefore also a statement about
+   how often a frame misses its vsync, so record the **fraction** of intervals
+   above 1.5 times the frame time and not only the p99.
+
+3. **Energy.** The mean device power draw in watts, from
+   `tools/android/device_power_sample.sh`, over the same window, with the GPU
+   clock, the GPU busy percentage and the CPU clock per cluster beside it. An
+   A/B counts as a win only if the power difference is larger than the spread
+   of the A runs. Device power is the battery current times the battery voltage
+   and covers the display and the Android system as well as the emulator, so
+   only the **difference** between two runs belongs to the emulator.
+
+4. **No playability regression beyond the frame.** Input latency must not get
+   worse, and the picture must not change. Both are checked by screenshot
+   comparison at fixed moments. A picture change is a rejection even when the
+   power saving is large: this target says "without compromising playability",
+   and a wrong picture is not playable.
+
+5. **No heat drop.** In a 20 minute run the average FPS of minutes 18 to 20 is
+   within 3% of minutes 1 to 3, and the Android thermal status sampled
+   **during** the run stays at 3 (SEVERE) or below. Values: 0 none, 1 light,
+   2 moderate, 3 severe, 4 critical, 5 emergency, 6 shutdown. A run above 3 is
+   invalid, not a slow run.
+
+6. **The run is valid.** Every number comes from a run that
+   `tools/android/run_is_valid.sh` passes. It rejects a run where the
+   emulator's own watchdog fired, where the thermal status during the run was 3
+   or above, where the frame data is too thin, or where the power samples
+   covered a menu instead of play. The first attempt at an energy baseline in
+   this plan was rejected by exactly this rule, which is why the rule exists.
+
+7. **No desktop regression.** `container/vita3k-docker.sh test` passes, the
+   format check passes, and a title is checked on a desktop build before the
+   plan closes. That is a correctness check, not a speed check.
+
+A change that holds 1 and 2 and cuts energy in criterion 3 is a win. A change
+that holds 1 and 2 and cuts energy by less than the A spread is **rejected**:
+it is inside the noise, and a change inside the noise is not worth the risk of
+a merge.
 
 ## Measurement protocol
 
@@ -282,8 +337,23 @@ Every experiment uses this protocol. Record results under the ticket's
    skip the boot and the menu walk. A frame rate measured on a title screen
    barely touches the renderer, and that mistake has already produced one
    wrong conclusion in this plan. Ticket 00 records it.
-10. **Raw files.** Keep logs, CSV files, traces and screenshots under `tmp/`.
-    Do not commit them.
+10. **Sample the power during the run.** Run
+    `tools/android/device_power_sample.sh <csv> <seconds>` alongside the game,
+    covering the movement window. Device power is the battery current times the
+    battery voltage, read from `/sys/class/power_supply/battery`. It covers the
+    display and the Android system as well as the emulator, so only the
+    difference between two runs is the emulator's share. The sampler records the
+    thermal status during the run, because a status read afterwards cannot say
+    whether the run itself was limited.
+11. **Reject an invalid run.** Run `tools/android/run_is_valid.sh <gameplay dir>
+    <power csv>` before quoting any number. It rejects a run where the emulator's
+    watchdog fired, where the thermal status during the run was 3 or above,
+    where the frame data is too thin, or where the power samples covered a menu.
+    The first energy baseline attempted in this plan failed this check: the
+    emulator reported no flip for 8453 vblanks and the device was at thermal
+    status 3.
+12. **Raw files.** Keep logs, CSV files, power CSVs, traces and screenshots
+    under `tmp/`. Do not commit them.
 
 ## Constraints
 

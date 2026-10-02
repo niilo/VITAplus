@@ -114,6 +114,21 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   colour attachment before every programmable-blending draw. An earlier note
   here had the two drivers the other way round, from a title-screen
   measurement.
+- The goal is **energy per played frame**, not frame rate: a steady 30 FPS on a
+  game locked to 30, 60 where the rate is unlocked, and the lowest device
+  power that holds both. A change that saves power and misses the frame rate or
+  the steadiness is rejected. See `.scratch/pocket-s-android13/spec.md`.
+- `tools/android/device_power_sample.sh <csv> <secs>` samples device power, the
+  clocks and the thermal status during play. Power is the battery current times
+  the battery voltage from `/sys/class/power_supply/battery`, and it covers the
+  display and Android too, so only the difference between two runs is the
+  emulator's. `power_now` in the same folder read 54450779 on this device,
+  which is not a plausible draw, so it is not used.
+- `tools/android/run_is_valid.sh <gameplay dir> [power csv]` decides whether a
+  run may be quoted. It rejects a run where the emulator's watchdog fired, where
+  the thermal status during the run was 3 or above, or where the samples
+  covered a menu. `vita3k.log` is append-only, so it reads only the last
+  session, after the "Vita3K session start" banner.
 - `.signing/` holds the local signing keys (a dev key and the release key). Git
   ignores it and the repository is public. Never print, commit, copy, upload or
   send a file from it, and never put a password from it in a command line.
