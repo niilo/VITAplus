@@ -44,7 +44,7 @@ other row below is work that has not been done.
 | --- | --- |
 | 00 | Choose the driver. Resolved: the plan measures on Turnip. The GPU power constraint was not answered and is ticket 24. |
 | 01, 02 | Device facts and the perf-log port. Both resolved. |
-| 03 | The profiling harness. Built; `trace`, `clocks` and `latency` run on the device. `perf` waits on an APK, and an APK cannot be built from a git worktree. |
+| 03 | The profiling harness. Built and merged. `trace`, `clocks` and `latency` run on the device, and the release APK builds. `perf` and `latency` need a game in play. |
 | 04 | The baseline. Every other measurement is compared against it. |
 | 05 | The render configuration matrix. The framebuffer-fetch rows are already answered; the write-back and thread rows are not. |
 | 06 to 10 | The Vulkan frame path: framebuffer fetch, visibility queries, macroblock sync, present mode, vblank clock. |

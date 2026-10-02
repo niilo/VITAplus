@@ -458,15 +458,16 @@ measurement run on them before recording the reason they close.
   four host threads now carry short names, so a report separates them. Measured
   on the device: `trace` produced a 3.5 MB trace carrying `sched_switch`,
   `power/gpu_frequency`, `gpu_mem_total` and `thermal_temperature`; `clocks`
-  reads every column; `latency` finds the SurfaceFlinger layer. `perf` is not
-  verified, because an APK cannot be built from a git worktree.
+  reads every column; `latency` finds the SurfaceFlinger layer.
 - 2026-10-03, ticket 03: **the Android APK cannot be built from a git
-  worktree.** SDL's `GetGitRevisionDescription.cmake` requires a `.git`
-  *directory* with `HEAD` and `packed-refs`, and a worktree has `.git` as a
-  file. Confirmed pre-existing by building with the branch's only manifest
-  change stashed. `container/vita3k-docker.sh android release` has to run in the
-  main checkout. The same applies to `git submodule update --init --recursive`,
-  which reports success and leaves the working trees empty.
+  worktree, but it builds in the main checkout.** SDL's
+  `GetGitRevisionDescription.cmake` needs a `.git` *directory* with `HEAD` and
+  `packed-refs`, and a worktree has `.git` as a file. Confirmed pre-existing by
+  building a clean tree. In `/home/pielinen/src/VITAplus` the release APK builds
+  and the `profileable` tag is in its manifest, so `device.sh perf` is now
+  runnable. `git submodule update --init --recursive` in a worktree reports
+  success and leaves the working trees empty, so every submodule needs a manual
+  checkout as well.
 - 2026-10-03, ticket 03: **the GPU is not pinned to its cap.** With the emulator
   up and the GPU idle, `gpuclk` reads 220 MHz against a 680 MHz `max_gpuclk`,
   and it read 680 MHz only while a game was running. So the cap is a ceiling,

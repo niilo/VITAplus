@@ -106,10 +106,11 @@ cannot tell whether a change moved GPU time or CPU time. Build the tooling once.
 
 ## Answer
 
-The code part is done on branch `pocket-s-03-profile-harness`. Verified on the
+The code part is done on branch `pocket-s-03-profile-harness`, in commit
+`cff2382c`, merged into `master` as `5dfe103a`. Verified on the
 device (00314BHD01004402, Android 13) for the three commands that need no game
 running: `clocks` and `trace` produce output, `latency` finds the layer.
-`perf` needs a release APK built from this branch, which is the one step left.
+`perf` still needs a device run against a built APK; see "What is left".
 
 ### 1. Manifest flag
 
@@ -253,13 +254,23 @@ and a null pointer are refused. The read-back tests skip off Linux, where
 
 ### What is left
 
-- `device.sh perf <package> <label>` has to run against a release APK built from
-  this branch, with the emulator in play, to confirm `perf.data` and the HTML
-  report both come out with symbols resolved.
-- `device.sh latency` has to run against an unlocked device to confirm the three
-  frame columns carry values.
-- Both need the game reachable, so they are the human half of this ticket. The
-  ticket stays `claimed`.
+The release APK **was** built, in the main checkout, after this ticket merged:
+`container/vita3k-docker.sh android release` gives
+`build/android-apk/app-release.apk`, and the `profileable` tag with its `shell`
+attribute is present in that APK's manifest. So the APK that `perf` was waiting
+for now exists.
+
+Still to do, both needing the game in play on an unlocked device:
+
+- `device.sh perf <package> <label>` against that APK, to confirm `perf.data`
+  and the HTML report come out with symbols resolved. The report step also needs
+  `ANDROID_NDK_HOME` to point at an NDK; without it the command still pulls
+  `perf.data` and the symbols, which are the raw result.
+- `device.sh latency <package> <label>` on an unlocked device, to confirm the
+  three frame columns carry values. On a locked device they read zero.
+
+Both need the game reachable, so they are the human half of this ticket. The
+ticket stays `claimed`.
 
 ## Comments
 
