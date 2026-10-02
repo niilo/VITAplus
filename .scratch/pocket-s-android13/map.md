@@ -237,9 +237,13 @@ AYANEO claim. A line marked "proxy" was measured on a different part.
   `madvise(MADV_HUGEPAGE)`. Source: `android13-5.15` GKI defconfig.
 - `MADV_COLLAPSE` needs Linux 6.1. Android 13 ships 5.10 and 5.15 only, so the
   call returns `EINVAL`. Source: `kernel/common` tag list.
-- `setpriority` on the calling thread is allowed with no capability.
-  `pthread_setschedparam` with `SCHED_FIFO` returns `EPERM`.
-  `sched_setaffinity` can only narrow the current mask.
+- `setpriority` on the calling thread passes the capability check, but the
+  kernel allows a lower nice value only with `CAP_SYS_NICE` or a nonzero
+  `RLIMIT_NICE` soft limit, and an app process has neither. So an app cannot
+  raise its own priority by lowering the nice value. `pthread_setschedparam`
+  with `SCHED_FIFO` returns `EPERM`. `sched_setaffinity` can only narrow the
+  current mask. Source: `is_nice_reduction()` in `kernel/sched/core.c`, and
+  the RLIMIT_NICE section of `getrlimit(2)`. Ticket 11 measured the refusal.
 - Android's own guidance says an app should not set CPU affinity, because
   devices often ignore it. ADPF exists so the system picks the core type.
   Source: `source.android.com/docs/core/perf/performance-hint-api`.
@@ -378,6 +382,8 @@ Freedreno documentation, and the Mesa `freedreno` source.
 
 - Which Vulkan driver the benchmark runs will use. The stock driver forces
   Double Buffer, which is the most expensive frame path. Ticket 00.
+- Whether the device honours an ADPF hint. Ticket 13. This matters more now
+  that ticket 11 found the nice value is refused.
 - Whether the A32 device ID is `0x43050A00` or `0x43050A01`, and whether
   "Adreno A32" and "Adreno (TM) 740" name one part or two. Ticket 01.
 - Whether the queue family reports any valid timestamp bits, which decides
