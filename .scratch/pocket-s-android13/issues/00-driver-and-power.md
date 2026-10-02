@@ -146,6 +146,20 @@ tuned build for other emulators and not for this one.
 - `CLAUDE.md` says the stock driver runs this scene at 7 FPS and Turnip at 30.
   That is now measured the other way round and the line is corrected.
 
+### Caveat on the thermal state
+
+`dumpsys thermalservice` reported `Thermal Status: 3`, which is SEVERE, after
+these four runs, with `gpuss-0` at 66700 millidegrees and `skin-msm-therm` at
+55131. Criterion 3 of `../spec.md` wants status 3 or below, so the device was
+at its limit during the later runs.
+
+The four runs were not spaced by the cooldown step of the protocol, because
+this ticket only needed the driver decision and not a benchmark. The first run
+of each pair is the cooler one, and both pairs agree to within 0.2%, so the
+comparison between drivers holds. The absolute numbers are not a baseline:
+ticket 04 does the protocol properly, with a cooldown and an A/B/A order, on a
+cool device.
+
 ### Still to do
 
 - The A/B/A protocol from `../spec.md`, three runs each, to put a spread on
