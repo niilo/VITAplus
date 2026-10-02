@@ -7,7 +7,7 @@ Issues and specs for this repo live as markdown files in `.scratch/`.
 - One feature per directory: `.scratch/<feature-slug>/`
 - The spec is `.scratch/<feature-slug>/spec.md`
 - Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Each issue file starts with a `Status:` line (`open`, `claimed`, `resolved` or `rejected`) and a `Label:` line with the triage role (see `triage-labels.md` for the role strings). `rejected` means the work ran and its idea did not help; it counts as done for `Blocked by`
+- Each issue file starts with a `Status:` line (`open`, `claimed`, `resolved`, `rejected` or `superseded`) and a `Label:` line with the triage role (see `triage-labels.md` for the role strings). `rejected` means the work ran and its idea did not help; it counts as done for `Blocked by`. `superseded` means the plan this ticket belongs to was replaced and the work was carried into a ticket of another plan, or the base changed so the goal already holds. It also counts as done for `Blocked by`. Use it only when the work moved or became unnecessary, never when it ran and failed.
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
 ## When a skill says "publish to the issue tracker"

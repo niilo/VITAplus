@@ -1,6 +1,7 @@
 # 03: Turn the Vulkan validation layer off by default on Android
 
-Status: claimed
+Status: superseded
+Superseded by: the base already defaults `validation-layer` to false
 Claimed: 2026-09-25 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -49,3 +50,18 @@ They make the same change: `config.h`, `state.h`, `EmulatorConfig.kt` and
 the per-game XML default. A rebase of 9f359dfa on `master` leaves no
 change, so the branch is not merged. The measurement in ticket 06 is still
 to do.
+
+Update 2026-10-03: this ticket is `superseded`. The plan it belongs to is
+replaced by `.scratch/pocket-s-android13/`, and the goal already holds on the
+Vita3K-Plus base without any of this work. `validation-layer` is false in
+`vita3k/config/include/config/config.h:145`, in
+`vita3k/config/include/config/state.h:106` and in
+`vita3k/config/src/settings.cpp:252`. The measurement in ticket 06 is dropped
+with the plan and will not be run, so nothing in `## Acceptance` is left to
+meet.
+
+## Comments
+
+- 2026-10-03: closed as `superseded`. The line references in `## Problem`
+  (`config.h:136`, `EmulatorConfig.kt:81`) were against the old base. On this
+  base the setting is at `vita3k/config/include/config/config.h:145`.

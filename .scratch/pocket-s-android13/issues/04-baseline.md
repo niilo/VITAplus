@@ -10,7 +10,7 @@ Blocked by: 00, 02, 03
 Know where the device is today, on the Plus base, so every later change has
 something to compare with. Nothing after this ticket is measurable without it.
 
-## Agent steps## What the baseline has to contain after the retarget
+## What the baseline has to contain after the retarget
 
 For each title, the target frame rate (30 for a console-locked game, 60 for an
 unlocked one) and four numbers over the same 60 second window:

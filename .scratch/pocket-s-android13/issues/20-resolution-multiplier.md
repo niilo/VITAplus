@@ -18,7 +18,7 @@ value the preset should set for this device.
 | 2.0 | 1920x1088 | 4.00x |
 | 2.5 | 2400x1360 | 6.25x |
 
-## Steps## Why this is a first-order energy question now
+## Why this is a first-order energy question now
 
 The pixel count scales with the square of the multiplier, and on a GPU that is
 already at 93% busy the pixels are most of the work. Resolution 1.0 is a quarter

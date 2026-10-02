@@ -1,6 +1,7 @@
 # 08: Make the emulated vblank clock steady
 
-Status: claimed
+Status: superseded
+Superseded by: .scratch/pocket-s-android13/issues/10-vblank-clock.md
 Claimed: 2026-09-25 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -56,3 +57,25 @@ pass. `container/vita3k.sh test` passes.
   the clock change alone does not lower the frame interval 99th percentile.
 
 Still to do: the A/B/A runs on the device after ticket 06.
+
+Update 2026-10-03: this ticket is `superseded` by
+`.scratch/pocket-s-android13/issues/10-vblank-clock.md`, which carries the same
+work over to the Vita3K-Plus base. That ticket has the same steps, keeps
+`vblank-period-us` and `vblank.csv`, and adds that the new ticket is a
+playability ticket rather than an energy one: the 30 FPS title already meets
+criterion 2 of `../../pocket-s-android13/spec.md`, so only the 60 FPS title can
+show anything, and that title does not exist until
+`.scratch/pocket-s-android13/issues/04-baseline.md` picks it.
+
+Step 4 (`AChoreographer`) stays dropped. `Choreographer.postFrameCallback64` is
+not in the public SDK and `AChoreographer` is not reachable from native code.
+
+## Comments
+
+- 2026-10-03: closed as `superseded`. The line references in `## Problem`
+  (`display.cpp:32-82`, `:78`, `:32`) were against the old base. On this base
+  the clock and the sleep are at `vita3k/display/src/display.cpp:414-416`, and
+  `TARGET_MICRO_PER_FRAME` is at `vita3k/display/src/display.cpp:56`. The three
+  defects in `## Problem` are all still there: it reads `system_clock`, it
+  computes the next sleep from `time_ms % TARGET_MICRO_PER_FRAME`, and the
+  period is `1000000 / 60`.

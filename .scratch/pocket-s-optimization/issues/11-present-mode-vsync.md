@@ -1,6 +1,7 @@
 # 11: Make v-sync choose the Vulkan present mode
 
-Status: claimed
+Status: superseded
+Superseded by: .scratch/pocket-s-android13/issues/09-vsync-present-mode.md
 Claimed: 2026-09-25 Claude Code session (Opus 5.5)
 Type: task
 Label: ready-for-agent
@@ -68,3 +69,26 @@ pass. `container/vita3k.sh format-check` passes.
 
 Still to do: the v-sync switch test and the A/B/A runs on the device after
 ticket 06.
+Update 2026-10-03: this ticket is `superseded` by
+`.scratch/pocket-s-android13/issues/09-vsync-present-mode.md`, which carries the
+same work over to the Vita3K-Plus base. That ticket keeps
+`select_present_mode()`, `swapchain-extra-images` and the log line, and adds
+that under the energy retarget this is the largest whole-device lever in the
+plan: a 30 FPS game on a 60 Hz panel presents every other vsync, so MAILBOX
+wakes the GPU 60 times a second to use 30 of them.
+
+## Comments
+
+- 2026-10-03: closed as `superseded`. The line references in `## Problem`
+  (`screen_renderer.cpp:208-228`, `:258`, `:696-708`, `:684-685`) and in
+  `vulkan/renderer.cpp:1159` were against the old base. On this base the
+  present-mode order is `vita3k/renderer/src/vulkan/screen_renderer.cpp:211-231`,
+  the initial value `eImmediate` is at `:214`, the image count is
+  `swapchain_size` at `:261`, `create_swapchain()` is at `:247`, `create_surface_image()` at `:713` and
+  `ensure_swapchain()` at `:725`. `vita_surface` is indexed per swapchain image
+  at `vita3k/renderer/src/vulkan/renderer.cpp:1424` (was `:1159`), and it is
+  sized from `swapchain_size` at `screen_renderer.cpp:714`. So the resizing
+  step 3 asks for belongs in `create_swapchain()`, next to `:261`.
+- 2026-10-03: the android13 ticket records that the present mode list this
+  ticket needs was never collected, so the A/B still needs a device run that
+  logs `getSurfacePresentModesKHR`.

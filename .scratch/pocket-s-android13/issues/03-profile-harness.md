@@ -6,7 +6,7 @@ Label: ready-for-agent
 Blocked by: 01
 Claimed: 2026-10-03 cline session (pocket-s-03-profile-harness)
 
-## Goal## The harness carries the energy axis, not only the frame data
+## The harness carries the energy axis, not only the frame data
 
 Everything here existed to answer "is it faster". The plan now asks "does it
 cost less", so the harness has to produce power beside frames, or the protocol

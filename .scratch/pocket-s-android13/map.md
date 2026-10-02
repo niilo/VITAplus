@@ -11,7 +11,7 @@ Field meanings come from `docs/agents/issue-tracker.md` and
 
 | Field | Values |
 |---|---|
-| `Status:` | `open`, `claimed`, `resolved`, `rejected` |
+| `Status:` | `open`, `claimed`, `resolved`, `rejected`, `superseded`. `superseded` means the work moved to another ticket or the base made it unnecessary, and it counts as done for `Blocked by`. See `docs/agents/issue-tracker.md`. |
 | `Type:` | `research`, `grilling`, `task`, `experiment` |
 | `Label:` | `ready-for-agent` means the code and tooling work is fully specified and needs no device. A ticket that runs the measurement protocol from `../spec.md` is `ready-for-human`, because it needs the unlocked device, the four benchmark titles from ticket 04, and a person to hold touches. |
 | `Blocked by:` | ticket numbers, or `none`. Work may start when all are `resolved` or `rejected`. |
@@ -25,6 +25,23 @@ follow from that:
 - A ticket whose `## Acceptance` names A/B/A numbers stays `open` until a human
   supplies them, whatever its `Label:` says. Code merged with no numbers is not
   a resolved ticket, and ticket 22 must not take an unmeasured value from it.
+
+## `Status: claimed` and `Blocked by:`
+
+A ticket stays `claimed` while a human half is open, so `claimed` does not mean
+the code is missing. Ticket 03 is the case: its code merged and only
+`device.sh perf` and `device.sh latency` on an unlocked device are left.
+
+Because `Blocked by:` lists code dependencies only, a blocker whose code has
+merged does not block. So on `master` at `7f77a5f4`:
+
+- 12, 13 and 14 are unblocked. All three name 03, and all three need only its
+  merged code.
+- 04 steps 3 and 4 are unblocked, for the same reason. Steps 1 and 2 and the
+  `## Human steps` need a person.
+
+Do not close a blocker early to unblock work. Record the reasoning here
+instead, as this section does.
 
 ## Facts from the code
 
