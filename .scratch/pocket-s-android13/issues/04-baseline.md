@@ -1,9 +1,10 @@
 # 04: Record the baseline
 
-Status: open
+Status: claimed
 Type: experiment
 Label: ready-for-human
 Blocked by: 00, 02, 03
+Claimed: 2026-10-03 cline session (pocket-s-04-baseline-harness)
 
 ## Goal
 
@@ -81,4 +82,66 @@ only a person who knows the games can say which they are.
 
 ## Answer
 
+Steps 3 and 4 are done. The code part of this ticket needs no device.
+
+- **`tools/android/device.sh baseline <package> <title id> <label>
+  [key=value]...`** runs one measurement set for one title. It runs `am
+  kill-all` once, then a discarded warm-up, then A, B, A, B, A. Each run
+  reaches the scene, samples the device power and the SurfaceFlinger latency
+  beside the movement, decides validity with `run_is_valid.sh`, and writes
+  `tmp/baseline/<label>/`. A carries no setting and B applies the `key=value`
+  pairs, so A and B differ only in the setting and use the same APK.
+- **`tools/android/perf_report.py <run dir>`** prints the table this ticket
+  asks for: driver, target FPS, average FPS, frame interval p99 and max, the
+  late-frame fraction, presents per second, mean device power with its minimum,
+  GPU busy percentage, GPU clock against its cap, the three CPU cluster clocks
+  and the worst thermal status during the run, and the SurfaceFlinger interval
+  p99. Every missing input prints what is missing rather than a zero.
+- **`tools/android/test_perf_report.py`** covers the report: the units, the
+  zero-column case, the late-frame fraction, the percentile, the header-based
+  lookup of the power CSV, and the missing-file cases. 10 tests.
+
+### Two defects found in review, both fixed here
+
+**The samplers did not cover the gameplay.** The first version started
+`device_power_sample.sh` and `cmd_latency` at the same moment as the scene walk
+and sampled for `seconds` (60). `gameplay_scene.sh` needs 50 + 9 + 4 + 55 = 118
+seconds to reach the level, so both samplers finished about a minute before the
+camera started moving. Every power figure would have described the menus, and
+`run_is_valid.sh` rule 4 rejects exactly that, so no run would have passed. The
+scene script now runs in the background, the samplers start after
+`lead_seconds`, and the movement outlasts the sampling window. `lead_seconds` is
+read out of the scene script rather than written here, so a change to those waits
+cannot silently move the window off the gameplay. `BASELINE_LEAD` overrides it
+for another title.
+
+**An invalid run still printed a full table.** Now `run_is_valid.sh` decides
+first, and an invalid run prints its reasons instead of a report. Criterion 6 of
+`../spec.md` says a run that fails that check is not a measurement.
+
+Two smaller fixes from the same review: `local` inside the cooldown loop body
+made `set -u` fail on the second pass, so the variables are declared before the
+loop; and `read_cpu_temp` returned nothing, because `adb shell` loses the
+quoting of a multi-line argument and the device shell read the inner `$(...)` as
+a separate command. It now passes the payload through `sh -c`, the way
+`cmd_clocks` does. It reads 38000 to 50300 mdeg on the connected device.
+
+### What is left
+
+Steps 1, 2 and the `## Human steps` need a person. The baseline numbers do, too:
+this ticket stays `claimed`. The four titles, the scene for each, the save slot,
+the buttons from boot and the Ayaneo power mode are step 1 to 5 of `## Human
+steps`, and none of them is knowable without the device and the games.
+
 ## Comments
+
+- 2026-10-03: the report was checked against a recorded run in
+  `tmp/gameplay/turnip-energy/` with its power CSV. It reads 6.47 FPS, a 37.05 ms
+  p99 and a 92 percent GPU busy, which is the shape of table the later tickets
+  paste. That run is not a baseline: it is the menu-time sample that
+  `run_is_valid.sh` rejected, and it is quoted here only to show the tool
+  parsing real files.
+- 2026-10-03: `perf_report.py` finds the power CSV by its header, not by its
+  name. The sampler takes the output path as an argument, so the name is
+  whatever the caller chose, and `clocks.csv` and `latency.csv` have their own
+  headers.
