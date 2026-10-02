@@ -31,6 +31,42 @@ settings that already exist.
 | `turbo-mode` | `false` | Calls `adrenotools_set_turbo` (`renderer.cpp:2388`). It only exists for the stock Qualcomm driver. The call is not present on the other driver. |
 | `disable-raster-order` | `false` | Turns off `VK_EXT/ARM_rasterization_order_attachment_access`, which **is present here** under Turnip. It is the framebuffer-fetch path this device uses, so this setting is live and worth an A/B. |
 
+## What is already measured, on this device
+
+Three settings have been tested with the gameplay harness, on Uncharted at
+resolution 2, camera moving, read with `--warmup 120`:
+
+| Setting | Driver | FPS | p99 | Result |
+| --- | --- | --- | --- | --- |
+| `high-accuracy: false` | stock | 5.76 | 187.91 ms | baseline for that driver |
+| `high-accuracy: true` | stock | 6.39 | 169.84 ms | **no effect**, `direct_fragcolor` stays true |
+| `high-accuracy: false` | Turnip | 29.96 | 43.43 ms | baseline for that driver |
+| `disable-programmable-blending: true` | Turnip | 29.86 | 47.65 ms | **no gain, and it breaks the picture** |
+
+The last one is the important negative result. Turning programmable blending
+emulation off does not make the framebuffer-fetch path cheaper on Turnip,
+because Turnip was never using the expensive path: it has
+`rasterization_order_attachment_access`, which needs no per-draw barrier.
+
+And it destroys the picture. The screenshot at
+`tmp/gameplay/turnip-nopb/step-4-level.png` shows large black polygons where
+the waterfall and the rock face are, and the file is 825 KB against 6.4 MB for
+a correct frame. The feature log says why:
+
+```
+Programmable blending emulation disabled by config (framebuffer fetch will read nothing)
+FeatureState: direct_fragcolor=false programmable_blending=false
+```
+
+The setting is **`rejected`** for this device. It buys nothing and it costs the
+picture. NetherSX2-Turnip documented the same lever fixing a PS2 game, which
+does not carry over here.
+
+So the settings that are left worth measuring in this ticket are
+`disable-surface-sync`, `surface-sync-clamp-rt`, `guest-cores`,
+`accurate-thread-scheduling`, `async-pipeline-compilation`, `log-level` and
+`turbo-mode`. The framebuffer-fetch rows are answered by ticket 00 and ticket 06.
+
 ## Steps
 
 1. Ticket 01 found `support_rasterized_order_access: true` under Turnip, so
