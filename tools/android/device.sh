@@ -35,6 +35,15 @@
 #   latency <package> <label> [secs]  sample dumpsys SurfaceFlinger --latency into
 #                                     tmp/latency/<label>/latency.csv
 #   screenshot <file>                 take a screenshot and pull it
+#   baseline <package> <title id> <label> [key=value]...
+#                                     run one measurement set for one title: a
+#                                     discarded warm-up, then A, B, A, B, A. Each
+#                                     run samples the power and the
+#                                     SurfaceFlinger latency beside it and writes
+#                                     tmp/baseline/<label>/report.txt. A is the
+#                                     reference and carries no setting; B applies
+#                                     the key=value pairs, so A and B differ only
+#                                     in the setting and use the same APK.
 #
 # Environment:
 #   ANDROID_SERIAL          the device to use. Needed when more than one
@@ -45,6 +54,17 @@
 #                           Without it the script looks under
 #                           android/app/build/intermediates/cxx.
 #   VITA3K_PERF_SECONDS     default seconds for `perf` (default 30)
+#   BASELINE_SECONDS        recorded seconds per run (default 60)
+#   BASELINE_WARMUP         seconds of gameplay the report skips (default 120)
+#   BASELINE_SETTLE         longest cooldown wait between runs, seconds (180)
+#   BASELINE_TARGET         target FPS for the late-frame fraction (default 30)
+#   BASELINE_LEAD           seconds before the gameplay starts, for a scene script
+#                           other than gameplay_scene.sh. Left unset, the value is
+#                           read out of the scene script, so the samplers cover
+#                           the movement and not the menu walk.
+#   BASELINE_SCENE          scene script for a title other than Uncharted. It is
+#                           called as <script> <package> <label> <out dir>, the
+#                           same shape as gameplay_scene.sh.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -431,6 +451,197 @@ cmd_screenshot() {
     echo "$file"
 }
 
+# One measurement set for one title: the A/B/A/B/A sequence of the protocol in
+# .scratch/pocket-s-android13/spec.md, with the power sampler and the SurfaceFlinger
+# latency sampler running beside each run, and the report written per run.
+#
+# The A and B values are config.yml settings, so A and B use the same APK and the
+# only difference between the runs is the setting. That is what the protocol asks
+# for, and it is why this takes settings and not two APKs.
+baseline_one_run() {
+    local package="$1" title_id="$2" label="$3" seconds="$4" warmup="$5"
+    shift 5
+    local settings=("$@")
+
+    local dir="$repo_root/tmp/baseline/$label"
+    mkdir -p "$dir"
+
+    # The settings go in before the run and are left in afterwards, so the caller
+    # sees what the run saw. A run is only comparable with the next one if the
+    # file says what it says.
+    local kv
+    for kv in "${settings[@]}"; do
+        cmd_config_set "$package" "${kv%%=*}" "${kv#*=}" > /dev/null
+    done
+
+    # Reaching the scene takes about two minutes: gameplay_scene.sh waits 50 s for
+    # the boot, then 9 s, 4 s and 55 s through the menus. The samplers have to
+    # cover the movement and not the walk, so they start after the scene is
+    # reached. Starting them first and sampling for `seconds` would record the
+    # menus, and run_is_valid.sh rejects exactly that.
+    #
+    # The scene script runs in the background and is waited for, because the wait
+    # is what puts the samplers in the middle of the run. run_is_valid.sh reads the
+    # thermal status the sampler recorded during the run; a status read afterwards
+    # cannot say whether the run itself was limited.
+    if [[ -n "${BASELINE_SCENE:-}" ]]; then
+        MOVE_SECONDS="$(( seconds + settle_after_scene ))" "$BASELINE_SCENE" \
+            "$package" "$label" "$dir" > "$dir/scene.txt" 2>&1 &
+    else
+        MOVE_SECONDS="$(( seconds + settle_after_scene ))" \
+            "$repo_root/tools/android/gameplay_scene.sh" \
+            "$package" "$label" "$dir" > "$dir/scene.txt" 2>&1 &
+    fi
+    local scene_pid=$!
+
+    sleep "$lead_seconds"
+    device_power_sample.sh "$dir/power.csv" "$seconds" > /dev/null 2>&1 &
+    local power_pid=$!
+    cmd_latency "$package" "$label" "$seconds" > /dev/null 2>&1 &
+    local latency_pid=$!
+
+    wait "$power_pid" 2> /dev/null || true
+    wait "$latency_pid" 2> /dev/null || true
+    wait "$scene_pid" 2> /dev/null || true
+
+    # The gameplay folder holds the perf CSVs; the report wants the power CSV and
+    # latency CSV beside them, and the latency sampler wrote to its own folder.
+    cp -f "$repo_root/tmp/latency/$label/latency.csv" "$dir/" 2> /dev/null || true
+    cp -f "$repo_root/tmp/clocks/$label/clocks.csv" "$dir/" 2> /dev/null || true
+
+    # Validity is decided before the report, and an invalid run does not get one.
+    # Criterion 6 of the spec says a run that fails this check is not a
+    # measurement, so printing the table anyway would invite quoting a number the
+    # protocol rejects. The reasons are printed instead.
+    local valid="INVALID"
+    "$repo_root/tools/android/run_is_valid.sh" "$dir" "$dir/power.csv" > "$dir/validity.txt" 2>&1 || true
+    valid="$(head -n 1 "$dir/validity.txt")"
+
+    echo "$label: $valid"
+    if [[ "$valid" == "VALID" ]]; then
+        python3 "$repo_root/tools/android/perf_report.py" "$dir" \
+            --target "${BASELINE_TARGET:-30}" --warmup "$warmup" > "$dir/report.txt" 2>&1 || true
+        sed 's/^/  /' "$dir/report.txt" 2> /dev/null || true
+    else
+        echo "  no report: this run is not a measurement. See $dir/validity.txt"
+        sed 's/^/  /' "$dir/validity.txt" 2> /dev/null || true
+        return 0
+    fi
+}
+
+# The A/B/A/B/A sequence. Five runs, so the spread of the three A runs is known
+# and criterion 3 of the spec can be applied: B differs from A only if its
+# difference from the A mean is larger than that spread.
+cmd_baseline() {
+    local package="$1" title_id="$2" label="$3"
+    shift 3
+
+    local seconds="${BASELINE_SECONDS:-60}"
+    local warmup="${BASELINE_WARMUP:-120}"
+    local settle="${BASELINE_SETTLE:-180}"
+
+    # How long the scene walk takes before the movement starts. gameplay_scene.sh
+    # waits WAIT_BOOT 50, WAIT_MENU 9, WAIT_DIALOG 4 and WAIT_LEVEL 55 by default,
+    # so 118 s. The value is read from the script rather than hard-coded here, so a
+    # change to those waits does not silently move the sampling window off the
+    # gameplay. A caller with its own scene script sets BASELINE_LEAD.
+    local lead_seconds="${BASELINE_LEAD:-}"
+    if [[ -z "$lead_seconds" ]]; then
+        local scene_script="$repo_root/tools/android/gameplay_scene.sh"
+        [[ -n "${BASELINE_SCENE:-}" ]] && scene_script="$BASELINE_SCENE"
+        lead_seconds="$(awk '
+            # The default is written wait_boot="${WAIT_BOOT:-50}", so the whole
+            # assignment is field 1 and the number is what follows the last ":-".
+            /^wait_boot=/ { gsub(/.*:-/, "", $1); gsub(/}.*/, "", $1); b = $1 }
+            /^wait_menu=/ { gsub(/.*:-/, "", $1); gsub(/}.*/, "", $1); m = $1 }
+            /^wait_dialog=/ { gsub(/.*:-/, "", $1); gsub(/}.*/, "", $1); d = $1 }
+            /^wait_level=/ { gsub(/.*:-/, "", $1); gsub(/}.*/, "", $1); l = $1 }
+            END { print b + m + d + l }
+        ' "$scene_script" 2> /dev/null || echo "")"
+        [[ "$lead_seconds" =~ ^[0-9]+$ ]] || die "cannot read the scene walk length from $scene_script. Set BASELINE_LEAD to the seconds before the gameplay starts."
+    fi
+
+    # The movement has to outlast the sampling window, so the sampler stops while
+    # the camera is still moving and not at the end of it.
+    local settle_after_scene=15
+    local first_temp=""
+
+    # The protocol runs `am kill-all` once before the warm-up and not between runs:
+    # between runs it would change the cache state the warm-up exists to fill.
+    adb shell am kill-all > /dev/null 2>&1 || true
+
+    echo "baseline: warm-up run, discarded"
+    baseline_one_run "$package" "$title_id" "$label-warmup" "$seconds" "$warmup" "$@" > /dev/null 2>&1 || true
+
+    local round name settings=()
+    for round in A B A B A; do
+        name="$label-$round$round"
+        # The A runs carry no setting, so A is the reference. B carries the pairs
+        # the caller gave after the label. `if` and not `&&`, because under `set -e`
+        # a false left side of `&&` as the last statement of a loop body ends the
+        # script.
+        settings=()
+        if [[ "$round" == "B" ]]; then
+            settings=("$@")
+        fi
+
+        baseline_one_run "$package" "$title_id" "$name" "$seconds" "$warmup" "${settings[@]+"${settings[@]}"}"
+
+        # Cooldown. The temperature has to come back to where the first run
+        # started, or the next run is measured on a hotter device than the last.
+        #
+        # `waited` and `temp` are declared before the loop, not inside it. `local`
+        # inside a loop body runs again on every pass, so a `set -u` shell sees an
+        # unset variable on the second pass.
+        if [[ -z "$first_temp" ]]; then
+            first_temp="$(read_cpu_temp)"
+        else
+            waited=0
+            temp=""
+            while (( waited < settle )); do
+                temp="$(read_cpu_temp)"
+                if [[ -n "$temp" ]] && \
+                   (( $(awk -v a="$temp" -v b="$first_temp" 'BEGIN { print (a-b < 0 ? b-a : a-b) }') <= 2 )); then
+                    break
+                fi
+                sleep 10
+                waited=$(( waited + 10 ))
+            done
+            if (( waited < settle )); then
+                echo "  cooled to ${temp} mdeg in ${waited}s"
+            else
+                echo "  still ${temp} mdeg after ${settle}s; the next run starts hotter"
+            fi
+        fi
+    done
+
+    echo
+    echo "Read each run's report.txt under tmp/baseline/. The set is valid when the"
+    echo "three A averages are within 3% of each other; otherwise repeat it once."
+}
+
+# The hottest of the two CPU clusters, in millidegrees. The zones named cpu-0-* and
+# cpu-1-* read without root on this device; the others return "Invalid argument".
+#
+# `sh -c` and the payload in a variable, because `adb shell` with a multi-line
+# argument loses the quoting: the device shell saw the inner $(...) and the case
+# patterns as separate commands and returned nothing. cmd_clocks reads its paths
+# the same way.
+read_cpu_temp() {
+    local script='t=0
+for z in /sys/class/thermal/thermal_zone*; do
+    n=$(cat $z/type 2>/dev/null)
+    case "$n" in
+        cpu-0-*|cpu-1-*)
+            v=$(cat $z/temp 2>/dev/null)
+            case "$v" in ""|*[!0-9-]*) continue;; esac
+            [ "$v" -gt "$t" ] && t=$v ;;
+    esac
+done
+echo $t'
+    adb shell "sh -c '$script'" 2> /dev/null | tr -dc '0-9'
+}
+
 [[ $# -ge 1 ]] || usage 1
 command="$1"
 shift
@@ -514,6 +725,10 @@ case "$command" in
     screenshot)
         need_args 1 "$@"
         cmd_screenshot "$1"
+        ;;
+    baseline)
+        need_args 3 "$@"
+        cmd_baseline "$1" "$2" "$3" "${@:4}"
         ;;
     *) usage 1 ;;
 esac
