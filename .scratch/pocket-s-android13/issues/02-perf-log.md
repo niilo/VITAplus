@@ -1,6 +1,7 @@
 # 02: Port the perf-log setting to the Plus base
 
-Status: open
+Status: claimed
+Claimed: 2026-10-02 agent session
 Type: task
 Label: ready-for-agent
 Blocked by: 01
