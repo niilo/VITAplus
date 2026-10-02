@@ -12,6 +12,7 @@ add_library(
 	src/net_utils.cpp
 	src/perf_log.cpp
 	src/string_utils.cpp
+	src/thread_priority.cpp
 	src/tracy.cpp
 	src/vita_theme_utils.cpp
 )

@@ -28,6 +28,7 @@
 #include <util/log.h>
 #include <util/overloaded.h>
 #include <util/perf_log.h>
+#include <util/thread_priority.h>
 
 #include <fmt/format.h>
 
@@ -36,6 +37,8 @@
 namespace renderer::vulkan {
 
 void VKContext::wait_thread_function(const MemState &mem) {
+    util::set_thread_nice(state.gpu_wait_thread_nice);
+
     // try to wait for multiple fences at the same time if possible
     std::vector<vk::Fence> fences;
 

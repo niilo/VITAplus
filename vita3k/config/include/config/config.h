@@ -196,6 +196,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(int, "delay-start", 30, delay_start)                                                           \
     code(float, "background-alpha", .300f, background_alpha)                                            \
     code(int, "log-level", 2 /*SPDLOG_LEVEL_INFO*/, log_level)                                          \
+    code(int, "thread-nice-renderer", 0, thread_nice_renderer)                                            \
     code(bool, "cpu-opt", true, cpu_opt)                                                                \
     code(std::string, "pref-path", std::string{}, vita_fs_path)                                         \
     code(bool, "discord-rich-presence", true, discord_rich_presence)                                    \

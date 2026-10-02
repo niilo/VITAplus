@@ -31,6 +31,7 @@
 #include <overlay/display_manager.h>
 #include <overlay/shader_precompile_progress.h>
 #include <util/log.h>
+#include <util/thread_priority.h>
 
 #include <atomic>
 #include <memory>
@@ -225,6 +226,8 @@ void reset_command_list(CommandList &command_list) {
 }
 
 static void render_loop(renderer::State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
+    util::set_thread_nice(state.render_thread_nice);
+
     if (state.precompile_requested) {
         auto progress_overlay = state.overlay_manager
             ? state.overlay_manager->create<overlay::shader_precompile_progress>()
@@ -325,6 +328,9 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
 
 void start_render_thread(State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
     state.render_abort = false;
+    // The nice value has to be set from inside the thread, because an
+    // unprivileged process may only change the priority of its own thread.
+    state.render_thread_nice = config.thread_nice_renderer;
     state.render_thread = std::make_unique<std::thread>(render_loop, std::ref(state), std::ref(display), std::ref(gxm), std::ref(mem), std::ref(config));
 }
 
