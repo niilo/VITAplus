@@ -50,11 +50,15 @@ speed with release APKs.
 under `.scratch/<feature-slug>/`, and domain docs are `CONTEXT.md` and
 `docs/adr/` when they exist.
 
-## Containers (default on this Mac)
+## Containers
 
-Use Apple's `container` CLI for Linux builds, tests, format and the Android
-APK. `container/vita3k.sh` runs everything. The repo is mounted at `/src`,
-so output lands in the normal `build/` folder on the host.
+Two drivers for the same Containerfiles. Use `container/vita3k.sh` with Apple's
+`container` CLI on macOS, and `container/vita3k-docker.sh` with Docker or Podman
+on Linux x86_64. Both take the same commands and mount the repo at `/src`, so
+output lands in the normal `build/` folder on the host. `vita3k-docker.sh` needs
+no device and no person, so an agent can build, test and format with it.
+`docs/agent-loop.md` has the build, test and review loop for the tickets under
+`.scratch/pocket-s-android13/`.
 
 ```sh
 container/vita3k.sh build            # Linux build, preset container-linux
@@ -67,19 +71,22 @@ container/vita3k.sh shell [android]  # interactive shell
 container/vita3k.sh run <cmd...>     # any command in the Linux container
 ```
 
-- `container/linux.Containerfile`: Fedora 44 arm64. Fedora is used because
-  it ships Qt 6.11. Ubuntu 26.04 has only 6.10.
-- `container/android.Containerfile`: Ubuntu 24.04 amd64, run through
-  Rosetta, because the NDK has x86_64 Linux host tools only. Keep its
-  `ANDROID_NDK_VERSION` equal to `ndkVersion` in `android/app/build.gradle`.
+- `container/linux.Containerfile`: Fedora 44. Fedora is used because it ships
+  Qt 6.11. Ubuntu 26.04 has only 6.10. `vita3k.sh` builds it arm64 for Apple
+  silicon; `vita3k-docker.sh` builds it amd64.
+- `container/android.Containerfile`: Ubuntu 24.04 amd64, because the NDK has
+  x86_64 Linux host tools only. `vita3k.sh` runs it through Rosetta on Apple
+  silicon. Keep its `ANDROID_NDK_VERSION` equal to `ndkVersion` in
+  `android/app/build.gradle`.
 - The reldebug APK is about 100 MB: R8 is off, so the Java code is about
   64 MB, and it has a second `libVita3K.so` for x86_64. The release APK has
   neither. `container/build-android.sh` holds both build modes.
 - The image tag is a hash of the Containerfile. An edit to the file builds a
-  new image on the next command.
+  new image on the next command. `vita3k-docker.sh` puts `docker` in the tag, so
+  the two drivers never reuse each other's image.
 - ccache, vcpkg binaries and the Gradle cache are kept in the volumes
   `vita3k-linux-ccache` and `vita3k-android-cache`
-  (`container/vita3k.sh clean-cache` deletes them).
+  (`clean-cache` deletes them).
 - `VITA3K_CONTAINER_CPUS` and `VITA3K_CONTAINER_MEMORY` (default 16G) set the
   container size. The container default of 1 GiB is too small to link.
 - `tools/android/device.sh` runs the test loop on an Android device through
