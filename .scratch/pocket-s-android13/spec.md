@@ -109,11 +109,12 @@ and the dynarmic optimization set (ticket 25).
 - `ANativeWindow_setFrameRate` is API 30. It is available.
 - `Choreographer.postFrameCallback64` is not in the public SDK. Not available.
 - `Surface.setProducerThrottlingEnabled` is API 37. Not available.
-- `MADV_COLLAPSE` needs Linux 6.1. Android 13 ships 5.10 and 5.15, so the
-  call returns `EINVAL`. Probe for it once and do not ship it unguarded.
-- Transparent huge pages are in `madvise` mode in the Android 13 GKI defconfig.
-  `madvise(MADV_HUGEPAGE)` is therefore the way to ask for 2 MB pages, and
-  nothing blocks an app from calling it.
+- `MADV_COLLAPSE` needs Linux 6.1. This device runs 5.15, so the call returns
+  `EINVAL`. Probe for it once and do not ship it unguarded. Ticket 01.
+- Transparent huge pages on this device are in `always` mode, not the
+  `madvise` mode the GKI defconfig selects. Anonymous mappings already get
+  2 MB pages, so ticket 12 measures before adding a `madvise` call.
+  Confirmed 2026-10-02 by ticket 01.
 - `setpriority` on the calling thread passes the capability check, but the
   kernel allows a lower nice value only with `CAP_SYS_NICE` or a nonzero
   `RLIMIT_NICE` soft limit, and an app process has neither. So an app cannot

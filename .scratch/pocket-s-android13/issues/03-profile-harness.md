@@ -47,16 +47,20 @@ cannot tell whether a change moved GPU time or CPU time. Build the tooling once.
    `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq`. Extend it rather
    than adding a second command, because one of those two sets of paths is
    wrong and only one command should exist. Add:
-   - the GPU paths ticket 01 found, including `gpuclk_khz` and
-     `gpu_busy_percentage`, and skip the ones that do not exist;
-   - `policy*/cpufreq/cpuinfo_cur_freq` and
-     `policy*/cpufreq/cpuinfo_max_freq` per cluster, because ticket 01 records
-     the max per cluster and the plan needs the current against it;
+   - `gpuclk` (in Hz), `gpu_busy_percentage`, `max_gpuclk` and `throttling`
+     from `/sys/class/kgsl/kgsl-3d0/`. Ticket 01 found that `gpuclk_khz` and
+     `busclk_khz` do not exist on this device;
+   - `cpu*/cpufreq/scaling_cur_freq` and `cpu*/cpufreq/cpuinfo_max_freq` per
+     core. Ticket 01 found there is no `/sys/devices/system/cpu/policy*`, that
+     `cpuinfo_cur_freq` is permission denied and that `scaling_cur_freq` reads
+     fine;
    - `busclk_khz`, `max_gpuclk` and `throttling`;
-   - a `temp_c` column from `/sys/class/thermal/thermal_zone*/`, taking the
-     zone whose type contains "cpu" or "soc". The measurement protocol in
-     `../spec.md` step 6 needs this column, and no other command produces it. If
-     ticket 01 found no readable zone, make the column empty and say so.
+   - a `temp_c` column. Ticket 01 found the zones that read are named
+     `cpu-0-*` for cpu0 to cpu2, `cpu-1-*` for cpu3 to cpu7 and above, and
+     `gpuss-*` for the GPU. Take the maximum of `cpu-0-*` and `cpu-1-*`. The
+     zones named `pa`, `sdr*`, `mmw*`, `epm*` and `pmr735d*` return `Invalid
+     argument` and must be skipped. The measurement protocol in `../spec.md`
+     step 6 needs this column, and no other command produces it.
    Sample once a second into a CSV.
 7. **Attribution.** Add `docs/adr/0001-android-profiling-tools.md`, which says
    how to answer

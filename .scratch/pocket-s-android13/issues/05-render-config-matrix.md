@@ -29,13 +29,13 @@ settings that already exist.
 | `async-pipeline-compilation` | `false` | Whether pipeline compiles move off the render thread. |
 | `log-level` | `2` | Plus logs a line before every pipeline compile on the stock Adreno driver (`pipeline_cache.cpp:1210`). Ticket 17 times that line separately. |
 | `turbo-mode` | `false` | Calls `adrenotools_set_turbo` (`renderer.cpp:2388`). It only exists for the stock Qualcomm driver. The call is not present on the other driver. |
-| `disable-raster-order` | `false` | Only matters if the device has `VK_EXT/ARM_rasterization_order_attachment_access`. Ticket 01 says. |
+| `disable-raster-order` | `false` | Turns off `VK_EXT/ARM_rasterization_order_attachment_access`, which **is present here** under Turnip. It is the framebuffer-fetch path this device uses, so this setting is live and worth an A/B. |
 
 ## Steps
 
-1. Confirm from ticket 01 which of `disable-raster-order` and
-   `VK_EXT/ARM_rasterization_order_attachment_access` the driver actually
-   offers, so no combination is run that cannot take effect.
+1. Ticket 01 found `support_rasterized_order_access: true` under Turnip, so
+   `disable-raster-order` takes effect. On the stock driver the extension is
+   not documented; read ticket 00 for the driver before running.
 2. Run a full A/B set per setting, one setting at a time, from the baseline
    values. Then run the best three together against the baseline.
 3. For `memory-mapping`, run the full matrix on Turnip. On the stock driver only

@@ -233,10 +233,11 @@ AYANEO claim. A line marked "proxy" was measured on a different part.
 - The one shared `Dynarmic::ExclusiveMonitor` is the cost that matters for
   guest exclusive access. Whether any dynarmic optimization flag removes it is
   ticket 25.
-- Android 13 THP is `madvise` mode in the GKI defconfig. An app may call
-  `madvise(MADV_HUGEPAGE)`. Source: `android13-5.15` GKI defconfig.
-- `MADV_COLLAPSE` needs Linux 6.1. Android 13 ships 5.10 and 5.15 only, so the
-  call returns `EINVAL`. Source: `kernel/common` tag list.
+- Android 13 THP is `madvise` mode in the GKI defconfig, but this device is
+  `always`, so anonymous mappings already get 2 MB pages. Ticket 01 measured
+  it. An app may still call `madvise(MADV_HUGEPAGE)`.
+- `MADV_COLLAPSE` needs Linux 6.1. This device runs 5.15, so the call returns
+  `EINVAL`. Ticket 01 measured the kernel version.
 - `setpriority` on the calling thread passes the capability check, but the
   kernel allows a lower nice value only with `CAP_SYS_NICE` or a nonzero
   `RLIMIT_NICE` soft limit, and an app process has neither. So an app cannot
@@ -271,10 +272,10 @@ AYANEO claim. A line marked "proxy" was measured on a different part.
 - `dumpsys thermalservice` gives the current thermal status. `cmd
   thermalservice override-status` and `reset` work on Android 13. There is no
   `get-current-status` and no `headroom` subcommand.
-- KGSL files under `/sys/class/kgsl/kgsl-3d0/` readable without root include
-  `gpuclk_khz`, `busclk_khz`, `gpu_busy_percentage`, `max_gpuclk` and
-  `throttling`. Source: an earlier read of `device.sh` found `gpuclk`, not
-  `gpuclk_khz`. Ticket 01 settles which paths exist.
+- KGSL files under `/sys/class/kgsl/kgsl-3d0/` readable without root are
+  `gpuclk`, `gpu_busy_percentage`, `gpubusy`, `max_gpuclk`, `throttling` and
+  `idle_timer`. `gpuclk_khz` and `busclk_khz` do not exist here, and `gpuclk`
+  is in Hz. Ticket 01 measured this.
 - `tools/android/device.sh` already has a `thermal` command
   (`device.sh:212-219`) that samples `/sys/class/kgsl/kgsl-3d0/gpuclk` and
   `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq`. Ticket 03 extends

@@ -10,6 +10,31 @@ Blocked by: none
 Which Vulkan driver do the rest of this plan's measurements run on, and does the
 GPU power constraint limit the clock?
 
+## What ticket 01 already found
+
+The installed `org.vita3k.emulator` 1.1 has `custom-driver-name:
+Balemuni_Apex_v2_ULTIMATE_SD8Gen2`, and its log reports:
+
+```
+driverID: MesaTurnip  driverName: Turnip (Balemuni Apex v2 Ultimate)
+driverInfo: Mesa 26.3.0-devel (SD 8 Gen 2 / Adreno 740 Apex v2 Ultimate by Balemuni)
+conformance: 1.4.0.0
+Present mode: Mailbox
+Using the following memory mapping method: Page Table
+```
+
+So the device runs Turnip and has been running it. What is missing is the
+measurement: the 7 FPS against 30 FPS number in `CLAUDE.md` came from an older
+build and a different configuration. This ticket supplies that.
+
+Consequence: `VK_EXT/ARM_rasterization_order_attachment_access` is present, so
+the framebuffer-fetch path this device takes is the raster-order one, and
+shader interlock is not used at all. `conformance: 1.4.0.0` means
+`VK_KHR_dynamic_rendering_local_read` is core in 1.4 on this driver.
+
+Which Vulkan driver do the rest of this plan's measurements run on, and does the
+GPU power constraint limit the clock?
+
 ## Why this is first
 
 The stock Qualcomm driver forces `double-buffer` no matter what the user

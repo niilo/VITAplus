@@ -7,8 +7,25 @@ Blocked by: 00
 
 ## Question
 
-What power constraint does the GPU run under, and does `PWR_MAX` raise the frame
-rate?
+The GPU is capped at 680 MHz while its own table lists 1000 MHz. What sets that
+cap, and does raising it raise the frame rate?
+
+## What ticket 01 measured
+
+```
+gpu_model = AdrenoA32
+max_clock_mhz = 680
+freq_table_mhz = 1000 860 827 794 746 719 680 615 550 475 401 348 295 220 124
+gpu_available_frequencies = 1000000000 ... 124800000
+max_gpuclk = 680000000
+num_pwrlevels = 15
+max_pwrlevel = 0
+```
+
+The top bin in the frequency table is 1000 MHz and `max_pwrlevel` is 0, which
+is the fastest level. So the driver reports the fast bin as available and
+still runs at 680 MHz. That points at the power and thermal policy rather than
+at a driver clamp, which is what this ticket has to tell apart.
 
 ## Why it matters
 

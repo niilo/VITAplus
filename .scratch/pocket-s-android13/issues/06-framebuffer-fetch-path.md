@@ -14,8 +14,11 @@ a fourth way do better?
 ## The three ways today
 
 1. `VK_EXT/ARM_rasterization_order_attachment_access`, when present. Chosen
-   first (`renderer.cpp:858-863`), and it turns shader interlock off. Not
-   expected on the A32; ticket 01 confirms.
+   first (`renderer.cpp:858-863`), and it turns shader interlock off. **Ticket
+   01 found it present on this device under Turnip**, so this is the path the
+   device takes. Paths 2 and 3 below are not the ones in use, so measure them
+   on the stock driver or not at all. On the stock driver the extension is not
+   documented, so read ticket 00 for which driver the benchmark runs on.
 2. Shader interlock, when `high-accuracy` is on and the extension is present.
    Costs an end and a begin of the render pass on every draw that changes
    fetch state (`scene.cpp:463`, `:473`). On a tile renderer that is a store

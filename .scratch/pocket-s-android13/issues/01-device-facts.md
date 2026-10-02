@@ -1,8 +1,9 @@
 # 01: Record what the device actually reports
 
-Status: open
+Status: resolved
 Type: research
 Label: ready-for-human
+Claimed: 2026-10-02 agent session
 Blocked by: none
 
 ## Goal
@@ -124,5 +125,175 @@ Collect all of this in one pass and save the raw output under
     repository.
 
 ## Answer
+
+Run on 2026-10-02 over USB with adb 37.0.1. Raw output is in
+`tmp/pocket-s-android13/01/`. Six plan assumptions were wrong. Each is
+corrected in `../spec.md` and `../map.md`.
+
+### Identity
+
+```
+ro.product.manufacturer = AYANEO
+ro.product.model = Pocket S
+ro.soc.manufacturer = QTI
+ro.soc.model = SG8275
+ro.board.platform = kalama
+ro.build.version.release = 13
+ro.build.version.sdk = 33
+ro.build.type = user
+Linux localhost 5.15.104-android13-8-g05d70b033fc6 ... aarch64 Toybox
+```
+
+The kernel is 5.15, not 5.10 or 6.1. That matters for `MADV_COLLAPSE`, which
+needs 6.1: the call returns `EINVAL` here.
+
+### CPU
+
+Eight cores, three clusters, and the layout is the one the old plan guessed:
+
+| Cores | Max | Related |
+| --- | --- | --- |
+| cpu0 to cpu2 | 2016000 kHz | `0 1 2` |
+| cpu3 to cpu6 | 2803200 kHz | `3 4 5 6` |
+| cpu7 | 3360000 kHz | `7` |
+
+The governor is `walt` on every core. `thread_siblings_list` for cpu0 is `0`,
+which is correct for a single-thread sibling list.
+
+**The cpufreq files are under `cpu*/cpufreq`, not `policy*`.** There is no
+`/sys/devices/system/cpu/policy*` on this device. The plan said the opposite,
+and `docs/adr/0001` repeated it. `cpuinfo_cur_freq` is permission denied, but
+`scaling_cur_freq` reads fine, which is what the existing `device.sh` command
+uses.
+
+### ARM features
+
+`/proc/cpuinfo` reports the same line on all eight cores:
+
+```
+fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm
+jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 asimdfhm dit uscat ilrcpc
+flagm ssbs sb paca pacg dcpodp flagm2 frint i8mm bf16 bti
+```
+
+Present: `atomics` (LSE), `asimdhp` (FP16), `asimddp` (DotProd), `flagm2`,
+`ssbs`, `sb`, `paca`/`pacg` (PAuth), `i8mm`, `bf16`, `bti`, `dit`.
+Absent: `sve`, `mte`, `aes` is present but that is unrelated.
+
+Two of these settle questions the plan left open. **`i8mm` and `bf16` are
+present**, so the part implements Armv8.6 integer matrix and BFloat16, which is
+past the ARMv9.0-A baseline the plan assumed. **`asimddp` and `flagm2` are
+present**, which confirms DotProd and FlagM2.
+
+None of it changes the conclusion in `../spec.md`: the guest is ARMv7, so these
+never appear in JIT output.
+
+### GPU
+
+```
+gpu_model = AdrenoA32
+max_clock_mhz = 680
+freq_table_mhz = 1000 860 827 794 746 719 680 615 550 475 401 348 295 220 124
+gpu_available_frequencies = ... 1000000000 ...
+gpu_busy_percentage = 6 %
+throttling = 0
+gpuclk = 220000000
+```
+
+**`gpu_model` is `AdrenoA32`, so the A32 name is right.** The old plan's note
+that the driver reports `Adreno (TM) 740` is also true; both names are used.
+
+**The GPU is capped at 680 MHz while the hardware table goes to 1000 MHz.**
+`max_gpuclk` is 680000000 and `max_clock_mhz` is 680, but `freq_table_mhz` and
+`gpu_available_frequencies` both list 1000 MHz as the top bin. That is a 1.47x
+difference in clock, and it is what ticket 24 exists to test. `num_pwrlevels`
+is 15 and `max_pwrlevel` is 0.
+
+The readable KGSL files are `gpuclk`, `gpu_busy_percentage`, `gpubusy`,
+`max_gpuclk`, `throttling`, `idle_timer`. **`gpuclk_khz` and `busclk_khz` do not
+exist**; the plan and the earlier research both named them. `gpuclk` is in Hz,
+not kHz.
+
+### Driver, and what the installed app already uses
+
+The installed `org.vita3k.emulator` 1.1 has `custom-driver-name:
+Balemuni_Apex_v2_ULTIMATE_SD8Gen2`, and its log says:
+
+```
+driverID: MesaTurnip  driverName: Turnip (Balemuni Apex v2 Ultimate)
+driverInfo: Mesa 26.3.0-devel (SD 8 Gen 2 / Adreno 740 Apex v2 Ultimate by Balemuni)
+conformance: 1.4.0.0
+Present mode: Mailbox
+Using the following memory mapping method: Page Table
+renderer flags: support_rasterized_order_access=true support_fsr=true
+                support_standard_layout=true deep_stencil=D32SfloatS8Uint
+```
+
+So **ticket 00's question is already answered in practice: the device runs
+Turnip.** What is missing is the measurement, because the 7 FPS against 30 FPS
+number in `CLAUDE.md` was on an older build.
+
+Two more plan assumptions were wrong:
+
+- **`support_rasterized_order_access` is true.** The plan said "Not expected on
+  the A32" and ticket 06 said the stock driver does not have it. Turnip does.
+  It is chosen first at `renderer.cpp:858-863` and it disables shader interlock,
+  so the interlock path in tickets 06 and 15 is not the one this device takes.
+- **Conformance is Vulkan 1.4.0.0**, so `VK_KHR_dynamic_rendering_local_read`
+  is core in 1.4 and the driver reports 1.4.
+
+### The installed app's settings differ from the Plus defaults
+
+`config.yml` on the device has `high-accuracy: false`, `async-pipeline-compilation:
+true`, `resolution-multiplier: 2`, `anisotropic-filtering: 16`. The Plus
+defaults are `high-accuracy: true` and `async-pipeline-compilation: false`. So
+the user has already moved two of the six settings ticket 05 was going to
+measure. Ticket 05 must start from the device's values, not from the defaults.
+
+### Memory and pages
+
+```
+/sys/kernel/mm/transparent_hugepage/enabled = [always]
+hpage_pmd_size = 2097152
+```
+
+**THP is `always`, not `madvise`.** The plan said the GKI defconfig selects
+`madvise` on Android 13. This vendor kernel overrides it. Two consequences for
+ticket 12: anonymous mappings already get 2 MB pages without any `madvise`
+call, so the ticket's main lever may be unnecessary; and `MADV_HUGEPAGE` is
+still harmless. Ticket 12 should measure first and only then add the call.
+
+### Thermal
+
+`dumpsys thermalservice` works and reports `Thermal Status: 0`.
+`cmd thermalservice` has only `help`, `override-status` and `reset`, as the plan
+said. No `get-current-status`.
+
+The zones that read a temperature are named `cpu-0-*` (cpu0 to cpu2),
+`cpu-1-*` (cpu3 to cpu7 and more), `gpuss-*`, `skin-msm-therm`, and the
+`pm8550*` regulators. Zones named `pa`, `sdr*`, `mmw*`, `epm*` and
+`pmr735d*` return `Invalid argument` and cannot be used.
+
+So **a CPU temperature is readable without root**, which is what the
+measurement protocol in `../spec.md` needs for its cooldown step. `cpu-1-7`
+was 32500 at idle, which is the prime core.
+
+### Display and game mode
+
+One mode: 1440x2560 at 60.000004 fps, `appVsyncOff 1000000`,
+`presDeadline 16666666`, `frameRateOverride` empty. `gameContentTypeSupported`
+is false.
+
+`cmd game mode` needs an argument and prints `IllegalArgumentException`
+without one.
+
+### Cgroups
+
+`/dev/cpuctl/top-app/cpu.shares` is 1024 and `cpu.uclamp.max` is `max`, while
+`cpu.uclamp.min` is `0.00`. Readable from the shell. The app was not running
+during this check, so the cgroup it lands in with a foreground service only is
+still open.
+
+## Comments
 
 ## Comments

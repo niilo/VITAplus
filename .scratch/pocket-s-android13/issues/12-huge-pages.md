@@ -14,19 +14,27 @@ syscall per mapping and nothing blocks it on Android.
 
 ## What is true on Android 13
 
-- The GKI defconfig has `CONFIG_TRANSPARENT_HUGEPAGE=y` and
-  `CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y`. `ALWAYS` is not set. So an app gets
-  2 MB pages only where it asks.
+- **Ticket 01 measured this device: `/sys/kernel/mm/transparent_hugepage/enabled`
+  is `[always]`, not `madvise`.** The GKI defconfig sets
+  `CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y` and leaves `ALWAYS` unset; this
+  vendor kernel overrides that. So anonymous mappings already get 2 MB pages
+  without any `madvise` call. That removes the main lever of this ticket.
 - An app may read `/sys/kernel/mm/transparent_hugepage/enabled` and the other
   files in that directory. SELinux grants it.
-- `MADV_COLLAPSE` needs Linux 6.1. Android 13 ships 5.10 and 5.15 only, so the
-  call returns `EINVAL`. Probe once with a 4096-byte region and only use it if
-  the probe succeeds. Define the value as 25 if the NDK headers do not.
+- `MADV_COLLAPSE` needs Linux 6.1. This device runs 5.15, so the call returns
+  `EINVAL`. Probe once with a 4096-byte region and only use it if the probe
+  succeeds. Define the value as 25 if the NDK headers do not.
 - `khugepaged` scans every 10 seconds and compacts 16 MB per cycle. A code cache
   that is written to continuously may never be collapsed in time. Measure
   rather than assume.
 
 ## Steps
+
+0. **Read `AnonHugePages` for both mappings before changing anything.** THP is
+   `always` here, so the guest arena and the JIT cache may already have 2 MB
+   pages. If they do, this ticket is `rejected` with the numbers and nothing
+   else in it is done. That is the likely outcome, and it is worth knowing
+   before any code is written.
 
 1. The dynarmic code cache. The emulator sets no code cache size
    (`vita3k/cpu/src/dynarmic_cpu.cpp:642-668`), so the `Dynarmic::A32` default
