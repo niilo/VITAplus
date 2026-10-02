@@ -23,7 +23,8 @@ Read the file at the referenced path. The user will normally pass the path or th
 Used by `/wayfinder`. The **map** is a file with one **child** file per ticket.
 
 - **Map**: `.scratch/<effort>/map.md` — the Notes / Decisions-so-far / Fog body.
-- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`); a `Status:` line records `claimed`/`resolved`.
+- **Child ticket**: `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`, with the question in the body. `00` is allowed as the first ticket of a plan when every other ticket depends on its answer, so that the frontier rule below picks it first. A `Type:` line records the ticket type (`research`/`prototype`/`grilling`/`task`/`experiment`); a `Status:` line records `claimed`/`resolved`.
+- `experiment` covers a ticket that measures an existing or new setting on a device, runs an A/B comparison, and records numbers. It needs the device, so it is usually `ready-for-human`.
 - **Blocking**: a `Blocked by: NN, NN` line near the top. A ticket is unblocked when every file it lists is `resolved`.
 - **Frontier**: scan `.scratch/<effort>/issues/` for files that are open, unblocked, and unclaimed; first by number wins.
 - **Claim**: set `Status: claimed` and save before any work.
