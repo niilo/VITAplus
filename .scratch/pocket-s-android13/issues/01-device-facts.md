@@ -294,6 +294,98 @@ without one.
 during this check, so the cgroup it lands in with a foreground service only is
 still open.
 
-## Comments
+### Games on the device
+
+Twenty-one titles are installed under
+`/storage/4CDE-C1FC/emu-app-data/psvita/ux0/app`, which is `pref-path` in
+`config.yml`. Titles read from their own `param.sfo`:
+
+| Title ID | Title |
+| --- | --- |
+| PCSA00015 | WipEout 2048 |
+| PCSA00029 | Uncharted: Golden Abyss |
+| PCSA00080 | Jak and Daxter Collection |
+| PCSA00097 | Sly 2: Band of Thieves |
+| PCSE00090 | Sine Mora |
+| PCSE00792 | DARIUSBURST Chronicle Saviours |
+| PCSE00865 | Sky Force Anniversary |
+| PCSF00484 | Ratchet & Clank |
+
+The other thirteen were not read one by one. The full list of installed title
+IDs is in `gui-configs/apps-cache.xml` on the device.
+
+`PCSA00029` is the title `tools/android/uncharted_scene.sh` uses, and the
+project already has a save game in slot 0 for it. `PCSA00015` (WipEout 2048)
+and `PCSA00097` (Sly 2) are the candidates for the 60 FPS title and the 2D
+title in ticket 04.
+
+### Signing: the installed app could not be replaced
+
+`adb install` returned `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The app on the
+device was signed with the **dev** key, whose certificate SHA-256 is
+`85028da2c7e4321de4bd4215a45773bddcc8f90629bafd6e19ea07cc6d91cac0`. That is the
+digest `docs/release.md` lists for the dev key, so the installed app was a
+normal dev-signed build.
+
+The key in `.vita-plus-signing/` is the **release** key, whose digest
+`docs/release.md` lists as
+`04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a`. A build
+signed with it cannot update a dev-signed app.
+
+So: the app was uninstalled, and a release-signed build of this branch was
+installed. That is the procedure `docs/release.md` describes. It is also why
+`device.sh install` now succeeds for further builds, because they all use the
+release key.
+
+### What the uninstall cost, and what it did not
+
+Safe, because they live on the SD card under `pref-path`: the games, 37 GB in
+total, and the firmware, `os0` 14 MB, `vs0` 288 MB and `pd0` 133 MB.
+
+Lost, and restored:
+
+| Lost | Restored how |
+| --- | --- |
+| `config.yml` | pulled to `tmp/device-backup-2026-10-02/` and pushed back |
+| `gui-configs/apps-cache.xml` | same |
+| `vita3k.log`, 12 MB and 96346 lines | pulled to the same folder |
+| the firmware inside the app's data folder | copied back from `pref-path` with `cp -r`; a plain `cp` refuses with "Cross-device link" |
+| the custom Vulkan driver | **not restored**, see below |
+
+**The custom Vulkan driver was not on the SD card.** `android_driver.cpp`
+reads it from `context.getFilesDir()`, which is the app's internal data
+directory, so the pack lived only inside the app. `docs/release.md` says an
+installed custom driver is lost on an uninstall; this check missed that line.
+
+It has to go back through the app's own installer, which is a button in the
+GPU settings section, because only the app can write to that directory. The
+pack is the `V2` release asset `Balemuni_Apex_v2_ULTIMATE_SD8Gen2.zip` of
+`Balemuni/Balemunis-Aurora`, which is the name in the saved `custom-driver-name`.
+Its `meta.json` reports Mesa `26.3.0-apex-v2-b9a2bf3`, a 4 GB shader cache and
+512 KB suballocators, which matches the driver string the app logged before the
+uninstall.
+
+### What the two drivers report
+
+Measured with the same build, same game, same settings, only the driver
+different:
+
+| | Stock Qualcomm | Turnip (Balemuni Apex v2) |
+| --- | --- | --- |
+| `driverID` | QualcommProprietary | MesaTurnip |
+| api version | 1.3.128 | conformance 1.4.0.0 |
+| memory mapping | Double buffer | Page Table |
+| `support_rasterized_order_access` | false | true |
+| driver string | 512.676.0 | Mesa 26.3.0-devel, Balemuni Apex v2 |
+
+So the plan's claim that the stock driver forces Double Buffer is confirmed on
+this device, and so is its consequence: every Vulkan ticket measures a
+different code path on the two drivers.
+
+The stock driver does expose `VK_QCOM_image_processing`,
+`VK_QCOM_render_pass_transform`, `VK_EXT_pipeline_creation_cache_control`,
+`VK_EXT_pipeline_creation_feedback`, `VK_EXT_rasterization_order_attachment_access`
+is **absent**, and `VK_KHR_timeline_semaphore` and `VK_KHR_synchronization2` are
+present. That list came from the app log of a stock-driver run.
 
 ## Comments
