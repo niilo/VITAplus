@@ -111,4 +111,184 @@ as a frame-rate result.
 
 ## Answer
 
+Answered on 2026-10-03 from ticket 03's recording, `tmp/perf/ticket03-perf/`
+(`perf.data`, 250300 samples). Two extra artifacts were made from that file and
+are not in git: `report.txt` from the NDK host `simpleperf`, and `tmp/cc.txt`
+from `simpleperf report-sample --show-callchain`, which is what every attribution
+below comes from.
+
+**One denominator warning.** `report.txt` covers all 250300 samples and is where
+the ticket's percentages come from. `tmp/cc.txt` holds 225024 sample blocks,
+because `report-sample` drops samples it cannot represent. Percentages quoted
+below are the ticket's, from `report.txt`. Counts are raw sample counts out of
+`tmp/cc.txt`, so a count divided by 225024 gives a share close to, but not
+exactly, the matching percentage.
+
+### The 6.05% is the guest JIT, not an unnamed host function
+
+The three clusters are **named: they are dynarmic's JIT code cache, running
+guest code.** They are not an out-of-range mapping, and no host function is
+hidden in them.
+
+Walking the `PERF_RECORD_MMAP` records in `perf.data` by hand: the samples sit at
+`0x7175512000` to `0x7175512024`, 37 bytes in one page. That address is inside
+an **anonymous** mapping, `0x7175503000` to `0x7175547000`, 272 pages, with no
+file name, and there is no file-backed mapping anywhere in that range. It is
+`oaknut::CodeBlock`, which allocates the cache with exactly that call
+(`external/dynarmic/externals/oaknut/include/oaknut/code_block.hpp:37`):
+
+```c
+m_memory = mmap(nullptr, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                MAP_ANON | MAP_PRIVATE | MAP_JIT, -1, 0);
+```
+
+`code_cache_size` defaults to 128 MiB
+(`external/dynarmic/src/dynarmic/interface/A32/config.h:239`) and Vita3K does not
+override it (`vita3k/cpu/src/dynarmic_cpu.cpp:643`). An anonymous `PROT_EXEC`
+region has no symbols, so every sample in it is reported as
+`unknown[+address]`. That is the whole explanation.
+
+Two details confirm it rather than merely fitting it:
+
+- **Only 272 of the expected pages are present.** The cache is demand-faulted,
+  so the working set of translated guest blocks is what got mapped.
+- **The samples are only on guest threads, and never on the renderer.** Of the
+  15013 samples in this address range: `PCSA00029` 5151, `HavokWorkerThre` 3979,
+  `WorkerThread-1` 2103, `WorkerThread-0` 2084, `SndStreamThread` 1259, and
+  `vita3k-render` **0**. A host-side renderer cost could not avoid
+  `vita3k-render`. Guest code executes only where guest threads run.
+
+The three addresses in the ticket's table are the three hottest instructions in
+one hot basic block: `+0x200c` 2.85%, `+0x2010` 2.20%, `+0x201c` 1.00%, plus
+`+0x2008` at 0.18%. Six percent of this profile is the guest program running,
+which is what the emulator is for. **It is not removable and it is not a
+defect.** It also belongs to the guest, so it is out of this ticket's scope in
+the same way the guest-side atomics are ticket 25's.
+
+Getting this name needed one perf.data parse, not new tooling: the mmap records
+are in the recording already, and `report-sample --show-callchain` gives the
+thread split. What was missing before was running either.
+
+### xxHash 5.40% is `cache_and_bind_texture`, hashing texture data every bind
+
+Every one of the 12159 xxHash samples is on `vita3k-render` and has the same
+caller chain, with no second path:
+
+```
+XXH_INLINE_XXH3_64bits_update
+  renderer::texture::hash_guest_texture_bytes       vita3k/renderer/src/texture/cache.cpp:98
+  renderer::texture::hash_texture_data              vita3k/renderer/src/texture/cache.cpp:128
+  renderer::TextureCache::cache_and_bind_texture    vita3k/renderer/src/texture/cache.cpp:775
+  renderer::vulkan::sync_texture
+  renderer::cmd_handle_set_state
+  renderer::render_loop
+```
+
+So ticket 03's guess of four call sites is wrong: on this device only the
+texture cache path runs, and it runs on **every texture bind**, not only on
+change. The cost scales with bytes hashed, which is what the ticket predicted.
+
+The per-page loop at `cache.cpp:104-119` is the reason it is expensive rather
+than merely present. With `use_page_table` on, it walks the texture in 4 KiB
+chunks and calls `is_valid_addr_range` and `seh_xxh3_update` per chunk, so a
+larger texture is many more calls. The comment at `cache.cpp:112-113` explains
+why it is written that way: the guest memory can be freed mid-flight, so each
+page is validated before it is read. That is deliberate crash-safety.
+
+**Removable, but not by changing the hash function.** XXH3 is already the fast
+one. The removable part is the frequency: `cache.cpp:843` and `cache.cpp:859`
+both hash, and the cached path at `:859` only skips the hash when the scene
+number has changed (`:851`). So a game that re-binds an unchanged texture within
+one scene pays the full hash every time. Caching the hash per (address, size,
+scene) so a repeat bind inside a scene costs a compare would remove most of this
+5.40%. That belongs behind a config value that defaults to today's behaviour,
+per `docs/agent-loop.md`, and it needs an A/B/A energy run before it can be
+called a win.
+
+### `clock_gettime` 5.28% is mostly guest thread scheduling
+
+`__kernel_clock_gettime` is the leaf in 6014 of the 225024 samples in
+`tmp/cc.txt`. Only 93 of those have a usable callchain, and those name four
+distinct sites:
+
+| site | file | thread | samples |
+| --- | --- | --- | --- |
+| `ThreadState::run_loop` | `vita3k/kernel/src/thread.cpp` | `PCSA00029` | 5084 |
+| `renderer::render_loop` | `vita3k/renderer/src/batch.cpp:228` | `vita3k-render` | 611 |
+| `VKContext::wait_thread_function` | `vita3k/renderer/src/vulkan/creation.cpp:61` | `vita3k-gpuwait` | 66 |
+| `vblank_sync_thread` | `vita3k/display/src/display.cpp:126` | `vita3k-vblank` | 12 |
+
+Smaller counts sit in `SDL_GetTicks` from `SDL_PumpEventsInternal`, and
+`systemTime` from Android's `AudioTrack` and `Choreographer`, which are not
+ours.
+
+So the ticket's three candidates were each partly right and none is the whole
+answer: the perf-log writer does not appear at all, and the vblank clock is only
+12 samples. **The dominant cost is `ThreadState::run_loop` on the main guest
+thread, which is guest thread scheduling**, and it belongs with the other guest
+code here. What is left that is ours is the render loop and the GPU-wait
+thread, together under 0.3%. Not removable, and too small to matter while the
+GPU is at 93 to 99%.
+
+### `add_protect` 1.37% is `protect_surface`, called only when a surface is dirty
+
+All 3251 samples are on `vita3k-render` with one chain:
+
+```
+add_protect(MemState&, ...)                         vita3k/mem/src/mem.cpp:612
+  renderer::vulkan::protect_surface                  vita3k/renderer/src/vulkan/surface_cache.cpp:200
+  renderer::vulkan::VKSurfaceCache::retrieve_color_surface_for_framebuff
+  renderer::vulkan::VKSurfaceCache::retrieve_framebuffer_handle
+  renderer::vulkan::set_context
+  renderer::render_loop
+```
+
+`protect_surface` is called from `surface_cache.cpp:669`, which is inside
+`if (info.data && *info.dirty)`, so on the hot path the page protection is only
+re-applied when the surface was actually written. The other call site,
+`surface_cache.cpp:818`, is on surface creation and is not a per-frame cost.
+This is the render-feedback sync path, so it is not removable: dropping it
+breaks surface sync. Ticket 06 owns the memory mapping modes and ticket 12 the
+large mappings, and this number is theirs to use. **Not removable, and it
+belongs to ticket 06.**
+
+### The 3.75% of atomics on `vita3k-render` is mostly the allocator, not our code
+
+1461 samples (0.65% of all) are atomics on `vita3k-render`. The ticket called
+this "the only part of the atomic cost that is plainly ours". The call graph
+splits it into four groups, by the nearest named caller:
+
+| samples | share | nearest named caller | what it is |
+| --- | --- | --- | --- |
+| 323 | 22% | `scudo::HybridMutex::tryLock` / `unlock` | **Android's malloc**, contending on its own lock |
+| 505 | 35% | `std::function::__func<export_sceGxmCreateContext>` | `std::function` frame, host refcounting |
+| 446 | 31% | `cmd_set_state_program` | shader program refcounting |
+| 93 | 6% | `render_loop` directly | frame scheduling |
+
+**A fifth of it is scudo, Android's allocator, not our code.** The emulator's
+contribution is allocation rate, not the locking itself: reducing allocations
+in `cmd_set_state_program` would reduce it, changing the atomic would not. The
+`export_sceGxmCreateContext` 505 samples are the largest single group and are a
+`std::function` indirect call, which is refcounting on a shared object rather
+than a contention problem.
+
+This does not change the ticket 25 split recorded above: the guest-side atomics
+on `PCSA00029` and the guest threads are still ticket 25's, and they remain the
+larger share of the total (2.12% on `PCSA00029` alone).
+
+### Summary against the acceptance criteria
+
+| item | share | attribution | verdict |
+| --- | --- | --- | --- |
+| unnamed clusters | 6.05% | dynarmic JIT code cache, `oaknut::CodeBlock` mmap | named; guest code, not removable |
+| xxHash | 5.40% | `texture/cache.cpp:98` via `:128` via `:775` | removable, behind a config value, needs A/B/A |
+| `clock_gettime` | 5.28% | 84% guest `ThreadState::run_loop` | mostly guest; ours is under 0.3%, not removable |
+| `add_protect` | 1.37% | `surface_cache.cpp:200` | not removable, belongs to ticket 06 |
+| render atomics | 0.65% | 22% scudo allocator, rest refcounting | not removable as atomics; cut allocations instead |
+
+**No energy run was made.** Step 4 of the ticket needs the three commands of
+`../spec.md` A/B/A on the 30 FPS title, and no code change has been proposed
+yet, so there is nothing to A/B. The one change worth testing is the xxHash
+frequency, and the device has not been used for it in this pass.
+
 ## Comments
