@@ -443,6 +443,15 @@ measurement run on them before recording the reason they close.
   neither `rasterization_order_attachment_access` nor shader interlock, so it
   falls back to `direct_fragcolor`, which puts a pipeline barrier on the colour
   attachment before every programmable-blending draw.
+- 2026-10-03, ticket 30: **the stock driver cannot be given the fast path.**
+  It does not advertise `rasterization_order_attachment_access` in any of its
+  113 extensions, so the feature query at `renderer.cpp:859` is never reached
+  and `direct_fragcolor` is permanent for it. 175 sessions across seven logs,
+  no exceptions. Two traps worth keeping: `optional_extensions` is a lookup
+  table, not a source of truth about the driver, and
+  `tmp/gameplay/stock-gameplay/vita3k.log` contains both drivers despite its
+  name, because the Balemuni pack injects in some sessions and falls back in
+  others. Quote the `driverID` with any driver-dependent claim.
 - 2026-10-02, ticket 00: **the GPU is the limit.** 99% busy on stock and 93% on
   Turnip, against CPU 23% and 43%. Every CPU ticket is therefore expected to
   close flat.
@@ -521,8 +530,9 @@ measurement run on them before recording the reason they close.
 ## Fog
 
 - Whether the stock driver lists `VK_EXT_/ARM_rasterization_order_attachment_access`
-  and can be made to enable its feature. Ticket 30. This is the largest open
-  question in the plan.
+  and can be made to enable its feature. **Closed by ticket 30: the stock
+  driver does not list the extension at all**, so there is nothing to enable
+  and the 5.2 times gap is permanent. See the closed list below.
 - Whether the Vulkan hex device ID, which ticket 01 did not record, is needed
   for the preset's device matching. Ticket 22, with ticket 01's step 3.
 - Whether `timestampValidBits` and `timestampPeriod` are usable, which decides
