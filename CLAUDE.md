@@ -108,12 +108,20 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   which skips the boot and the menu walk. See
   `.scratch/pocket-s-android13/issues/00-driver-and-power.md`.
   On the Pocket S, gameplay is **5.8 FPS on the stock Qualcomm driver and 30 FPS
-  on Turnip** at resolution 2, with the same draws per scene. The stock driver
-  has neither `rasterization_order_attachment_access` nor shader interlock, so
-  it is forced onto `direct_fragcolor`, which puts a pipeline barrier on the
-  colour attachment before every programmable-blending draw. An earlier note
-  here had the two drivers the other way round, from a title-screen
-  measurement.
+  on Turnip** at resolution 2, with the same draws per scene. **The stock driver
+  cannot be made to close that gap.** It does not advertise
+  `VK_EXT_`/`VK_ARM_rasterization_order_attachment_access` at all — 113
+  extensions, neither name among them — so it stays on `direct_fragcolor`, which
+  puts a pipeline barrier on the colour attachment before every
+  programmable-blending draw. Turnip advertises both and reports
+  `support_rasterized_order_access=true`. Measured over 175 sessions in
+  `tmp/gameplay/`, the flag was true in every `MesaTurnip` session and false in
+  every `QualcommProprietary` one. **Quote the `driverID` line with any
+  driver-dependent claim**: `tmp/gameplay/stock-gameplay/vita3k.log` is named for
+  the stock driver but holds both, because the Balemuni pack injects in some
+  sessions and falls back in others, which is how this question was first
+  answered wrongly. See
+  `.scratch/pocket-s-android13/issues/30-stock-driver-raster-order.md`.
 - The goal is **energy per played frame**, not frame rate: a steady 30 FPS on a
   game locked to 30, 60 where the rate is unlocked, and the lowest device
   power that holds both. A change that saves power and misses the frame rate or

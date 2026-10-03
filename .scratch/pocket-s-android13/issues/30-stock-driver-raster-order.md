@@ -1,8 +1,8 @@
 # 30: Can the stock driver use rasterization order attachment access?
 
-Status: open
+Status: resolved
 Type: research
-Label: ready-for-human
+Label: ready-for-agent
 Blocked by: none
 
 ## Question
@@ -92,4 +92,116 @@ this plan. Do not let it delay a ticket whose result reaches the records.
 
 ## Answer
 
+**The premise is wrong. The stock driver does not list the extension at all, so
+there is nothing to turn on.** The confusion between tickets 00 and 01 came from
+reading a mixed log.
+
+### The one line per driver
+
+Both lines are quoted verbatim from `tmp/gameplay/stock-gameplay/vita3k.log`,
+which holds 31 device-creation sessions across both drivers.
+
+**Stock Qualcomm**, line 42, the `All available device extensions:` line:
+
+```
+All available device extensions: VK_KHR_incremental_present, VK_EXT_hdr_metadata,
+VK_KHR_shared_presentable_image, VK_GOOGLE_display_timing, VK_EXT_subgroup_size_control, ...
+```
+
+113 extensions, and **neither `VK_EXT_rasterization_order_attachment_access` nor
+`VK_ARM_rasterization_order_attachment_access` is among them.** Counted
+mechanically over that one line: zero occurrences.
+
+**Turnip**, line 237, the same line from the same file:
+
+```
+All available device extensions: VK_KHR_incremental_present, VK_EXT_hdr_metadata,
+VK_GOOGLE_display_timing, VK_KHR_8bit_storage, VK_KHR_16bit_storage, ...
+```
+
+142 extensions, and **both names are present.**
+
+And the `renderer flags:` line, paired with the driver in each session:
+
+| driver | `driverID` | exts | raster order ext | `support_rasterized_order_access` |
+| --- | --- | --- | --- | --- |
+| stock Qualcomm | `QualcommProprietary` | 113 | **absent** | **false** |
+| Turnip | `MesaTurnip` | 142 | **present** | **true** |
+
+**175 sessions across all seven recorded logs, zero exceptions.** The flag is
+true in every `MesaTurnip` session and false in every `QualcommProprietary` one.
+There is no configuration in the record where a stock-driver session has the
+extension, and none where a Turnip session lacks it.
+
+### The ticket's code reading was right about the code and wrong about what follows
+
+The ticket says the extension name "is pushed into `device_extensions` as soon
+as it is enumerated, which is why it appears in the log's extension list", and
+infers from that the stock driver advertises it. The enumeration is real,
+`renderer.cpp:748`:
+
+```cpp
+for (const vk::ExtensionProperties &ext : physical_device.enumerateDeviceExtensionProperties()) {
+    available_extension_count++;
+    available_extensions += ... ext.extensionName.data();
+    auto it = optional_extensions.find(ext.extensionName.data());
+    if (it != optional_extensions.end()) {
+        *it->second = true;
+        device_extensions.push_back(it->first.data());
+    }
+}
+```
+
+But this loop only sees extensions **the driver reports**. A name in
+`optional_extensions` is a name to look for, not a name to print. So the stock
+driver's list genuinely does not contain it, and the conclusion in the ticket's
+"What the code does" section, that this is "exactly the state a driver with a
+real but default-off feature is in", does not follow. It is the state of a
+driver that never advertised the feature.
+
+The feature query at `renderer.cpp:859` is never reached on the stock driver,
+because `support_rasterized_order_access` is already false when it is entered,
+and line 857 sets it false again if the extension is missing. So there was never
+a default-off feature to flip. **Step 2's four candidate switches were searching
+for something that does not exist**, and steps 3 and 4 do not need running.
+
+### Why ticket 01 and ticket 00 disagreed
+
+`tmp/gameplay/stock-gameplay/vita3k.log` is named for the stock driver but
+contains both. The Balemuni pack, `Balemuni_Apex_v2_ULTIMATE_SD8Gen2`, is
+injected in some sessions and falls back to the system loader in others, and
+when it injects, `driverID` becomes `MesaTurnip` and the extension count goes
+from 113 to 142. Ticket 00 read the extension list from a session where the
+pack had injected. Ticket 01 read one where it had not. Neither was wrong about
+the line they read; they read different lines of the same file.
+
+This is the same failure mode the spec already warns about at step 9, one level
+up: **a measurement that does not record which driver produced it is not a
+measurement.** Every driver-dependent claim in this plan should now be quoted
+with its `driverID`, not just its extension list.
+
+### The verdict
+
+**It cannot be turned on.** The stock driver does not expose
+`rasterization_order_attachment_access`, so it stays on `direct_fragcolor`, and
+the 5.2 times gap between the two drivers on this GPU stands. `CLAUDE.md` now
+says so with the evidence rather than as an unexplained preference.
+
+This closes the plan's largest open question. It also removes it from the
+critical path: ticket 30 was worth running because it could have given users
+without Turnip a fallback, and there is not going to be one.
+
 ## Comments
+
+- 2026-10-03: answered from logs already on disk, with no device work and no
+  code change. Steps 1 and 5 are done; step 2 is answered by step 1, because
+  the extension is absent rather than disabled, so steps 3 and 4 were not run.
+- 2026-10-03: the two drivers' extension sets were compared directly, not just
+  counted. Of the 142 Turnip extensions, **50 are absent from the stock driver's
+  113**, and the stock driver has **21 that Turnip does not**. So the 29-count
+  difference hides an exchange of 71 extensions, and the two rasterization order
+  names are only two of the 50. Worth remembering when a future claim says a
+  driver "is missing an extension": compare both directions first.
+- 2026-10-03: the finding is a reminder that `optional_extensions` is a lookup
+  table, not a source of truth about the driver. A name in it is a name to look
+  for, never one to print.
