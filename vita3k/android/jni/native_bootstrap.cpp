@@ -32,6 +32,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <fmt/format.h>
+
 #include <cstdlib>
 #include <filesystem>
 #include <span>
@@ -43,13 +45,19 @@ constexpr jint k_preinstalled_firmware_bit = 1 << 0;
 constexpr jint k_main_firmware_bit = 1 << 1;
 constexpr jint k_font_firmware_bit = 1 << 2;
 
-std::string format_app_version() {
-    std::string version = app_version;
-    version += "-";
-    version += std::to_string(app_number);
-    version += "-";
-    version += app_hash;
-    return version;
+// The version fields as JSON. The Kotlin side reads them by name, so a version
+// string may contain any character without the parsing breaking.
+std::string app_version_json() {
+    std::string json = "{";
+    json += fmt::format("\"version\":\"{}\",", app_version);
+    json += fmt::format("\"baseVersion\":\"{}\",", app_base_version);
+    json += fmt::format("\"isRelease\":{},", app_is_release ? "true" : "false");
+    json += fmt::format("\"commitsSinceRelease\":{},", app_commits_since_release);
+    json += fmt::format("\"buildDate\":\"{}\",", app_build_date);
+    json += fmt::format("\"versionCode\":{},", app_version_code);
+    json += fmt::format("\"commitHash\":\"{}\"", app_hash);
+    json += "}";
+    return json;
 }
 
 bool initialize_session(const fs::path &storage_path, Root &root_paths, std::unique_ptr<EmuEnvState> &emuenv) {
@@ -280,7 +288,7 @@ Java_org_vita3k_emulator_NativeLib_getFirmwareInstallStateMask(JNIEnv *, jclass)
 
 JNIEXPORT jstring JNICALL
 Java_org_vita3k_emulator_NativeLib_getAppVersion(JNIEnv *env, jclass) {
-    const std::string version = format_app_version();
+    const std::string version = app_version_json();
     return env->NewStringUTF(version.c_str());
 }
 

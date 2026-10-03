@@ -9,6 +9,33 @@ def signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
 def signingKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
 def hasCiSigning = signingStorePath && signingStorePassword && signingKeyAlias && signingKeyPassword
 
+// versionName and versionCode come from tools/release/version-info.sh, the one
+// place that decides what this build is called. CMake runs the same script for
+// the native library, so the package version and the version inside the app
+// always agree. docs/release.md explains the numbers.
+//
+// The script is run while the project is configured, because versionName and
+// versionCode are needed there. providers.exec is used because a plain Process
+// call at configuration time breaks the configuration cache. rootDir is the
+// android/ folder, and the script is one level above it.
+def versionInfo = [:]
+def versionScript = new File(rootDir, "../tools/release/version-info.sh")
+providers.exec {
+	commandLine "bash", versionScript.absolutePath
+	workingDir rootDir
+	ignoreExitValue = true
+}.standardOutput.asText.get().eachLine { line ->
+	def index = line.indexOf('=')
+	if (index > 0) {
+		versionInfo[line.substring(0, index)] = line.substring(index + 1)
+	}
+}
+if (!versionInfo['version']) {
+	throw new GradleException(
+		"${versionScript} produced no version, so the build cannot name itself.")
+}
+logger.info("Vita3K version ${versionInfo['version']} (versionCode ${versionInfo['version_code']})")
+
 android {
 	namespace = "org.vita3k.emulator"
 	compileSdk = 35
@@ -23,8 +50,8 @@ android {
 		applicationId = "org.vita3k.emulator"
 		minSdk = 28
 		targetSdk = 35
-		versionCode = 110
-		versionName = "1.1"
+		versionCode = (versionInfo['version_code'] ?: '1') as Integer
+		versionName = versionInfo['version'] ?: 'v0.0-dev.0'
 
 		ndk {
 			// x86_64 is emulator-only and broken here: vcpkg OpenSSL cannot assemble its x86 SM3/SM4 code with the NDK.

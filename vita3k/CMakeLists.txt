@@ -2,13 +2,61 @@ set(VITA3K_ORG_NAME "Vita3K")
 # APP_NAME is the on-disk data folder name, keep it: DISPLAY_NAME is what the user sees
 set(VITA3K_APP_NAME "Vita3K")
 set(VITA3K_DISPLAY_NAME "Vita3K+")
-set(VITA3K_APP_VER_HI 1)
-set(VITA3K_APP_VER_MID 1)
-set(VITA3K_APP_VER_LO 0)
-# two-component display version (v1.1): the numeric LO still feeds the exe FILE_VERSION resource  // Nick - Version
-set(VITA3K_APP_VERSION "v${VITA3K_APP_VER_HI}.${VITA3K_APP_VER_MID}")
-# Release number advertised to the updater (must match "Vita3K Build: <n>" in the GitHub release body) and rise each release
-set(VITA3K_APP_NUMBER 1)
+
+# The version comes from the release tag this checkout is built from, not from a
+# number written here. tools/release/version-info.sh is the one place that
+# decides it, and android/app/build.gradle calls the same script, so the app
+# package and the binary can never disagree about which build this is.
+#
+# On a tag it reports the release, for example v1.1. Anywhere else it reports
+# the release it is based on plus the number of commits since, for example
+# v1.1-dev.63, and a development build also carries its build date.
+execute_process(
+	COMMAND bash "${CMAKE_SOURCE_DIR}/tools/release/version-info.sh"
+	WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+	OUTPUT_VARIABLE VITA3K_VERSION_INFO
+	OUTPUT_STRIP_TRAILING_WHITESPACE
+	RESULT_VARIABLE VITA3K_VERSION_INFO_RESULT)
+
+if(NOT VITA3K_VERSION_INFO_RESULT EQUAL 0)
+	message(FATAL_ERROR "tools/release/version-info.sh failed, cannot set the build version")
+endif()
+
+# The script prints key=value lines. Keep the list in step with the script.
+string(REPLACE "\n" ";" VITA3K_VERSION_LINES "${VITA3K_VERSION_INFO}")
+
+foreach(entry
+		"release_tag:VITA3K_RELEASE_TAG"
+		"is_release:VITA3K_IS_RELEASE_BUILD"
+		"commits_since:VITA3K_COMMITS_SINCE_RELEASE"
+		"base_version:VITA3K_BASE_VERSION"
+		"version:VITA3K_APP_VERSION"
+		"ver_major:VITA3K_APP_VER_HI"
+		"ver_minor:VITA3K_APP_VER_MID"
+		"ver_patch:VITA3K_APP_VER_LO"
+		"ver_build:VITA3K_APP_BUILD"
+		"build_date:VITA3K_BUILD_DATE"
+		"version_code:VITA3K_VERSION_CODE")
+	string(REPLACE ":" ";" parts ${entry})
+	list(GET parts 0 key)
+	list(GET parts 1 variable)
+
+	# One line at a time, because a CMake regex is anchored to the whole string
+	# and does not match a line in the middle of it.
+	set(value "")
+	foreach(line IN LISTS VITA3K_VERSION_LINES)
+		if(line MATCHES "^${key}=(.*)$")
+			set(value "${CMAKE_MATCH_1}")
+		endif()
+	endforeach()
+
+	if(value STREQUAL "" AND NOT key STREQUAL "release_tag" AND NOT key STREQUAL "build_date")
+		message(FATAL_ERROR "tools/release/version-info.sh did not print ${key}")
+	endif()
+	set(${variable} "${value}")
+endforeach()
+
+message(STATUS "Vita3K version ${VITA3K_APP_VERSION} (base ${VITA3K_BASE_VERSION}, ${VITA3K_COMMITS_SINCE_RELEASE} commits after the tag)")
 
 execute_process(
 	COMMAND git rev-list HEAD --count
@@ -70,7 +118,7 @@ file(WRITE ${CMAKE_BINARY_DIR}/vita3k/config/gitver.h
 	"#define APP_VER_HI ${VITA3K_APP_VER_HI}\n"
 	"#define APP_VER_MID ${VITA3K_APP_VER_MID}\n"
 	"#define APP_VER_LO ${VITA3K_APP_VER_LO}\n"
-	"#define APP_NUMBER ${VITA3K_APP_NUMBER}\n"
+	"#define APP_BUILD ${VITA3K_APP_BUILD}\n"
 )
 
 include_directories(${CMAKE_BINARY_DIR}/vita3k/config)

@@ -20,8 +20,26 @@
 extern const char org_name[];
 extern const char app_name[];
 extern const char display_name[];
+
+// Version of this build. A release build reports its tag, for example "v1.1".
+// Any other build reports the release it is based on and how many commits it is
+// past that tag, for example "v1.1-dev.63". Set by tools/release/version-info.sh.
 extern const char app_version[];
-extern const int app_number;
+// The release this build is based on, for example "v1.1". The same on a release
+// build and on a development build.
+extern const char app_base_version[];
+// 1 when this build was made on the release tag itself, 0 for a development
+// build. A release build carries no build date, because the tag names it.
+extern const bool app_is_release;
+// Commits between the release tag and this build. 0 on a release build.
+extern const int app_commits_since_release;
+// UTC build time of a development build, for example "2026-10-03T11:56Z".
+// Empty on a release build.
+extern const char app_build_date[];
+// Monotone integer for this build. It rises with every release and with every
+// development build inside a release, so it can order builds and it is what
+// Android takes as versionCode.
+extern const int app_version_code;
 extern const char app_hash[];
 extern const char window_title[];
 extern const bool is_official_build;

@@ -155,8 +155,10 @@
     <string name="app_info_last_played_never">Never</string>
 
     <!-- About sheet -->
-    <string name="about_build">Build: %1$s</string>
-    <string name="about_revision">Revision: %1$s</string>
+    <string name="about_based_on">Based on release: %1$s</string>
+    <string name="about_commits_after_release">Commits after that release: %1$s</string>
+    <string name="about_commit">Commit: %1$s</string>
+    <string name="about_build_date">Built: %1$s</string>
     <string name="about_legal_notice">Vita3K does not condone piracy. You must dump your own games.</string>
 
     <!-- Updates -->

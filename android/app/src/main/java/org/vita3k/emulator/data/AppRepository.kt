@@ -22,7 +22,6 @@ internal object AppRepository {
     private val compatVersionRegex =
         Regex("""Last updated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z)""")
     private val updateBuildRegex = Regex("""Vita3K Build:\s*(\d+)""")
-    private val currentBuildRegex = Regex("""^[^-]+-(\d+)(?:-|$)""")
     private val updateMetadataLineRegex =
         Regex("""^\s*(Corresponding commit:|Vita3K Build:)""", RegexOption.IGNORE_CASE)
 
@@ -30,8 +29,8 @@ internal object AppRepository {
         NativeLib.init(storagePath)
     }
 
-    suspend fun getAppVersion(): String = withContext(Dispatchers.IO) {
-        NativeLib.getAppVersion()
+    suspend fun getAppVersion(): AppVersion = withContext(Dispatchers.IO) {
+        AppVersion.parse(NativeLib.getAppVersion())
     }
 
     suspend fun getFirmwareInstallState(): FirmwareInstallState = withContext(Dispatchers.IO) {
@@ -80,10 +79,10 @@ internal object AppRepository {
     }
 
     suspend fun checkForUpdates(
-        appVersion: String,
+        appVersion: AppVersion,
         officialBuild: Boolean
     ): UpdateCheckResult = withContext(Dispatchers.IO) {
-        val currentDisplayVersion = currentDisplayVersion(appVersion)
+        val currentDisplayVersion = appVersion.displayVersion()
         val response = httpGetString(UPDATE_RELEASE_URL)
             ?: return@withContext UpdateCheckResult(
                 status = UpdateCheckStatus.Failed,
@@ -120,8 +119,9 @@ internal object AppRepository {
             notes = normalizedUpdateNotes(body)
         )
 
-        val currentBuildNumber = currentBuildRegex.find(appVersion)?.groupValues?.getOrNull(1)?.toLongOrNull() ?: 0L
-        val buildDelta = latestBuildNumber - currentBuildNumber
+        // The native build reports versionCode, which rises with every build, so
+        // the comparison is against the same number the release body advertises.
+        val buildDelta = latestBuildNumber - appVersion.versionCode
 
         when {
             !officialBuild -> UpdateCheckResult(
@@ -162,17 +162,6 @@ internal object AppRepository {
         lastPlayed = native.lastPlayed,
         playtime = native.playtime
     )
-
-    private fun currentDisplayVersion(appVersion: String): String {
-        if (appVersion.isBlank()) {
-            return ""
-        }
-
-        val parts = appVersion.split("-", limit = 3)
-        val version = parts.getOrNull(0).orEmpty().ifBlank { appVersion }
-        val build = parts.getOrNull(1).orEmpty()
-        return if (build.isBlank()) version else "$version ($build)"
-    }
 
     private fun normalizedUpdateNotes(body: String): String {
         val cleaned = body

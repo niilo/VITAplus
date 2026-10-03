@@ -12,7 +12,43 @@ git push origin v1.2.0
 ```
 
 A tag with a dash, such as `v1.2.0-rc1`, makes a pre-release. The tag must start
-with `v`.
+with `v` and must be a version, so `v1.2` and `v1.2.0` are both tags and
+`v0.0.1-test` and `continuous` are not.
+
+## How a build names itself
+
+`tools/release/version-info.sh` decides the version of every build. CMake runs it
+for the native library and `android/app/build.gradle` runs it for `versionName`
+and `versionCode`, so the package version and the version the app shows always
+match. Read it with:
+
+```sh
+bash tools/release/version-info.sh
+```
+
+It finds the newest version tag that is merged into HEAD and counts the commits
+between that tag and HEAD.
+
+| Build | `version` | `versionCode` |
+| --- | --- | --- |
+| On the tag `v1.1` | `v1.1` | `1010000` |
+| 63 commits after `v1.1` | `v1.1-dev.63` | `1010063` |
+| On the tag `v1.2` | `v1.2` | `1020000` |
+
+A development build names the release it is based on and how many commits past
+that release it is, so a tester can say which build they have without reading
+the commit hash. It also carries its UTC build time, which the about sheet shows
+as `Built`. A release build has no build time, because the tag already names it.
+
+`versionCode` is the Android version. It is
+`major*1000000 + minor*10000 + patch*100 + commits_since`, so it rises with every
+release and with every development build inside a release. That is what lets an
+APK install over the build that came before it. The number is also written into
+the release body as `Vita3K Build: <n>`, and that is the number the in-app
+updater compares against.
+
+A checkout with no git history, such as a source tarball, reports base version
+`0.0` as a development build.
 
 The workflow `Release build` runs three jobs:
 

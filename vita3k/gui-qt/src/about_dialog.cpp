@@ -46,8 +46,8 @@ AboutDialog::AboutDialog(EmuEnvState &emuenv, QWidget *parent)
     m_ui->credit_label->setTextInteractionFlags(Qt::TextBrowserInteraction);
     m_ui->credit_label->setOpenExternalLinks(true);
 
-    const QString version = QString::fromUtf8(app_version) + "-"
-        + QString::number(app_number) + "-" + QString::fromUtf8(app_hash);
+    const QString version = QString::fromUtf8(app_version) + " "
+        + tr("(%1)").arg(QString::fromUtf8(app_hash));
     m_ui->version_label->setText(tr("Version: %1").arg(version));
 
     m_ui->description_label->setText(tr(

@@ -21,7 +21,12 @@ std::string display_version(const UpdateInfo &info) {
 }
 
 std::string current_display_version() {
-    return fmt::format("{} ({})", app_version, app_number);
+    if (app_is_release)
+        return app_version;
+
+    // A development build is named by the release it is based on, so say which
+    // one. The commit count is already inside app_version.
+    return fmt::format("{} (based on {})", app_version, app_base_version);
 }
 
 bool is_official_build() {

@@ -199,7 +199,7 @@ updater::UpdateCheckResult build_check_result() {
         return result;
     }
 
-    const auto current_build_number = static_cast<std::uint64_t>(app_number);
+    const auto current_build_number = static_cast<std::uint64_t>(app_version_code);
     const auto build_delta = static_cast<std::int64_t>(result.info.build_number) - static_cast<std::int64_t>(current_build_number);
 
     if (!updater::is_official_build()) {

@@ -194,10 +194,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          # The updater compares this number against the version of the running
+          # build, so it has to be in the release body.
+          version_info="$(bash tools/release/version-info.sh)"
+          build_number="$(sed -n 's/^version_code=//p' <<< "$version_info")"
+          build_version="$(sed -n 's/^version=//p' <<< "$version_info")"
+
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" release-assets/* --clobber
+            notes_file="$(mktemp)"
+            {
+              echo "Vita3K Build: $build_number"
+              echo
+              echo "Version: $build_version"
+              echo
+              gh release view "$TAG" --json body --jq .body
+            } > "$notes_file"
+            gh release edit "$TAG" --notes-file "$notes_file"
           else
             flags=""
             if [[ "$TAG" == *-* ]]; then flags="--prerelease"; fi
-            gh release create "$TAG" release-assets/* --title "VITA+ $TAG" --generate-notes --verify-tag $flags
+            notes_file="$(mktemp)"
+            {
+              echo "Vita3K Build: $build_number"
+              echo
+              echo "Version: $build_version"
+            } > "$notes_file"
+            gh release create "$TAG" release-assets/* --title "VITA+ $TAG" \
+              --notes-file "$notes_file" --verify-tag $flags
           fi

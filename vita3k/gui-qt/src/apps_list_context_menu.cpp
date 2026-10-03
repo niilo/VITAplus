@@ -235,10 +235,13 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
                 const auto summary = fmt::format(
                     "# Vita3K summary\n"
                     "- Version: {}\n"
-                    "- Build number: {}\n"
+                    "- Release: {}\n"
+                    "- Commits after the release: {}\n"
+                    "- Build date: {}\n"
                     "- Commit hash: https://github.com/vita3k/vita3k/commit/{}\n"
                     "- GPU backend: {}",
-                    app_version, app_number, app_hash,
+                    app_version, app_base_version, app_commits_since_release,
+                    app_build_date, app_hash,
                     m_emuenv.cfg.backend_renderer);
                 QApplication::clipboard()->setText(QString::fromStdString(summary));
             });
@@ -283,10 +286,13 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
                 const auto vita3k_summary = fmt::format(
                     "%23 Vita3K summary%0A"
                     "- Version: {}%0A"
-                    "- Build number: {}%0A"
+                    "- Release: {}%0A"
+                    "- Commits after the release: {}%0A"
+                    "- Build date: {}%0A"
                     "- Commit hash: https://github.com/vita3k/vita3k/commit/{}%0A"
                     "- GPU backend: {}",
-                    app_version, app_number, app_hash,
+                    app_version, app_base_version, app_commits_since_release,
+                    app_build_date, app_hash,
                     m_emuenv.cfg.backend_renderer);
 
 #ifdef _WIN32

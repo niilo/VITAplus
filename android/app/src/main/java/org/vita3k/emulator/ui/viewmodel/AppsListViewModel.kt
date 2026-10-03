@@ -18,6 +18,7 @@ import org.vita3k.emulator.R
 import org.vita3k.emulator.data.FirmwareInstallState
 import org.vita3k.emulator.data.AppInfo
 import org.vita3k.emulator.data.AppRepository
+import org.vita3k.emulator.data.AppVersion
 import org.vita3k.emulator.data.SortOption
 import org.vita3k.emulator.data.UpdateCheckResult
 import org.vita3k.emulator.data.UpdateCheckStatus
@@ -61,7 +62,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
         private set
     var viewMode by mutableStateOf(ViewMode.LIST)
         private set
-    var appVersion by mutableStateOf("")
+    var appVersion by mutableStateOf(AppVersion.EMPTY)
         private set
     var updateCheckInProgress by mutableStateOf(false)
         private set
@@ -233,7 +234,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
                 updateCheckResult = UpdateCheckResult(
                     status = UpdateCheckStatus.Failed,
                     message = str(R.string.updates_check_in_progress),
-                    currentDisplayVersion = appVersion
+                    currentDisplayVersion = appVersion.displayVersion()
                 )
             }
             return
@@ -256,7 +257,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
                     updateCheckResult = UpdateCheckResult(
                         status = UpdateCheckStatus.Failed,
                         message = str(R.string.install_error_generic, e.message ?: ""),
-                        currentDisplayVersion = appVersion
+                        currentDisplayVersion = appVersion.displayVersion()
                     )
                 }
             } finally {

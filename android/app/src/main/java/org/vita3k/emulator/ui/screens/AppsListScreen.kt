@@ -60,6 +60,7 @@ import coil.compose.AsyncImage
 import org.vita3k.emulator.R
 import org.vita3k.emulator.data.FirmwareInstallState
 import org.vita3k.emulator.data.AppInfo
+import org.vita3k.emulator.data.AppVersion
 import org.vita3k.emulator.data.FirmwareComponent
 import org.vita3k.emulator.data.SortOption
 import org.vita3k.emulator.data.UpdateCheckResult
@@ -79,7 +80,7 @@ fun AppsListScreen(
     apps: List<AppInfo>,
     initialized: Boolean,
     loading: Boolean,
-    appVersion: String,
+    appVersion: AppVersion,
     searchQuery: String,
     sortOption: SortOption,
     viewMode: ViewMode,
@@ -471,12 +472,6 @@ fun AppsListScreen(
     }
 }
 
-private data class ParsedAppVersion(
-    val versionLabel: String,
-    val buildNumber: String? = null,
-    val revision: String? = null
-)
-
 private const val ABOUT_DESCRIPTION_HTML =
     """Vita3K is the world's first functional PS Vita and PS TV emulator, open source and written in C++ for Windows, Linux, macOS, and Android. Visit <a href="https://vita3k.org/quickstart.html">vita3k.org</a> for more info, browse the project on <a href="https://github.com/Vita3K/Vita3K">GitHub</a> if you want to contribute, or support us on <a href="https://ko-fi.com/vita3k">Ko-fi</a>."""
 
@@ -609,29 +604,9 @@ private fun firmwareComponentLabelRes(component: FirmwareComponent): Int {
     }
 }
 
-private fun parseAppVersion(appVersion: String): ParsedAppVersion {
-    if (appVersion.isBlank()) {
-        return ParsedAppVersion(versionLabel = "")
-    }
-
-    val parts = appVersion.split("-", limit = 3)
-    return ParsedAppVersion(
-        versionLabel = parts.getOrNull(0).orEmpty().ifBlank { appVersion },
-        buildNumber = parts.getOrNull(1)?.takeIf { it.isNotBlank() },
-        revision = parts.getOrNull(2)?.takeIf { it.isNotBlank() }
-    )
-}
-
 @Composable
-private fun AppsListTitle(appVersion: String) {
-    val parsedVersion = remember(appVersion) { parseAppVersion(appVersion) }
-    val subtitle = remember(parsedVersion) {
-        when {
-            parsedVersion.versionLabel.isBlank() -> ""
-            parsedVersion.buildNumber.isNullOrBlank() -> parsedVersion.versionLabel
-            else -> "${parsedVersion.versionLabel} (${parsedVersion.buildNumber})"
-        }
-    }
+private fun AppsListTitle(appVersion: AppVersion) {
+    val subtitle = remember(appVersion) { appVersion.subtitle() }
 
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
@@ -789,10 +764,9 @@ private fun SearchBar(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AboutSheet(
-    appVersion: String,
+    appVersion: AppVersion,
     onDismiss: () -> Unit
 ) {
-    val parsedVersion = remember(appVersion) { parseAppVersion(appVersion) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     ModalBottomSheet(
@@ -825,24 +799,17 @@ private fun AboutSheet(
                     fontWeight = FontWeight.SemiBold,
                     textAlign = TextAlign.Center
                 )
-                if (parsedVersion.versionLabel.isNotBlank()) {
+                if (appVersion.version.isNotBlank()) {
                     Text(
-                        text = parsedVersion.versionLabel,
+                        text = appVersion.version,
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center
                     )
                 }
-                parsedVersion.buildNumber?.let { build ->
+                appVersion.detailLines().forEach { (detail, value) ->
                     Text(
-                        text = stringResource(R.string.about_build, build),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                parsedVersion.revision?.let { revision ->
-                    Text(
-                        text = stringResource(R.string.about_revision, revision),
+                        text = stringResource(detail.labelRes, value),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
