@@ -50,18 +50,70 @@ ruled out by the test above. The second one is not tested yet.
 
 ## Next steps
 
-1. Test scaled vertex attributes off on Turnip (needs a setting or a build
-   that forces `support_scaled_vertex_attribute = false`).
-2. Try another Turnip build (for example an official Mesa release) to see
+1. ~~Test scaled vertex attributes off on Turnip~~ — **drop this.** Scaled vertex
+   attributes do not exist in Vulkan Turnip (`grep` for
+   `scaled_vertex_attribute` over `src/freedreno/` returns nothing). It is a
+   Gallium/GL feature, so it cannot explain a Vulkan-only difference against the
+   stock driver. The `support_scaled_attribute_formats=true` difference in
+   `log_gpu_configuration` comes from the GL side and is not relevant here.
+2. **A740 UBWC flag hint A/B — this is now the top lead.** In upstream Mesa,
+   `enable_tp_ubwc_flag_hint = True` is set for **FD735** and **FD740v3** (Quest 3)
+   but **not** for our **FD740** (`0x43050A01`). It sets
+   `TPL1_DBG_ECO_CNTL1.TP_UBWC_FLAG_HINT`, a *texture processor* bit that controls
+   how UBWC-compressed data is decoded. For a render-feedback loop Turnip rewrites
+   the input-attachment descriptor to tiled mode with **UBWC zeroed**
+   (`tu_desc_set_ubwc<CHIP>(dst, 0)` in `tu_emit_input_attachments`), so a
+   reader/writer disagreement about UBWC format would return zero exactly where
+   the box is. Build a variant that forces the hint on and compare. See
+   `Banners-Turnip/docs/A740_BLACK_BOX.md`.
+3. Try another Turnip build (for example an official Mesa release) to see
    if it is a regression of this driver build.
-3. Capture a frame on the device (RenderDoc for Android, or AGI) at the spot
+4. Capture a frame on the device (RenderDoc for Android, or AGI) at the spot
    to find the draw that makes the box, and compare its shader output on
    Turnip and stock.
-4. Look for the effect in the game: a head fade or a near-camera occluder
+5. Look for the effect in the game: a head fade or a near-camera occluder
    is likely, because the box covers the head only when the camera is
    close.
 
-The debug logs (transfers, surface reads) and the `preserve-f16-nan`
-setting are on the branch `debug/transfer-log`, not on `plus-master`.
+The debug logs (transfers, surface reads) and the `preserve-f16-nan` setting
+are on the branch `debug/transfer-log`, not on `plus-master`.
+
+## Comments
+
+2026-10-03 (later): **the UBWC-hint hypothesis is now falsified.** Built two
+drivers from the same Mesa `8fc4981` differing only in
+`enable_tp_ubwc_flag_hint` on the FD740 entry, and tested both on the device:
+
+- `Turnip_a740-sr1.zip` — hint off → box present
+- `Turnip_a740-ubwc-hint-ON.zip` — hint on → **box still present**
+
+So `TP_UBWC_FLAG_HINT` is not the variable. The tiled/UBWC-zeroed descriptor
+rewrite in `tu_emit_input_attachments` is still a real code path, but the flag
+that looked like it controlled it does not change the outcome. Do not spend more
+time on that knob.
+
+That kills the cheapest-looking explanation for the stock-vs-Turnip difference.
+What survives is that the difference is somewhere in *how the feedback read is
+issued*, not in a decode-mode flag.
+
+Also settled in this pass: `support_scaled_attribute_formats` is a red herring.
+It does not exist anywhere in Vulkan Turnip (`grep` over `src/freedreno/` finds
+nothing); it is a GL/Gallium concept, so it cannot explain a Vulkan-only
+difference. Dropped from the next steps above.
+
+Remaining leads, in order of cost:
+
+1. **Is it a Mesa regression?** Compare against an official Mesa release build,
+   not another driver fork. If the box is absent in a release and present in
+   26.3-devel, `git log` on `tu_emit_input_attachments` /
+   `tu_render_pass_patch_input_gmem` bounds it. This is the highest-value next
+   step because it is a bisect, not a guess.
+2. **Capture the offending draw** on device (RenderDoc for Android) and compare
+   the input-attachment descriptor and shader output between Turnip and stock.
+3. Only then consider emulator-side work: the three blending strategies
+   (`direct_fragcolor` → `support_shader_interlock` → `support_texture_barrier`)
+   are an all-or-nothing ladder, and the fallback makes the scene black. A
+   graceful "keep the feature, avoid the feedback loop" path would need a
+   copy-instead-of-feedback workaround.
 
 ## Comments
