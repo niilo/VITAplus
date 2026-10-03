@@ -490,6 +490,33 @@ measurement run on them before recording the reason they close.
   and it read 680 MHz only while a game was running. So the cap is a ceiling,
   not a floor, and the energy question for ticket 24 is about what holds the
   frame rate, not about raising a fixed clock.
+- 2026-10-03, ticket 03: **the first CPU profile says the top of the profile is
+  not rendering.** 250300 samples, symbols resolved, on Uncharted in the
+  waterfall chapter on Turnip. The single largest entry is
+  `resample_linear_float` at 6.25%, and the audio thread is 13.31% of all
+  samples. After it come xxHash at 5.41%, `clock_gettime` at 5.28% and dynarmic
+  `GetOrEmit` at 2.97%. Renderer code does not appear until 17.30% down the
+  thread table and 0.45% in the flat table. Two tickets follow: 31 for audio, 32
+  for the rest of the host cost.
+- 2026-10-03, ticket 03: **a resampler runs that the code says should not
+  exist.** Both `PCMDecoderState` and `AacDecoderState` build their `SwrContext`
+  once, in the constructor, with the same rate in and out, and the PCM one
+  carries a comment saying it does not resample. Yet `av_bessel_i0` and
+  `build_filter`, which ffmpeg calls once from `swr_init` while it designs the
+  filter bank, are 2.64% of all samples and 19.9% of the audio thread. That is
+  initialisation work visible in a steady-state profile, so something is
+  initialising repeatedly. Ticket 31 owns it.
+- 2026-10-03, ticket 03: **`accurate-thread-scheduling` is not the cause of the
+  host atomics.** An earlier note in ticket 03 said it was, and that was wrong.
+  The setting is `sched_acquire` in `vita3k/kernel/src/thread.cpp:252`, a mutex
+  that gates guest thread execution; it issues no atomics. The atomics are on
+  three thread groups and 3.75% of them are on `vita3k-render`, where no guest
+  thread runs. The guest-side share belongs to ticket 25, because it goes
+  through the shared `Dynarmic::ExclusiveMonitor`. Ticket 32 owns the host side.
+- 2026-10-03, ticket 03: **6.05% of samples have no symbol.** `unknown[+717551200c]`,
+  `unknown[+7175512010]` and `unknown[+717551201c]` sit within 20 bytes of each
+  other, so it is one out-of-range mapping, not three things. Until it is named,
+  every percentage in the profile is provisional. Ticket 32 names it first.
 
 ## Fog
 

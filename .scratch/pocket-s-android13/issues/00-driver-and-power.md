@@ -55,7 +55,9 @@ same code. A plan that leaves this open measures nothing comparable.
 3. Decide. This repository already measured 7 FPS on the stock driver and
    30 FPS on Turnip for this scene (`CLAUDE.md`). If Turnip wins again, every
    ticket from here measures on Turnip, and every ticket writes one line in its
-   `## Answer
+   `## Answer`.
+
+## Answer
 
 **CORRECTED 2026-10-02, second pass. The first answer was wrong.** It was
 measured on the Uncharted title screen, which barely touches the renderer. In

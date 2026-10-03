@@ -36,7 +36,7 @@ and which Snapdragon CPU features can save clock cycles.
 
 ## Shape of the plan
 
-31 tickets in `issues/`, numbered from `00` to `30`. The dependency graph decides
+33 tickets in `issues/`, numbered from `00` to `32`. The dependency graph decides
 what runs first, not the numbering. Tickets 00, 01 and 02 are resolved; every
 other row below is work that has not been done.
 
@@ -55,6 +55,7 @@ other row below is work that has not been done.
 | 24 to 28 | Areas this plan's first draft did not cover: GPU power constraint, dynarmic flags, texture upload, descriptor and uniform limits, output surface size. With the GPU saturated, 18, 19, 20, 24 and 28 are the real remaining levers. |
 | 29 | The prime core stays at 595 MHz while its maximum is 3360 MHz. Found by ticket 00. |
 | 30 | Why the stock driver cannot use rasterization order attachment access, and whether it can be made to. Found by ticket 00; the largest unowned question in the plan. |
+| 31, 32 | Host cost outside the renderer, found by ticket 03's first CPU profile. The audio thread is 13.31% of all samples and `resample_linear_float` alone is 6.25%. Separately, about a fifth of all samples are host costs that are neither guest code nor rendering: xxHash, `clock_gettime`, `add_protect`, the render thread's atomics, and 6.05% of samples the unwinder could not name. **Both are energy questions and neither can move the frame rate**, because the GPU is the limit. Ticket 32 also corrects a wrong attribution: `accurate-thread-scheduling` is not the cause of the atomics. |
 
 ## What changed since the old plan
 

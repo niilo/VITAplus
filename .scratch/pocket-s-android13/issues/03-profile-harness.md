@@ -296,27 +296,68 @@ perf.data: 35115541 bytes
 
 The report came out at 7847575 bytes with no `[unknown]` markers and 520
 references to `libVita3K`, so the symbols resolved. The top entries of the
-self-time table:
+self-time table, as percentages of all 250300 samples:
 
-| self | symbol |
+| self | object | symbol |
+| --- | --- | --- |
+| 6.25% | libVita3K | `resample_linear_float` |
+| 5.41% | libVita3K | `XXH_INLINE_XXH3_64bits_update` |
+| 5.28% | vdso | `__kernel_clock_gettime` |
+| 2.97% | libVita3K | `Dynarmic::Backend::Arm64::AddressSpace::GetOrEmit` |
+| 2.85% | unknown | `unknown[+717551200c]` |
+| 2.20% | unknown | `unknown[+7175512010]` |
+| 1.64% | libVita3K | `av_bessel_i0` |
+| 1.49% | libVita3K | `Dynarmic::ExclusiveMonitor::CheckAndClear` |
+| 1.37% | libVita3K | `add_protect(MemState&, ...)` |
+| 1.00% | libVita3K | `build_filter` |
+| 1.00% | unknown | `unknown[+717551201c]` |
+| 0.94% | libVita3K | `ThreadState::run_loop()` |
+| 0.94% | libVita3K | `std::__tree_remove<__tree_node_base<...>>` |
+| 0.91% | libc | `__aarch64_cas4_acq` |
+| 0.79% | libVita3K | `ngs::dsp::process_biquad` |
+
+By thread, the same samples:
+
+| thread | share |
 | --- | --- |
-| 5.41% | `resample_linear_float` |
-| 1.49% | `av_bessel_i0` |
-| 1.00% | `build_filter` |
-| 0.94% | `ThreadState::run_loop()` |
-| 0.57% | `__aarch64_ldset4_acq_rel` |
-| 0.46% | `resolve_import(unsigned int)` |
-| 0.45% | `ArmDynarmicCallback::CallSVC(unsigned int)` |
-| 0.39% | `ArmDynarmicCallback::MemoryRead32(unsigned int)` |
-| 0.32% | `call_import(EmuEnvState&, CPUState&, unsigned int, int)` |
-| 0.24% | `PCMDecoderState::send(unsigned char const*, unsigned int)` |
+| `PCSA00029` (main guest thread) | 40.50% |
+| `vita3k-render` | 17.30% |
+| **`audio_out_threa`** | **13.31%** |
+| `WorkerThread-1`, `WorkerThread-0` (guest threads) | 9.71%, 9.63% |
+| `HavokWorkerThre` | 4.35% |
+| `SndStreamThread` | 0.93% |
 
-Two things follow for the rest of the plan. Audio resampling and the Bessel
-function from the filter bank are the two largest single entries, and both are
-audio, which this plan has not considered. The atomics entries (`ldset4`,
-`cas4`, `ldadd8`) are the guest's memory model under
-`accurate-thread-scheduling`, which is on by default and has never been
-measured. Neither is a ticket yet.
+Three things follow for the rest of the plan.
+
+**Audio is 13.31% of all CPU samples, on one thread, and this plan has no audio
+ticket.** `resample_linear_float` at 6.25% is the single largest entry in the
+whole profile. `av_bessel_i0` and `build_filter` together are 2.64% of all
+samples and 19.9% of that thread, and both are filter-design code that runs once
+when a resampler is initialised, so they should not be visible in a steady-state
+profile at all. Neither `PCMDecoderState` nor `AacDecoderState` resamples: both
+build their `SwrContext` in the constructor with the same rate in and out
+(`vita3k/codec/src/pcm.cpp:294-318`, `vita3k/codec/src/aac.cpp:33-58`), and the
+PCM one says so in a comment. That contradiction is ticket 31.
+
+**The host atomics are 12.9% of all samples, and `accurate-thread-scheduling` is
+not their cause.** An earlier note in this ticket claimed it was. That was wrong.
+That setting is a mutex that gates guest thread execution
+(`vita3k/kernel/src/thread.cpp:252`, `:610`); it issues no atomics of its own.
+The atomics sit on three thread groups: the guest threads
+`__aarch64_cas4_acq` 1.91% and `__aarch64_ldset4_acq_rel` 1.44% on `PCSA00029`,
+`__aarch64_ldadd8_rel` 1.34% on `vita3k-render`, and `__aarch64_swp1_acq_rel`
+1.92% on `WorkerThread-0`. The render thread has no guest thread on it, so no
+guest scheduling gate applies there. The guest-side part of this is already
+ticket 25's subject, because it goes through the one shared
+`Dynarmic::ExclusiveMonitor` that `Dynarmic::ExclusiveMonitor::CheckAndClear` at
+1.49% is. The host-side part is ticket 32.
+
+**Three clusters of host cost sit outside both the guest and the renderer** and
+have no ticket: xxHash at 5.41%, `clock_gettime` at 5.28%, and
+`add_protect` at 1.37%. Ticket 32 carries them. `unknown[+717551200c]`,
+`unknown[+7175512010]` and `unknown[+717551201c]`, together 6.05%, are samples
+whose unwinder produced no name; the addresses sit close together, so one
+out-of-range mapping is the likely cause and it may be hiding a whole function.
 
 ### Three defects in the report step, found by running it
 

@@ -26,6 +26,14 @@ what an agent does. The measurement part needs the Ayaneo Pocket S, so it stays
 | 07 | Read the flags, add the setting | Yes, for the stall |
 | 26 | The four-way counters | Yes, for the split |
 | 27 | The per-pipeline counters | Yes, for the counts |
+| 31 | Count the resampler initialisations, behind a temporary setting | Yes, for the power A/B |
+| 32 | Name the unnamed samples and attribute each host cost | No |
+
+A ticket that names its blockers as **code** dependencies is unblocked once that
+code has merged, even if the ticket is still `claimed` because a device
+measurement is outstanding. `.scratch/pocket-s-android13/map.md` records which
+tickets that applies to. A mechanical scan of `Status:` will skip them, so read
+that section before deciding the frontier.
 
 The remaining tickets are measurement only, or need a change that no
 measurement yet justifies.
