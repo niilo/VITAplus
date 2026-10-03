@@ -265,14 +265,85 @@ APK was necessary but not sufficient: the APK has to reach the device as well,
 and the one that is installed there is signed with a different key and has no
 `profileable` tag.
 
-Still to do, both needing the game in play on an unlocked device:
+Both were run on 2026-10-03, and both results are below. `perf` works.
+`latency` does not, and the reason is in the next section.
+### `perf` was run on 2026-10-03 and works
 
-- `device.sh perf <package> <label>` against that APK, to confirm `perf.data`
-  and the HTML report come out with symbols resolved. The report step also needs
-  `ANDROID_NDK_HOME` to point at an NDK; without it the command still pulls
-  `perf.data` and the symbols, which are the raw result.
-- `device.sh latency <package> <label>` on an unlocked device, to confirm the
-  three frame columns carry values. On a locked device they read zero.
+The user chose to rebuild with `VITA_SIGN_WITH_RELEASE_KEY=1` and install over
+the existing app rather than uninstall. That worked and cost nothing:
+`build-android.sh` logged "signing with the release key", the APK came out with
+certificate `04c7cfc6...38522a`, which is the same certificate the installed app
+had, and `device.sh install` updated it in place.
+
+Verified after the install: the app is still installed, all 21 titles are still
+in `ux0/app`, `config.yml` is byte-identical (md5 `765bf05b5c2cf1420edee34b93b2afea`
+before and after), and the game still loads Turnip 26.3.0. The driver pack was
+not lost, because nothing was uninstalled.
+
+`adb install -r` without `-t` fails with `INSTALL_FAILED_TEST_ONLY`. The release
+build is marked testOnly, which the installed app also was, so `-t` is required
+and `device.sh install` already passes it.
+
+The recording, against Uncharted in the waterfall chapter on Turnip:
+
+```
+simpleperf record -g --call-graph dwarf --symfs /data/local/tmp/native_libs \
+  --app org.vita3k.emulator -o /data/local/tmp/perf.data --duration 30
+Recorded for 29.9967 seconds.
+Samples recorded: 250300. Samples lost: 0.
+perf.data: 35115541 bytes
+```
+
+The report came out at 7847575 bytes with no `[unknown]` markers and 520
+references to `libVita3K`, so the symbols resolved. The top entries of the
+self-time table:
+
+| self | symbol |
+| --- | --- |
+| 5.41% | `resample_linear_float` |
+| 1.49% | `av_bessel_i0` |
+| 1.00% | `build_filter` |
+| 0.94% | `ThreadState::run_loop()` |
+| 0.57% | `__aarch64_ldset4_acq_rel` |
+| 0.46% | `resolve_import(unsigned int)` |
+| 0.45% | `ArmDynarmicCallback::CallSVC(unsigned int)` |
+| 0.39% | `ArmDynarmicCallback::MemoryRead32(unsigned int)` |
+| 0.32% | `call_import(EmuEnvState&, CPUState&, unsigned int, int)` |
+| 0.24% | `PCMDecoderState::send(unsigned char const*, unsigned int)` |
+
+Two things follow for the rest of the plan. Audio resampling and the Bessel
+function from the filter bank are the two largest single entries, and both are
+audio, which this plan has not considered. The atomics entries (`ldset4`,
+`cas4`, `ldadd8`) are the guest's memory model under
+`accurate-thread-scheduling`, which is on by default and has never been
+measured. Neither is a ticket yet.
+
+### Three defects in the report step, found by running it
+
+The report step had never been executed. Running it against real data showed it
+could not have worked:
+
+1. **`report-sample` does not exist in the NDK.** The image has NDK
+   29.0.14206865, whose simpleperf tree holds `report.py`, the host binaries and
+   `purgatorio/purgatorio.py`. There is no `report-sample` anywhere on the
+   filesystem, and `purgatorio.py` needs `jinja2`, which the image does not
+   install. The command now uses
+   `simpleperf/bin/linux/x86_64/simpleperf`, which is what produces the HTML.
+2. **`binary_cache_builder.py` was called wrongly.** It was passed the
+   positional arguments `. perf.data`, and it takes `-i` and `-lib`. It also
+   needs `adb` on PATH and exists to symbolize JIT and dex code, which this
+   recording does not contain. The call was removed rather than corrected.
+3. **The no-NDK path crashed.** `report_py` and `cache_builder` were declared
+   `local` but only assigned inside the `if`, so with no `ANDROID_NDK_HOME` the
+   `set -u` shell stopped at `-n "$report_py"` with "unbound variable" and the
+   command exited 1. The raw result was still pulled, so nothing was lost, but
+   the message that tells the caller where the HTML went never printed. Both
+   names are now set to empty before the branch.
+
+Also worth knowing: `cmd_perf` picks the unstripped library by modification
+time, and in this tree the `RelWithDebInfo` copy is newer than the `Release`
+one. Symbols have to match the binary inside the installed APK, so
+`VITA3K_UNSTRIPPED_LIB` has to be pinned when both build types are present.
 
 Both need the game reachable, so they are the human half of this ticket. The
 ticket stays `claimed`.
@@ -330,12 +401,15 @@ agent:
    the pack has to go back through the app's installer by hand. This is the
    procedure ticket 01 already paid for.
 
-Option 1 is the one that keeps the device as it is. Nothing was uninstalled on
-2026-10-03 and all 21 titles and the driver pack are still in place.
+**Option 1 is what happened.** The user chose it on 2026-10-03 and the install
+succeeded in place. Nothing was uninstalled, and all 21 titles and the driver
+pack are still on the device. The section above is kept as the record of why the
+choice mattered.
 
-`ANDROID_NDK_HOME` is unset on this host, so `device.sh perf` would pull
-`perf.data` and the symbols but build no HTML report. The NDK is inside the
-Android container image, not on the host.
+`ANDROID_NDK_HOME` is unset on this host, so `device.sh perf` pulls `perf.data`
+and the symbols but builds no HTML report. The NDK is inside the Android
+container image, not on the host. Copying the host `simpleperf` binary out of the
+image, or mounting the NDK, is what closes that last gap.
 
 ### The report tool was confirmed on this run
 

@@ -357,17 +357,32 @@ cmd_perf() {
     adb pull "$symfs/libVita3K.so" "$out_dir/libVita3K.so" > /dev/null 2>&1 || true
     echo "wrote $out_dir/perf.data"
 
-    # report-sample and binary_cache_builder.py live in the NDK, not on the
-    # device. perf.data and the symbols are the raw result and are already
-    # pulled, so a missing NDK only costs the HTML view.
+    # The HTML is built by the NDK's own host binary, not by report-sample. The NDK
+    # at /opt/android-sdk/ndk/29.0.14206865 has no report-sample anywhere: its
+    # simpleperf tree holds report.py and a host binary under
+    # simpleperf/bin/linux/x86_64, and purgatorio/purgatorio.py needs jinja2, which
+    # the image does not install. The host binary is what produces the HTML.
+    #
+    # binary_cache_builder.py is not used. It is in the same tree but wants adb,
+    # and it exists to symbolize JIT and dex code, which this recording does not
+    # hold: the emulator is native code and its symbols come from --symfs. It also
+    # takes -i and -lib flags, not the positional arguments the ticket text used.
+    #
+    # perf.data and the symbols are the raw result and are already pulled, so a
+    # missing NDK only costs the HTML view.
+    #
+    # The name is set to empty before the branch. Under `set -u` an unset local is
+    # an error, so assigning it only when there is an NDK makes the "no NDK" path
+    # below stop with "unbound variable" instead of printing where the HTML went.
     local ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
-    local report_py cache_builder
+    local host_simpleperf=""
     if [[ -n "$ndk" ]]; then
-        report_py="$({ find "$ndk" -name report-sample -type f 2> /dev/null || true; } | { head -n 1 || true; })"
-        cache_builder="$({ find "$ndk" -name binary_cache_builder.py -type f 2> /dev/null || true; } | { head -n 1 || true; })"
+        # The x86_64 binary runs on the build host. The arm64 one in the same
+        # tree is an Android binary and fails with "Exec format error" on amd64.
+        host_simpleperf="$({ find "$ndk" -path '*simpleperf/bin/linux/x86_64/simpleperf' -type f 2>/dev/null || true; } | { head -n 1 || true; })"
     fi
-    if [[ -n "$report_py" && -n "$cache_builder" ]]; then
-        ( cd "$out_dir" && python3 "$cache_builder" . perf.data && python3 "$report_py" --symfs . -i perf.data -o report.html ) > "$out_dir/report.txt" 2>&1 || true
+    if [[ -n "$host_simpleperf" ]]; then
+        ( cd "$out_dir" && "$host_simpleperf" report -i perf.data -o report.html --symfs . --sort dso,symbol ) > "$out_dir/report.txt" 2>&1 || true
         if [[ -f "$out_dir/report.html" ]]; then
             echo "wrote $out_dir/report.html"
         else
@@ -376,7 +391,7 @@ cmd_perf() {
             echo "the NDK report tools ran but produced no report. See $out_dir/report.txt"
         fi
     else
-        echo "no NDK at ANDROID_NDK_HOME, so no HTML report. perf.data and the symbols are in $out_dir."
+        echo "no NDK host simpleperf at ANDROID_NDK_HOME, so no HTML report. perf.data and the symbols are in $out_dir."
     fi
 }
 
