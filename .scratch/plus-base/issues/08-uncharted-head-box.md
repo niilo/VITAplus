@@ -103,17 +103,29 @@ difference. Dropped from the next steps above.
 
 Remaining leads, in order of cost:
 
-1. **Is it a Mesa regression?** Compare against an official Mesa release build,
-   not another driver fork. If the box is absent in a release and present in
-   26.3-devel, `git log` on `tu_emit_input_attachments` /
-   `tu_render_pass_patch_input_gmem` bounds it. This is the highest-value next
-   step because it is a bisect, not a guess.
-2. **Capture the offending draw** on device (RenderDoc for Android) and compare
-   the input-attachment descriptor and shader output between Turnip and stock.
-3. Only then consider emulator-side work: the three blending strategies
-   (`direct_fragcolor` → `support_shader_interlock` → `support_texture_barrier`)
-   are an all-or-nothing ladder, and the fallback makes the scene black. A
-   graceful "keep the feature, avoid the feedback loop" path would need a
-   copy-instead-of-feedback workaround.
+1. **Capture the offending draw** on device (RenderDoc for Android, or AGI) and
+   compare the input-attachment descriptor and shader output between Turnip and
+   stock. This is now the *only* un-tried approach: every flag-level hypothesis
+   has been tested and falsified (see the closing note below).
+2. Emulator-side work, if a workaround is wanted rather than a fix: the three
+   blending strategies (`direct_fragcolor` -> `support_shader_interlock` ->
+   `support_texture_barrier`) are an all-or-nothing ladder, and the fallback
+   makes the scene black. A graceful "keep the feature, avoid the feedback loop"
+   path would need a copy-instead-of-feedback workaround.
 
-## Comments
+### Closing note (2026-10-03, end of day)
+
+Investigation **stopped at the user's direction**. Three hypotheses were built
+and tested on the device, all falsified:
+
+| # | Hypothesis | Test | Result |
+| --- | --- | --- | --- |
+| 1 | `enable_tp_ubwc_flag_hint` | same Mesa, flag off vs on | no effect |
+| 2 | `support_scaled_attribute_formats` | source inspection | not a Vulkan Turnip feature |
+| 3 | SUBPASS_FENCE replacing CACHE_INVALIDATE | pre-2026-09-04 driver (`2b6602eb`) | no effect |
+
+The black box survived all three. Diagnosis is left open rather than guessed at;
+`Banners-Turnip/docs/A740_BLACK_BOX.md` has the full record so the work is not
+repeated. The two diagnostic drivers were removed from the device; the baseline
+`Turnip_a740-sr1.zip` (Mesa `8fc4981`, current upstream) remains for normal use.
+
