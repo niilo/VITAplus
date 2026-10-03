@@ -96,5 +96,16 @@ python3 "$here/fps_sample.py" "$out/fps.png" --count 6 --interval 2 > /dev/null
         "$device" config-get "$package" "$key" 2> /dev/null | tail -n 1 || true
     done
     grep -a -E 'Custom Adreno driver|Stock Adreno driver|Using the following memory mapping' "$out/vita3k.log" | tail -n 2 | cut -c1-160 || true
+    # The custom-driver-name above is the requested name, not the driver that
+    # ran: a name that does not resolve only warns and falls back to the system
+    # loader, and the two packages keep their drivers in separate storage. So
+    # record the driverID from the log, which is the only line that says which
+    # driver actually ran, and fail loudly if the log has none.
+    driver_id="$(grep -a -oE 'driverID: [A-Za-z]+' "$out/vita3k.log" | tail -n 1 | cut -d' ' -f2)"
+    if [[ -z "$driver_id" ]]; then
+        echo "driverID: UNKNOWN (no driverID in the log; do not report this run)"
+    else
+        echo "driverID: $driver_id"
+    fi
 } | tee "$out/summary.txt"
 echo "Read $out/fps.png and check $out/scene.png."

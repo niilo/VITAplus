@@ -145,3 +145,41 @@ steps`, and none of them is knowable without the device and the games.
   name. The sampler takes the output path as an argument, so the name is
   whatever the caller chose, and `clocks.csv` and `latency.csv` have their own
   headers.
+- 2026-10-04: the device was unlocked, so `uncharted_scene.sh` ran against
+  `PCSA00029` twice. The first run is invalid and the reason is worth keeping:
+  every step screenshot was a black frame with `GPU 0%` and `FPS 1`, and the
+  log ends in three `experienced a cpu error` lines. The guest jumped to an
+  unmapped address, `PC: 0x00000004`, and the last HLE import on the thread was
+  `nid=0x65DD0C84`, which `vita3k/nids/include/nids/nids.inc:1779` names
+  `sceGxmSetUniformDataF`. So this is a renderer crash reached through
+  `sceGxmSetUniformDataF`, not the save-data problem the `SlotParam_*.bin`
+  errors nearby suggest; those same `SlotParam_1..4` errors are in the older
+  recorded logs too, which did not crash.
+- 2026-10-04: the crash tracked the driver, and `custom-driver-name` in
+  `summary.txt` is **not** what ran. Run A named `Turnip-Banners-A740`, loaded
+  it, logged `driverID: MesaTurnip`, and crashed. Run B named
+  `Balemuni_Apex_v2_ULTIMATE_SD8Gen2` and the log says
+  `Failed to load custom driver Balemuni_Apex_v2_ULTIMATE_SD8Gen2; falling back
+  to the system Vulkan loader`, so it ran on the stock driver, logged
+  `driverID: QualcommProprietary`, and rendered the level with no cpu error.
+  The summary line records the requested name either way, which is the trap
+  `CLAUDE.md` now warns about: quote `driverID` from the log, never the config.
+- 2026-10-04: why the name failed to load: drivers live in the app's own
+  storage, and the two packages do not share it. `run-as` on the debug package
+  lists only `files/driver/Turnip-Banners-A740` and
+  `files/driver/Turnip_a740-prefence`; `Balemuni_Apex_v2_ULTIMATE_SD8Gen2`
+  exists only under the release package
+  (`/storage/emulated/0/Android/data/org.vita3k.emulator/files/driver/`, which
+  is where `tmp/device-backup-2026-10-02/config.yml` got that name). A name
+  copied from the release config does not exist for the debug package, and the
+  fallback to the stock driver is only a warning in the log.
+- 2026-10-04: `custom-driver-name` is back to `""` for the debug package, so
+  the next run states its driver honestly. A/B/A is still not done: one good
+  scene is a sample, not a baseline, and the driver for the protocol is still a
+  decision for a person, because the only driver that renders this title
+  (`QualcommProprietary`, stock) is not the one the A runs are supposed to
+  isolate.
+- 2026-10-04: the FPS readings need two numbers, not one. The emulated overlay
+  in `fps.png` reads 7, 6, 6, 6, 6, 6 while the system overlay in `scene.png`
+  reads 16 at the same moment. They are different counters, so `fps.png` alone
+  does not settle the FPS question and any ticket quoting it must say which.

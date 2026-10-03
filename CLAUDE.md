@@ -122,6 +122,15 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   sessions and falls back in others, which is how this question was first
   answered wrongly. See
   `.scratch/pocket-s-android13/issues/30-stock-driver-raster-order.md`.
+- A `custom-driver-name` that does not resolve is **not** an error, only a
+  warning: the log says `Failed to load custom driver <name>; falling back to
+  the system Vulkan loader` and the run continues on the stock driver. Drivers
+  live in each package's own `files/driver/`, and `org.vita3k.emulator` and
+  `org.vita3k.emulator.debug` do not share it, so a name read out of one
+  package's `config.yml` may not exist in the other. `summary.txt` records the
+  requested name, not the driver that ran, so it cannot settle this; the
+  `driverID` line can. Check it before believing any run. See
+  `.scratch/pocket-s-android13/issues/04-baseline.md`.
 - The goal is **energy per played frame**, not frame rate: a steady 30 FPS on a
   game locked to 30, 60 where the rate is unlocked, and the lowest device
   power that holds both. A change that saves power and misses the frame rate or
