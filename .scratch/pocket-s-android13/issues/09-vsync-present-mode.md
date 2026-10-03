@@ -1,9 +1,9 @@
 # 09: Make v-sync choose the Vulkan present mode
 
-Status: open
+Status: blocked
 Type: task
 Label: ready-for-agent
-Blocked by: 00, 01
+Blocked by: 04 (A/B/A baseline); code is done and verified on device
 
 ## Problem
 

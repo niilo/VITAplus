@@ -1,9 +1,9 @@
 # 10: Make the emulated vblank clock steady
 
-Status: open
+Status: blocked
 Type: task
 Label: ready-for-agent
-Blocked by: 02
+Blocked by: 04 (A/B/A baseline); code is done and verified on device
 
 ## Problem
 
