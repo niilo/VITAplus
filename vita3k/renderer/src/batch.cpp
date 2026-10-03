@@ -32,8 +32,13 @@
 #include <overlay/shader_precompile_progress.h>
 #include <util/log.h>
 #include <util/thread_priority.h>
+#ifdef __ANDROID__
+#include <unistd.h>
+#include <util/adpf.h>
+#endif
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -44,6 +49,13 @@
 struct FeatureState;
 
 namespace renderer {
+
+#ifdef __ANDROID__
+// Ticket 13: the period a frame's work is expected to finish in. 16.667 ms is
+// 60 FPS. The device's own preferred period is logged when the session opens,
+// and it is not necessarily this.
+static constexpr int64_t k_adpf_target_ns = 16667000;
+#endif
 Command *generic_command_allocate() {
     return new Command;
 }
@@ -229,6 +241,28 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
     util::set_thread_name("vita3k-render");
     util::set_thread_nice(state.render_thread_nice);
 
+#ifdef __ANDROID__
+    // Ticket 13: one session for the threads a frame depends on. The renderer
+    // thread, the GPU wait thread and the vblank thread. Guest threads are left
+    // out on purpose: naming every thread would tell the system nothing.
+    const int adpf_tids[] = {
+        static_cast<int>(::gettid()),
+        state.gpu_wait_thread_id.load(std::memory_order_relaxed),
+        state.vblank_thread_id.load(std::memory_order_relaxed),
+    };
+    bool adpf_started = false;
+    if (config.adpf) {
+        int usable[3];
+        int count = 0;
+        for (const int tid : adpf_tids) {
+            if (tid > 0)
+                usable[count++] = tid;
+        }
+        if (count > 0)
+            adpf_started = adpf::start(usable, count, k_adpf_target_ns, "render thread start");
+    }
+#endif
+
     if (state.precompile_requested) {
         auto progress_overlay = state.overlay_manager
             ? state.overlay_manager->create<overlay::shader_precompile_progress>()
@@ -293,6 +327,9 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
 #ifdef TRACY_ENABLE
         ZoneScopedN("Game rendering");
 #endif
+#ifdef __ANDROID__
+        const auto frame_start = std::chrono::steady_clock::now();
+#endif
         if (!state.set_current())
             break;
 
@@ -318,6 +355,15 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
         state.render_frame(display, gxm, mem);
         state.swap_window();
         state.async_flip_requested.store(false, std::memory_order_relaxed);
+
+#ifdef __ANDROID__
+        if (adpf_started) {
+            // Ticket 13: once per frame. The thermal and perf HALs rate-limit
+            // their own callers, so more often than this is wasted.
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - frame_start).count();
+            adpf::report_work(elapsed);
+        }
+#endif
 
 #ifdef TRACY_ENABLE
         FrameMark;

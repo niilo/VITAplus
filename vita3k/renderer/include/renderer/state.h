@@ -141,6 +141,11 @@ struct State {
     // is created in one place and started in another.
     int render_thread_nice = 0;
 
+    // Ticket 13: thread ids for the ADPF hint, so it names the threads a frame
+    // depends on. Zero until the thread publishes its own id.
+    std::atomic<int> gpu_wait_thread_id{ 0 };
+    std::atomic<int> vblank_thread_id{ 0 };
+
     std::vector<ShadersHash> precompile_queue;
     bool precompile_requested = false;
     std::atomic<bool> precompile_complete{ false };

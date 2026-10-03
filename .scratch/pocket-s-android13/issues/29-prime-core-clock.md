@@ -112,8 +112,16 @@ GPU busy over the same window: median 80%, range 77 to 82%.
 
 **cpu7 sat at 1843200 kHz in every sample, which is 54.8% of its 3360000
 maximum.** Ticket 00 recorded 595200 kHz, 17.7%, in 19 of 22 samples. So the
-finding did not reproduce: it is now running twice as fast as the ticket
-recorded, and never at the floor.
+finding did not reproduce here: on this run it was not at the floor at all.
+
+**Ticket 13 later contradicted this**, recording cpu7 at 595200 kHz in 9 of 9
+samples with ADPF on and 1843200 kHz with it off, on the same device. Read
+those two together: cpu7's clock on this device is not one steady value, it
+depends on what is running and on scheduling, and twelve samples of one
+configuration do not establish which one is typical. Treat this section's
+"did not reproduce" as "not observed in this configuration", not as a refutation
+of ticket 00. The `uclamp.min` and thread-placement findings below are the parts
+of this ticket that hold regardless.
 
 The honest reading is that 595 MHz was real at some point but is not the steady
 state. Two differences from ticket 00's runs are worth naming, and neither was

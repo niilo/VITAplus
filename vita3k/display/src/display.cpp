@@ -47,6 +47,11 @@
 #include <util/perf_log.h>
 #include <util/thread_priority.h>
 
+#ifdef __ANDROID__
+#include <unistd.h>
+#endif
+
+#include <atomic>
 #include <chrono>
 #include <motion/functions.h>
 #include <touch/functions.h>
@@ -125,6 +130,10 @@ static void freeze_watchdog_thread(EmuEnvState &emuenv) {
 static void vblank_sync_thread(EmuEnvState &emuenv) {
     util::set_thread_name("vita3k-vblank");
     DisplayState &display = emuenv.display;
+#ifdef __ANDROID__
+    // Ticket 13: the ADPF hint names this thread, so it needs its id.
+    emuenv.renderer->vblank_thread_id.store(static_cast<int>(::gettid()), std::memory_order_relaxed);
+#endif
     std::thread watchdog(freeze_watchdog_thread, std::ref(emuenv));
 
     // Ticket 10: 16666 us is 60.002 Hz, 16683 us is the 59.94 Hz of the Vita.

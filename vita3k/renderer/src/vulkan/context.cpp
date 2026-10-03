@@ -32,13 +32,22 @@
 
 #include <fmt/format.h>
 
+#ifdef __ANDROID__
+#include <unistd.h>
+#endif
+
 #include <algorithm>
+#include <atomic>
 
 namespace renderer::vulkan {
 
 void VKContext::wait_thread_function(const MemState &mem) {
     util::set_thread_name("vita3k-gpuwait");
     util::set_thread_nice(state.gpu_wait_thread_nice);
+#ifdef __ANDROID__
+    // Ticket 13: the ADPF hint names this thread, so it needs its id.
+    state.gpu_wait_thread_id.store(static_cast<int>(::gettid()), std::memory_order_relaxed);
+#endif
 
     // try to wait for multiple fences at the same time if possible
     std::vector<vk::Fence> fences;
