@@ -613,7 +613,10 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
                 sizeof(uint32_t), vk::QueryResultFlagBits::eWait);
         }
         visibility_max_used_idx = -1;
-        current_visibility_buffer->queries_used.assign(current_visibility_buffer->size, false);
+        // Keep the +1 element that sync_state.cpp:241 allocated. The loop above
+        // reads entry == visibility_max_used_idx + 1, which is one past the last
+        // real query, and assigning size would make that read out of bounds.
+        current_visibility_buffer->queries_used.assign(current_visibility_buffer->size + 1, false);
     }
 
     // remember which part of the colour surface this scene's draws could have touched (for write-back bounds)

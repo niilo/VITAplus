@@ -24,8 +24,10 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <string>
 
 #ifdef _WIN32
 #include <vulkan/vulkan_win32.h>
@@ -208,28 +210,7 @@ bool ScreenRenderer::setup() {
         state.deep_stencil_use = vk::Format::eD16Unorm;
     }
 
-    // preferred order : mailbox > fifo_relaxed > fifo > whatever
-    // the only drawback for mailbox is that it draws more power, so maybe on a portable device use something else
-    // this one should always be available
-    present_mode = vk::PresentModeKHR::eImmediate;
-    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
-    for (const auto &mode : present_modes) {
-        if (mode == vk::PresentModeKHR::eMailbox) {
-            present_mode = mode;
-            break;
-        }
-
-        if (mode == vk::PresentModeKHR::eFifoRelaxed) {
-            present_mode = mode;
-        }
-        if (present_mode == vk::PresentModeKHR::eFifoRelaxed)
-            continue;
-
-        if (mode == vk::PresentModeKHR::eFifo) {
-            present_mode = mode;
-        }
-    }
-    LOG_INFO("Present mode: {}", vk::to_string(present_mode));
+    select_present_mode();
 
     create_render_pass();
 
@@ -242,6 +223,48 @@ bool ScreenRenderer::setup() {
     filter->init();
 
     return true;
+}
+
+// Ticket 09: one function chooses the present mode, keyed on v-sync.
+void ScreenRenderer::select_present_mode() {
+    // A v-sync change while a game runs arrives here as a pending value.
+    // compare-exchange clears it, so two changes cannot collapse into one.
+    const int requested_vsync = state.pending_vsync.exchange(-1, std::memory_order_relaxed);
+    if (requested_vsync >= 0)
+        vsync = requested_vsync != 0;
+
+    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
+    const auto has_mode = [&present_modes](const vk::PresentModeKHR mode) {
+        return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
+    };
+
+    // FIFO is the only mode Vulkan requires, so it is the fallback everywhere.
+#ifdef __ANDROID__
+    // A 30 FPS game on a 60 Hz panel presents every other vsync. FIFO lets the
+    // GPU idle between presents instead of being woken to throw work away, so
+    // v-sync on uses FIFO. v-sync off uses MAILBOX when the surface has it.
+    present_mode = (!vsync && has_mode(vk::PresentModeKHR::eMailbox)) ? vk::PresentModeKHR::eMailbox
+                                                                      : vk::PresentModeKHR::eFifo;
+#else
+    // Other systems keep the order this base has always used, and v-sync does
+    // not change it: MAILBOX, then FIFO_RELAXED, then FIFO.
+    if (has_mode(vk::PresentModeKHR::eMailbox))
+        present_mode = vk::PresentModeKHR::eMailbox;
+    else if (has_mode(vk::PresentModeKHR::eFifoRelaxed))
+        present_mode = vk::PresentModeKHR::eFifoRelaxed;
+    else
+        present_mode = vk::PresentModeKHR::eFifo;
+#endif
+
+    if (perf_log::enabled()) {
+        std::string list;
+        for (const auto &mode : present_modes) {
+            if (!list.empty())
+                list += ", ";
+            list += vk::to_string(mode);
+        }
+        LOG_INFO("Present modes the surface offers: {}", list);
+    }
 }
 
 void ScreenRenderer::create_swapchain() {
@@ -258,7 +281,7 @@ void ScreenRenderer::create_swapchain() {
     if (extent.width == 0 || extent.height == 0)
         return;
 
-    swapchain_size = surface_capabilities.minImageCount + 1;
+    swapchain_size = surface_capabilities.minImageCount + extra_images;
     if (surface_capabilities.maxImageCount != 0)
         swapchain_size = std::min(swapchain_size, surface_capabilities.maxImageCount);
 
@@ -311,6 +334,17 @@ void ScreenRenderer::create_swapchain() {
     // Get Swapchain Images
     swapchain_images = state.device.getSwapchainImagesKHR(swapchain);
     swapchain_size = swapchain_images.size();
+    LOG_INFO("Present mode: {} (v-sync {}), swapchain images: {} (minimum {}, plus {})",
+        vk::to_string(present_mode), vsync ? "on" : "off", swapchain_size, surface_capabilities.minImageCount, extra_images);
+
+    // vita_surface has one image per swapchain image, and the driver may return
+    // a different count than was asked for. rebuild_swapchain_if_visible() calls
+    // create_swapchain() without calling create_surface_image() again, so resize
+    // here and the per-image index stays in range.
+    // The GPU is idle here: setup() runs before the first frame, and the
+    // rebuild path waits for the device first.
+    if (!vita_surface.empty() && vita_surface.size() != swapchain_size)
+        vita_surface.resize(swapchain_size);
 
     // Get Image views
     swapchain_views.resize(swapchain_size);
@@ -725,6 +759,17 @@ void ScreenRenderer::create_surface_image() {
 bool ScreenRenderer::ensure_swapchain() {
     if (!window_has_drawable_size(state))
         return false;
+
+    // Ticket 09: a v-sync change while a game runs has to create the swapchain
+    // again, because the present mode is fixed when it is created.
+    // pending_vsync is set by set_vsync_state() and cleared by
+    // select_present_mode(). Read it here without clearing it, so the mode is
+    // chosen by create_swapchain().
+    const int pending = state.pending_vsync.load(std::memory_order_relaxed);
+    if (pending >= 0 && ((pending != 0) != vsync)) {
+        need_rebuild = true;
+        rebuild_reason = "v-sync changed";
+    }
 
     if (!need_rebuild && !need_surface_recreate && swapchain) {
         // A one-frame disagreement between what Vulkan reports as the surface extent and what the window reports as its client size is not a resize

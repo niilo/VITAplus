@@ -44,6 +44,11 @@ public:
     vk::SurfaceCapabilitiesKHR surface_capabilities;
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
+    // Ticket 09: on Android, v-sync on uses FIFO and v-sync off uses MAILBOX
+    // when the surface offers it. See select_present_mode().
+    bool vsync = true;
+    // Ticket 09: images added to minImageCount, so the A/B can use the minimum.
+    uint32_t extra_images = 1;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
@@ -103,6 +108,7 @@ public:
 private:
     void create_render_pass();
     void create_layout_sync();
+    void select_present_mode();
     void create_swapchain();
     bool note_size_mismatch(bool mismatched);
     vk::Pipeline create_graphics_pipeline_impl(std::array<vk::PipelineShaderStageCreateInfo, 2> &shader_stages);

@@ -1,6 +1,6 @@
 # 12: Ask for huge pages on the JIT cache and the guest arena
 
-Status: open
+Status: rejected
 Type: task
 Label: ready-for-agent
 Blocked by: 01, 03
@@ -103,5 +103,112 @@ unproven iTLB theory is not a result.
 - The measured `AnonHugePages` for both mappings, and the A/B/A numbers.
 
 ## Answer
+
+**Status: rejected.** Step 0 produced the likely result, and it is the second
+outcome the ticket listed: both mappings are on 4 KiB pages.
+
+### The reading
+
+Read from inside the app with `run-as`, because the shell cannot read another
+uid's `smaps` (`Permission denied`, which the ticket predicted). The reldebug
+build is debuggable, so this works:
+
+```sh
+adb shell run-as org.vita3k.emulator.debug cat /proc/530/smaps
+```
+
+Taken while Uncharted Golden Abyss (`PCSA00029`) was running, RSS 982 MiB.
+
+THP is `[always]` on this device, re-confirmed:
+
+```
+/sys/kernel/mm/transparent_hugepage/enabled = [always] madvise never
+```
+
+**`AnonHugePages` is `0 kB` in every one of the 3666 mappings, and `total
+AnonHugePages` for the process is 0 kB.** Not one mapping in the process has a
+huge page, including the 1 GiB and 512 MiB anonymous regions that the ART
+runtime holds. So THP `always` is not producing huge pages for this app at all,
+which is a stronger result than the ticket asked for.
+
+#### The dynarmic code cache
+
+Eight mappings are exactly 128 MiB and executable, which is the
+`code_cache_size` default from `external/dynarmic/src/dynarmic/interface/A32/config.h:239`:
+
+```cpp
+size_t code_cache_size = 128 * 1024 * 1024;  // bytes
+```
+
+All eight, with the figures ticket 14 asks for:
+
+| base | Rss | Private_Dirty | KernelPageSize | AnonHugePages | 2 MiB aligned |
+| --- | --- | --- | --- | --- | --- |
+| `0x6d0a400000` | 240 kB | 240 kB | 4 kB | 0 kB | yes |
+| `0x6d1390e000` | 312 kB | 312 kB | 4 kB | 0 kB | no |
+| `0x6d1ce1c000` | 372 kB | 372 kB | 4 kB | 0 kB | no |
+| `0x6d2832a000` | 76 kB | 76 kB | 4 kB | 0 kB | no |
+| `0x6d3333b000` | 4788 kB | 4788 kB | 4 kB | 0 kB | no |
+| `0x6d53fd2000` | 8 kB | 8 kB | 4 kB | 0 kB | no |
+| `0x6d5d3e2000` | 40 kB | 40 kB | 4 kB | 0 kB | no |
+| `0x6d67575000` | 128 kB | 128 kB | 4 kB | 0 kB | no |
+
+High-water mark: **`Rss` 5964 kB total, 5.8 MiB**, in the largest single cache.
+So ticket 14's high-water question is answered too, and the answer is that 4.6%
+of the 128 MiB default is ever touched.
+
+Seven of the eight bases are **not** 2 MiB aligned. That matters for THP: a
+2 MiB page can only be used for an anonymous range faulted inside a 2
+MiB-aligned contiguous range, and a mapping whose base is offset by `0x10e000`,
+`0x1c000` or `0x2a000` never has one. So even with a working THP, seven of
+these eight could not get a huge page at fault time.
+
+#### The guest reservation
+
+`mem.cpp:82` asks for `1ULL << 34`, which is `0x400000000`, and the comment at
+`mem.cpp:101` says the address is only a hint. The 4 GiB reservation landed
+across three `PROT_NONE` segments because the dynamic linker already held part
+of that range:
+
+| range | Rss | KernelPageSize | AnonHugePages |
+| --- | --- | --- | --- |
+| `0x400000000`..`0x400001000` | 4 kB | 4 kB | 0 kB |
+| `0x400001000`..`0x460000000` | 0 kB | 4 kB | 0 kB |
+| `0x460000000`..`0x466200000` | 0 kB | 4 kB | 0 kB |
+
+1.596 GiB of the 4 GiB survived, base **`0x400000000` is 2 MiB aligned**, and
+`Rss` is 4 kB out of 1.6 GiB, so almost none of it is faulted in. Only one page
+has been touched after several minutes of play.
+
+### Why `madvise` would not help
+
+`MADV_HUGEPAGE` sets `VM_HUGEPAGE` on the VMA, and with THP `always` the flag is
+already set. The pages are not arriving for a reason `madvise` cannot reach:
+
+1. **THP is not actually collapsing on this device's anonymous mappings.** The
+   ART runtime's own 512 MiB region, which is far larger and well aligned, also
+   shows `AnonHugePages 0`. This is not about the emulator.
+2. **The guest reservation is 4 kB in practice.** It is `PROT_NONE` and only
+   4 kB of it has ever been faulted, so there is nothing to promote. Prefaulting
+   it would change what is resident, not the page size, and would cost memory.
+3. **Seven of the eight code caches are misaligned**, which rules out a fault
+   time huge page regardless.
+
+The kernel is 5.15 (ticket 01), so `MADV_COLLAPSE` returns `EINVAL` and was not
+tried, per the ticket.
+
+### Verdict
+
+**Rejected, and no code was written.** Steps 1 to 6 of the ticket are not
+reached, because step 0 did the job and its outcome was not "surprising me" in a
+way that code could fix. The premise of the ticket, that anonymous mappings
+already get 2 MB pages here, does not hold for this app despite
+`/sys/kernel/mm/transparent_hugepage/enabled` reporting `[always]`.
+
+If someone wants to revisit this, the thing to investigate first is why this
+device's THP is not delivering on any mapping, which is a kernel question and
+not an emulator one. `cat /sys/kernel/mm/transparent_hugepage/hpage_pmd_size`
+and the per-cgroup `memory.stat` `thp_fault_alloc` counter would say whether
+the allocations are being counted and rejected.
 
 ## Comments

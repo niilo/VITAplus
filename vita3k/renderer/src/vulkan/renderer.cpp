@@ -1039,6 +1039,11 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         frame.destroy_queue.init(device);
     }
 
+    screen_renderer.extra_images = static_cast<uint32_t>(std::clamp(config.swapchain_extra_images, 0, 3));
+    // Ticket 09: the Vulkan backend never read the v-sync setting, so the
+    // present mode ignored it. Seed it here, the same place extra_images is set,
+    // and pending_vsync still overrides it when the setting changes mid-run.
+    screen_renderer.vsync = config.v_sync;
     if (!screen_renderer.setup())
         return false;
 

@@ -115,4 +115,137 @@ Android is FIFO with `minImageCount = 3`, so start there.
 
 ## Answer
 
+The port from `a52121af` is done, adapted to this base. `v-sync` now chooses the
+Vulkan present mode, and the present mode list is logged.
+
+### What this base looked like before
+
+The old code was inline in `setup()`, not in a function, and it started from
+`eImmediate` and walked the list:
+
+```cpp
+present_mode = vk::PresentModeKHR::eImmediate;
+for (const auto &mode : present_modes) {
+    if (mode == eMailbox) { present_mode = mode; break; }
+    if (mode == eFifoRelaxed) { present_mode = mode; }
+    ...
+}
+```
+
+`v-sync` was read by nothing in the Vulkan backend. Confirmed: before this
+change, `grep pending_vsync vita3k/renderer/src/vulkan/` returned nothing.
+
+### What changed
+
+`select_present_mode()` is a new function at `screen_renderer.cpp:226`, called
+from `setup()` where the old inline loop was. On Android, `v-sync` on gives
+FIFO and `v-sync` off gives MAILBOX when the surface offers it. Other systems
+keep the order this base always used, MAILBOX then FIFO_RELAXED then FIFO, and
+`v-sync` does not change it. FIFO is the fallback everywhere because Vulkan
+requires it.
+
+The other points the ticket lists:
+
+- **A `v-sync` change while a game runs rebuilds the swapchain**
+  (`screen_renderer.cpp:763-772`). `ensure_swapchain()` compares the pending
+  value against the mode the swapchain was created with and sets
+  `need_rebuild` with the reason `"v-sync changed"`. `pending_vsync` is read
+  with a plain load there, not an exchange, so the value survives for
+  `select_present_mode()` to consume. The exchange in `select_present_mode()`
+  (`screen_renderer.cpp:232`) is what clears it.
+- **`vita_surface` is resized** when the swapchain comes back with a different
+  image count (`screen_renderer.cpp:338-345`). This is the bug the ticket calls
+  out: `rebuild_swapchain_if_visible()` calls `create_swapchain()` and never
+  calls `create_surface_image()`, and `vita_surface` is indexed per swapchain
+  image.
+- **The mode and the image count are logged** on every swapchain creation
+  (`screen_renderer.cpp:335-336`).
+- **`swapchain-extra-images`,** default 1, so 0 gives `minImageCount`. It is
+  clamped to 0..3 at `renderer.cpp:1042`.
+- **The present mode list is logged** under `perf-log`
+  (`screen_renderer.cpp:257-265`). This is the step 0 the ticket asked for, and
+  it is behind the setting so it costs nothing when it is off.
+
+The default value of `v-sync` is unchanged.
+
+### A note on other devices, as the ticket's risk section asks
+
+A device whose preset turns `v-sync` **off** now gets MAILBOX on Android where it
+previously got whatever the walk picked, which was also MAILBOX on most drivers,
+so the common case does not change. A device that turns `v-sync` **on** now gets
+FIFO where it previously got MAILBOX. That is the intended change and it is not
+measured on any device other than this one. Ticket 22 owns the preset and should
+know that flipping `v-sync` now also flips the present mode.
+
+### Verified on the device
+
+Built, installed and run with Uncharted. From `vita3k.log`:
+
+```
+[select_present_mode]: Present modes the surface offers: Mailbox, Fifo
+[create_swapchain]: Present mode: Fifo (v-sync on), swapchain images: 4 (minimum 3, plus 1)
+[vblank_sync_thread]: Vblank period: 16666 us
+```
+
+Then with `v-sync: false` in `config.yml`, same build, same title:
+
+```
+[create_swapchain]: Present mode: Mailbox (v-sync off), swapchain images: 5 (minimum 3, plus 1)
+```
+
+Three facts the ticket wanted and did not have:
+
+- **The present mode list is `Mailbox, Fifo`.** Nothing else. No
+  `FifoRelaxed`, no `Immediate`. So the old walk always ended at MAILBOX on this
+  device, and the new default of FIFO with `v-sync` on is a real change.
+- **`minImageCount` is 3**, so the default `swapchain-extra-images: 1` gives 4
+  images, and the setting at 0 would give 3.
+- **The mode and the image count are logged on every swapchain creation**, so an
+  A/B does not need the config file to know what a run used.
+
+**The image count also moved from 4 to 5 with MAILBOX**, which the ticket did not
+predict. `minImageCount + 1` was asked for and the driver returned 5 when the
+mode was Mailbox, so `vita_surface` had to be resized. That is exactly the case
+`screen_renderer.cpp:338-345` handles, and it is why that resize is in the port
+rather than being an optional tidy-up.
+
+### A second bug the port did not fix on its own
+
+The first device run with `v-sync: false` still logged `Present mode: Fifo
+(v-sync on)`. The port moves the mode selection into `select_present_mode()` and
+reads `pending_vsync` there, but **nothing in the Vulkan backend ever seeded
+`vsync` from `config.v_sync` at startup**, so the member kept its default of
+`true` and only `set_vsync_state()` could change it. The setting was inert from
+launch, which is the bug the ticket set out to fix.
+
+Fixed at `renderer.cpp:1043-1046`, next to where `extra_images` is set:
+
+```cpp
+screen_renderer.vsync = config.v_sync;
+```
+
+After that the same run logged `Mailbox (v-sync off)` and the default run logged
+`Fifo (v-sync on)`. `v-sync` was left at `true` afterwards.
+
+### What was not done
+
+**No A/B/A.** The ticket says not to start until ticket 04 has a baseline, and
+it does not. So the three measurements it lists are not here:
+
+- FIFO against MAILBOX.
+- `minImageCount` against `minImageCount + 1`.
+- The frame interval 99th percentile, present count, GPU busy and GPU clock.
+
+Acceptance item 3, "the A/B/A numbers are in `## Answer`", is **not met.**
+
+### Acceptance, honestly
+
+- Both targets build and the format check passes: yes.
+- The mode follows `v-sync`: **yes, from `config.yml` on a fresh launch, both
+  directions, verified above.** The live switch through the settings UI while a
+  game runs was not exercised. That path (`ensure_swapchain()` setting
+  `need_rebuild` when `pending_vsync` disagrees with the current mode) is in
+  place but unverified.
+- A/B/A numbers: not done.
+
 ## Comments

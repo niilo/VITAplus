@@ -165,6 +165,8 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "surface-sync-clamp-rt", true, surface_sync_clamp_rt)                               \
     code(std::string, "screen-filter", "Bilinear", screen_filter)                                       \
     code(bool, "v-sync", true, v_sync)                                                                  \
+    code(int, "vblank-period-us", 16666, vblank_period_us)                                            \
+    code(int, "swapchain-extra-images", 1, swapchain_extra_images)                                 \
     code(int, "anisotropic-filtering", 1, anisotropic_filtering)                                        \
     code(bool, "texture-cache", true, texture_cache)                                                    \
     code(bool, "async-pipeline-compilation", false, async_pipeline_compilation)                          \
