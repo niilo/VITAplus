@@ -55,6 +55,10 @@ AacDecoderState::AacDecoderState(uint32_t sample_rate, uint32_t channels) {
 
     ret = swr_init(swr);
     assert(ret == 0);
+
+    // Ticket 31: counts every swr_init in the emulator, so the filter-design
+    // cost in the profile can be attributed to a call site.
+    LOG_INFO("[SWRCNT] AacDecoderState resampler created at {} Hz", sample_rate);
 }
 
 AacDecoderState::~AacDecoderState() {

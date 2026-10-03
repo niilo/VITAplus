@@ -60,8 +60,10 @@ bool create_stereo_rate_resampler(StereoRateResamplerRuntimeState &runtime, cons
     runtime.dest_rate = dest_rate;
     static std::atomic<uint64_t> created{ 0 };
     const uint64_t n = created.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n == 1 || (n % 4096) == 0)
-        LOG_DEBUG("[NGSRATE] stereo rate resampler churn: {} creations so far (latest {} -> {} Hz)", n, source_rate, dest_rate);
+    // Ticket 31: av_bessel_i0 and build_filter are filter-design code that
+    // should run once per resampler. This counts the creations so the churn is
+    // a number in vita3k.log rather than a guess.
+    LOG_INFO("[NGSRATE] stereo rate resampler created, #{} ({} -> {} Hz)", n, source_rate, dest_rate);
     return true;
 }
 

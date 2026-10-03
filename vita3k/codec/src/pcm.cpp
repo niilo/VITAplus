@@ -315,6 +315,10 @@ PCMDecoderState::PCMDecoderState(const float dest_frequency)
     assert(ret == 0);
 
     swr_init(swr_stereo);
+
+    // Ticket 31: counts every swr_init in the emulator, so the filter-design
+    // cost in the profile can be attributed to a call site.
+    LOG_INFO("[SWRCNT] PCMDecoderState resamplers created, mono->stereo and stereo->stereo");
 }
 
 PCMDecoderState::~PCMDecoderState() {
