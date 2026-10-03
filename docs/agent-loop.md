@@ -38,6 +38,21 @@ that section before deciding the frontier.
 The remaining tickets are measurement only, or need a change that no
 measurement yet justifies.
 
+## Stage only what the ticket owns
+
+**Name the paths, do not use `git add -A`.** A working tree can hold changes
+that this ticket did not make: another agent working in parallel, or a person
+editing a ticket while a measurement runs. `git add -A .scratch` will pick them
+up and put them in this ticket's commit, where the message says nothing about
+them and no reviewer expects them.
+
+Use `git add <paths>` for the ticket's own files, then read
+`git status --short` before committing and confirm every staged path belongs to
+the ticket. If something else is staged, unstage it with
+`git restore --staged <path>`. If it is already committed and not pushed,
+`git reset --soft HEAD~1` and unstage it rather than amending, because the
+commit message is already wrong about the contents.
+
 ## The loop
 
 For each ticket:
