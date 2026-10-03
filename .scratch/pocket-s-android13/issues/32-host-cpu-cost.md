@@ -1,9 +1,9 @@
 # 32: Account for the host CPU cost outside the guest and the renderer
 
-Status: open
+Status: blocked
 Type: research
 Label: ready-for-agent
-Blocked by: 03
+Blocked by: 03, 04
 
 ## Question
 
@@ -195,15 +195,14 @@ larger texture is many more calls. The comment at `cache.cpp:112-113` explains
 why it is written that way: the guest memory can be freed mid-flight, so each
 page is validated before it is read. That is deliberate crash-safety.
 
-**Removable, but not by changing the hash function.** XXH3 is already the fast
-one. The removable part is the frequency: `cache.cpp:843` and `cache.cpp:859`
-both hash, and the cached path at `:859` only skips the hash when the scene
-number has changed (`:851`). So a game that re-binds an unchanged texture within
-one scene pays the full hash every time. Caching the hash per (address, size,
-scene) so a repeat bind inside a scene costs a compare would remove most of this
-5.40%. That belongs behind a config value that defaults to today's behaviour,
-per `docs/agent-loop.md`, and it needs an A/B/A energy run before it can be
-called a win.
+**Not removable by the route this ticket first proposed.** XXH3 is already the
+fast one. This paragraph originally claimed the cached path at `:859` "only skips
+the hash when the scene number has changed (`:851`)" and proposed caching per
+(address, size, scene). **Both halves were wrong**: `:851` skips when the scene is
+*unchanged*, and that skip already exists. The later section "Step 4 cannot be
+run" replaces this verdict with the measurement that contradicts the
+once-per-scene story. What is left is the per-page loop at `cache.cpp:104-119`,
+which is deliberate crash-safety and is not the cheap part to remove.
 
 ### `clock_gettime` 5.28% is mostly guest thread scheduling
 
@@ -281,14 +280,107 @@ larger share of the total (2.12% on `PCSA00029` alone).
 | item | share | attribution | verdict |
 | --- | --- | --- | --- |
 | unnamed clusters | 6.05% | dynarmic JIT code cache, `oaknut::CodeBlock` mmap | named; guest code, not removable |
-| xxHash | 5.40% | `texture/cache.cpp:98` via `:128` via `:775` | removable, behind a config value, needs A/B/A |
+| xxHash | 5.40% | `texture/cache.cpp:98` via `:128` via `:859` | the proposed skip already exists at `:851`; cause still open, see "Step 4 cannot be run" |
 | `clock_gettime` | 5.28% | 84% guest `ThreadState::run_loop` | mostly guest; ours is under 0.3%, not removable |
 | `add_protect` | 1.37% | `surface_cache.cpp:200` | not removable, belongs to ticket 06 |
 | render atomics | 0.65% | 22% scudo allocator, rest refcounting | not removable as atomics; cut allocations instead |
 
-**No energy run was made.** Step 4 of the ticket needs the three commands of
-`../spec.md` A/B/A on the 30 FPS title, and no code change has been proposed
-yet, so there is nothing to A/B. The one change worth testing is the xxHash
-frequency, and the device has not been used for it in this pass.
+### Step 4 cannot be run, and the change it wants is already implemented
 
-## Comments
+This is the second pass over this ticket, and it changes the verdict on xxHash.
+
+**The ticket proposed caching the hash per (address, size, scene) so a repeat
+bind inside a scene costs a compare. That is what the code already does.**
+`cache.cpp:850-862`:
+
+```cpp
+if (info->use_hash) {
+    if (current_scene != 0 && info->last_hash_scene == current_scene) {
+        upload = false;
+    } else {
+        info->last_hash_scene = current_scene;
+        ...info->hash = hash_texture_data(...) ^ 1;
+        upload = previous_hash != info->hash;
+    }
+}
+```
+
+The condition is `last_hash_scene == current_scene`, so the skip happens when the
+scene is **unchanged**. The earlier answer in this ticket described it as
+skipping "when the scene number has changed", which is the opposite, and then
+proposed adding the skip that is already three lines above the hash it wanted to
+avoid. **There is no change to put behind a config value here**, so step 3 has
+nothing to do and step 4 has nothing to A/B.
+
+I confirmed the hash really is on the cached path rather than the cache-miss path,
+by resolving the return address in the profile rather than trusting the earlier
+reading. The xxHash leaf's caller is a single address, `0x14ca36c`, and
+`llvm-addr2line` puts it at `cache.cpp:859`, which is the `else` branch above,
+the cached-texture hash. Line 843, the cache-miss hash, has no samples at all.
+
+### So why does it still cost 5.39%, at 404 samples per second
+
+Because the skip only holds within one scene, and the cost is not paid once per
+scene. From `tmp/perf/ticket03-perf/cc.txt`, 225024 sample blocks:
+
+| leaf | samples |
+| --- | --- |
+| `XXH_INLINE_XXH3_64bits_update` | 12127 |
+| `renderer::render_loop` | 977 |
+
+12127 samples over 30.0 s is **404 per second**, against 32.7 render-loop leaf
+samples per second. The hash is called far more often than once per frame, so
+`current_scene` must be changing repeatedly, or the same texture is being bound
+many times per scene under different `TextureCacheInfo` slots.
+
+Clustering the xxHash samples by timestamp does not show the signature the
+"once per scene" story predicts. There are only **4 gaps over 50 ms in the whole
+30 seconds**, so the hashing is near-continuous rather than arriving in bursts
+at scene boundaries:
+
+| | |
+| --- | --- |
+| xxHash samples | 12127 |
+| span | 30.0 s |
+| rate | 404.3 /s |
+| gaps > 50 ms | 4 |
+| samples per burst | median 1133, max 5754 |
+
+Five bursts across thirty seconds is not a per-scene pattern. Whatever drives it,
+`scene_timestamp` is not the thing limiting it, so **the existing skip is not the
+lever the ticket thought it was**, and no config value on top of it will help.
+
+**What would be worth measuring, and is not done here:** instrument the hash call
+with a counter for total calls, bytes hashed, and distinct scenes, and see
+whether the cost is many small textures or few large ones. That is a code change
+of its own and needs the 04 baseline to interpret, so it is recorded as the next
+step rather than guessed at.
+
+### Status of step 4
+
+**Not run, and not runnable as written.** The ticket's own gate is a change
+behind a config value, and the change it asks for exists. A/B/A on a no-op would
+produce a null result that looks like a measurement, which is worse than no
+measurement. The other step 4 input, the 30 FPS title, is still ticket 04's.
+
+Steps 1, 2 and the acceptance criteria are unchanged and still met. The
+xxHash row's verdict changes from "removable, behind a config value, needs A/B/A"
+to **not removable by that route**, with the real cause still open and the next
+measurement named above.
+
+## Comments- 2026-10-03, second pass: **the earlier answer proposed a change that already
+  existed.** It read `cache.cpp:851` as skipping the hash when the scene
+  *changed*; the condition is `last_hash_scene == current_scene`, so it skips
+  when the scene is *unchanged*. Having found no change worth making, this pass
+  resolved the return address instead of re-reading the source, and put the
+  xxHash leaf at `cache.cpp:859` by `llvm-addr2line`. The profile says the hash
+  runs 404 times a second with only 4 gaps over 50 ms in 30 s, which is not a
+  per-scene pattern at all. Correcting a prior answer by reading the condition
+  again would have found nothing; the sample timestamps are what showed the
+  first answer was wrong in a second way.
+- 2026-10-03: `tmp/cc.txt`, which the first pass's call-graph counts came from,
+  was not in the tree. It is regenerated from `tmp/perf/ticket03-perf/perf.data`
+  with the NDK host `simpleperf report-sample`. Note that the option is
+  `--symdir`, not the `--symfs` that `simpleperf record` on the device uses;
+  `--symfs` is rejected by `report-sample`, and the tree's own comment in
+  `device.sh` only covers the HTML path, so this is easy to get wrong twice.
