@@ -137,6 +137,27 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   `.signing/dev/` by itself, so an installed APK is always updatable without
   input. `VITA_SIGN_WITH_RELEASE_KEY=1` uses the release key. See
   `docs/release.md`.
+- **Run `bash tools/release/install-hooks.sh` once per clone.** It points
+  `core.hooksPath` at `tools/release/hooks/`, so `pre-commit` and `commit-msg`
+  run `check-no-signing-keys.sh` against the index and the message on every
+  commit. Do this before the first commit in a new clone or a new worktree. CI
+  runs the same check on every push, but a push is too late: the secret is
+  already on the remote and the history has to be rewritten. The local gate is
+  what stops it.
+- What the check refuses: a key store by name, anything under `.signing/` or
+  `.vita-plus-signing/`, a PEM private key, the **value** of any `SIGNING_*`
+  password from `.signing/release/signing.env` appearing in content or in a
+  commit message, and a secret assigned from a literal such as
+  `API_KEY=<value>`. It never prints a secret: a failure names the file and the
+  variable. Two things to know when reading it:
+  - Reading `.signing/release/signing.env` puts a password on screen. Print the
+    variable names only, and redact values, as the check does.
+  - A clone without `.signing/` has nothing to search for, so check 4 is skipped
+    and the rest still run. The gate does not block a keyless clone, which is
+    what keeps it from being switched off.
+- The certificate SHA-256 fingerprints in `docs/release.md` are public on
+  purpose: they are how a restored key is checked. They are not secrets, and
+  quoting one in a ticket or a commit message is fine.
 - Test the Python tools with `python3 tools/android/test_fps_sample.py` and
   `python3 tools/android/test_perf_summary.py`.
 - A container build cannot run the emulator with a GPU. Use a native macOS

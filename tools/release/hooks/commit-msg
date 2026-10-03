@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Stop a commit message that carries a signing key or a password.
+#
+# Enabled with `git config core.hooksPath tools/release/hooks`, which
+# tools/release/install-hooks.sh does. git passes the path of the message file.
+#
+# --no-verify skips this hook. That is the point at which a person has decided to
+# override the check, and CI still runs the same check on the push.
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+bash "$repo_root/tools/release/check-no-signing-keys.sh" --message "$1"
