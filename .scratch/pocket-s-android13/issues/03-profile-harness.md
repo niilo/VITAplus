@@ -260,6 +260,11 @@ The release APK **was** built, in the main checkout, after this ticket merged:
 attribute is present in that APK's manifest. So the APK that `perf` was waiting
 for now exists.
 
+**This alone is not enough, and the next section explains why.** Building the
+APK was necessary but not sufficient: the APK has to reach the device as well,
+and the one that is installed there is signed with a different key and has no
+`profileable` tag.
+
 Still to do, both needing the game in play on an unlocked device:
 
 - `device.sh perf <package> <label>` against that APK, to confirm `perf.data`
@@ -271,6 +276,90 @@ Still to do, both needing the game in play on an unlocked device:
 
 Both need the game reachable, so they are the human half of this ticket. The
 ticket stays `claimed`.
+
+### The device half was run on 2026-10-03, and both items have a blocker
+
+The device (AYANEO Pocket S, Android 13, `00314BHD01004402`) was unlocked and on
+AC power at 75 percent, thermal status 0. Uncharted: Golden Abyss (PCSA00029) was
+walked into the waterfall chapter with Turnip 26.3.0 and the camera moved. The
+run is in `tmp/latency-run/`.
+
+**`device.sh latency` finds the layer and gets no frames out of it.** It picked
+`991c8a0 org.vita3k.emulator/org.vita3k.emulator.Emulator#32708`, which is a real
+layer, and wrote the correct header. After 60 seconds the CSV held the header and
+nothing else. `dumpsys SurfaceFlinger --latency <layer>` returns only the refresh
+period `16666666` and no frame rows, for that layer and for the
+`SurfaceView[...](BLAST)` layer the app actually draws into. `--latency-clear`
+followed by `--latency` changes nothing.
+
+So this item cannot be closed as written: the interface `device.sh latency` uses
+carries no frame data for this app on Android 13. The frame timing it was after
+is already in `presents.csv` from `perf-log`, which records every host present
+with a timestamp, and `perf_report.py` reports it. The SurfaceFlinger columns are
+redundant with that, so the fix is to drop them rather than to find another
+dumpsys flag.
+
+**`device.sh perf` is blocked by the signing key, not by the build.** The APK
+installed as `org.vita3k.emulator` does **not** have the `profileable` tag, so
+`simpleperf record --app` cannot run against it. A new APK is needed, and it
+cannot go over the installed one:
+
+| APK | certificate SHA-256 | profileable |
+| --- | --- | --- |
+| installed `org.vita3k.emulator` | `04c7cfc6...38522a`, the release key | no |
+| `build/android-apk/app-release.apk` | `c6520e3f...155b8` | yes |
+
+`docs/release.md` lists the release digest as `04c7cfc6...` and the dev digest as
+`85028da2...`, so the built APK carries a third certificate. The cause is
+`android/app/build.gradle:78`: the `release` build type falls back to
+`signingConfigs.debug` when `hasCiSigning` is false, so a plain
+`container/vita3k-docker.sh android release` signs with the Gradle debug key
+rather than with `.signing/dev/`.
+
+`adb install -r` would fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. The two
+ways through both have a cost, and this is a decision for the user, not for an
+agent:
+
+1. Rebuild with `VITA_SIGN_WITH_RELEASE_KEY=1`. The digest then matches the
+   installed app, `adb install -r` updates it in place, and app data survives, so
+   the Turnip pack and the config are untouched. `container/build-android.sh`
+   sources `.signing/release/signing.env` itself, so no password reaches a
+   command line.
+2. Uninstall and install the built APK. That destroys the Turnip driver pack,
+   which lives in the app's own files directory and is not on the SD card, and
+   the pack has to go back through the app's installer by hand. This is the
+   procedure ticket 01 already paid for.
+
+Option 1 is the one that keeps the device as it is. Nothing was uninstalled on
+2026-10-03 and all 21 titles and the driver pack are still in place.
+
+`ANDROID_NDK_HOME` is unset on this host, so `device.sh perf` would pull
+`perf.data` and the symbols but build no HTML report. The NDK is inside the
+Android container image, not on the host.
+
+### The report tool was confirmed on this run
+
+`perf_report.py` over `tmp/latency-run/scene/` with `--target 30 --warmup 120`:
+
+| line | value |
+| --- | --- |
+| driver | Turnip-v26.3.0-20261002-r5 |
+| average FPS | 29.86 |
+| frame interval p99 | 47.85 ms |
+| frame interval max | 78.36 ms |
+| late frames (over 50.0 ms) | 18 of 2389 (0.75%) |
+| presents per second | 29.88 |
+| SurfaceFlinger interval p99 | no latency.csv |
+
+No watchdog fired in that session and `scene.png` is the waterfall chapter, not a
+menu. **This is not a baseline.** There is no power CSV, so `run_is_valid.sh`
+has nothing to check criterion 6 against, and no A/B/A/B/A set was run. It is
+quoted only because it exercises every column of the report on real files.
+
+Note the p99 of 47.85 ms against the 50 ms limit of criterion 2. The plan's
+retarget calls the earlier 43.43 ms reading a playability defect, and this run is
+close to the same figure, so the steadiness question in `../spec.md` is still
+open.
 
 ## Comments
 

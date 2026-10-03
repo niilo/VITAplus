@@ -440,6 +440,21 @@ cmd_latency() {
         (( i + 1 < seconds )) && sleep 1
     done
     echo "wrote $out_file (layer: $layer)"
+
+    # SurfaceFlinger answers with the refresh period and no frame rows on Android
+    # 13 for this app, measured on the Pocket S on 2026-10-03. It does the same for
+    # the SurfaceView(BLAST) layer the app draws into, and after --latency-clear,
+    # so the interface carries no frame timing here. Say so rather than leave a
+    # header-only CSV that reads like a run of zero-length frames.
+    #
+    # The frame timing is in presents.csv from perf-log, which timestamps every
+    # host present, and perf_report.py reports it from there.
+    local rows
+    rows="$(grep -c . "$out_file" 2>/dev/null || echo 0)"
+    if (( rows <= 1 )); then
+        echo "no frame rows from SurfaceFlinger for this layer on this Android version."
+        echo "Use presents.csv from perf-log instead: device.sh pull-perf, then perf_report.py."
+    fi
 }
 
 cmd_screenshot() {
