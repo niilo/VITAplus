@@ -66,6 +66,16 @@ fi
 # is in the cache volume, so a clean build reuses earlier compiles.
 export CCACHE_BASEDIR=/src
 
+# The build version is computed by tools/release/version-info.sh at CMake
+# configure time and written into a generated vita3k/config/version.cpp.
+# Gradle reuses the configure it already did in android/app/.cxx, so a build
+# after a new commit keeps the version of the first build and its version.cpp
+# is never regenerated. The APK then reports the wrong commit, which makes two
+# different builds indistinguishable on a device. Deleting the CMake cache
+# forces the configure step to run again. It costs one configure and no
+# recompile, because ccache still serves every object.
+find android/app/.cxx -name CMakeCache.txt -delete
+
 # Same asset staging as .ci/build-android.sh.
 mkdir -p android/app/assets
 rm -rf android/app/assets/data android/app/assets/shaders-builtin
