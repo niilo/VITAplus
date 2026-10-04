@@ -75,13 +75,14 @@ blocked in `sceAudioOutOutput`, NID `0x02DB3F5F`, in 60 hang dumps between
 `vita3k/modules/SceAudio/SceAudio.cpp:191` and blocks in
 `AudioState::audio_output` at `vita3k/audio/src/audio.cpp:101`, whose wait is
 a sleep in `std::this_thread::sleep_for` at `audio.cpp:120`. That is pacing,
-not a deadlock, but the game never gets samples back.
-
-**`sceNgsSystemUpdate` is called twice in the entire session.** That is the
-NGS mixer. Two calls cannot produce audio, and it is the thing to check
-first. The hang dumps stop at 00:27:44 while the session continues to
+not a deadlock. The hang dumps stop at 00:27:44 while the session continues to
 00:34:40, so they are an early-startup artefact and not evidence of a later
 hang.
+
+**Do not read "sceNgsSystemUpdate is called twice" from this session.** That
+count was wrong: both matches are `STALE HOST POINTER` lines that mention the
+import name in passing. The second session section replaces this with what the
+longer run shows, which is that the channel count is what the game asserts on.
 
 ## The game asserts about channel count, and it is the game's own
 
@@ -109,8 +110,109 @@ is not the reason for the missing audio either.
 - The perf CSVs on the device are stale. `frames.csv` holds 219 rows over
   6.7 s for `PCSA00029`, which is Uncharted, not Jak and Daxter. The
   computed 32.77 FPS is Uncharted and must not be quoted for this title.
-- `sceNgsSystemUpdate` being called twice is the finding to chase. Whether
-  that is the game stopping its own audio thread, or the emulator not
-  scheduling it, is not yet known.
+- `sceNgsSystemUpdate` being called twice was a miscount, see the second
+  session below. Do not repeat that claim.
 - No FPS figure for Jak and Daxter was measured. The 18 to 20 is the user's
   observation and is not in any log.
+
+## Second session, same build, longer play
+
+`tmp/play-jak2/vita3k.log`, 918 MB, 6647516 lines, 00:37:02 to 00:49:33.
+Still `dev.8`, PID 20915, still running at the end of the log. **No crash in
+12 and a half minutes.**
+
+The log rotated, so line 1 starts the session and the whole file is one
+session. The earlier "sceNgsSystemUpdate called twice" was a miscount: both
+matches were `STALE HOST POINTER` lines that mention the import name, not
+calls to it. `sceNgsVoicePlay` is called 2425 times and
+`sceNgsPatchCreateRouting` 66 times, so NGS is in use.
+
+### The host audio device is working, so the silence is upstream
+
+`dumpsys media.audio_flinger` while the game was running:
+
+```
+Index Active Full Partial Empty  Written
+0     yes  363    0       97        361238400
+```
+
+361 MB written to track 0, and it is active. **SDL is opening an audio stream
+and pushing frames to the device.** The emulator side is not the break, which
+moves the question up into NGS: the mixer is not producing samples for the
+game to pull.
+
+One mismatch is visible. The active stream reports `44100`, the mixer's own
+rate is `48000`, and the NGS resampler log shows `44061 -> 48000 Hz`. Three
+rates in one path.
+
+### The resampler is rebuilt 1821 times, each with a different source rate
+
+```
+13866 -> 48000 Hz
+13872 -> 48000 Hz
+13879 -> 48000 Hz
+```
+
+The source rate climbs about 6 Hz each time. That is a rate computed from
+something that drifts, and a new resampler is built for it each time instead
+of reusing one. 1821 creations between 00:37:38 and 00:39:14, a startup burst
+rather than a per-frame cost. Wasted work, and a sign the rate is wrong, but
+not why the game is silent: the rate never settles on the value asked for.
+
+### The game asserts the channel count 2.7 million times
+
+```
+1446977  Assertion failed: patchRouteInfo.nOutputChannels == 2
+1248906  Assertion failed: false
+```
+
+All 26 guest breakpoints are on `audio_out_thread`, and the last import before
+them is `sceKernelUnlockLwMutex2`. The game's audio thread is failing an
+assertion in a loop. **This is the audio problem**: the game believes its
+routing has the wrong channel count and refuses to play.
+
+**This is not caused by the guards added in this series.** The first assertion
+here is at 00:39:28.366 and our first `sceNgsPatchGetInfo` error return is at
+00:39:28.367, a millisecond later. In the earlier session the first assertion
+is at 23:58:56, before `dev.8` was installed at 00:03, so it predates the
+guards entirely.
+
+The `dest->rack ? dest->rack->channels_per_voice : 0` fallback added in
+`8fc6c007` does return 0 where the game asserts 2. That is wrong and needs
+fixing, but it is not what starts this.
+
+### 15 pipelines fail with ErrorOutOfHostMemory, and that is the vanishing
+
+```
+Failed to create pipeline #0 (9 succeeded so far): ErrorOutOfHostMemory
+...
+Failed to create pipeline #14
+```
+
+Between 00:39:28 and 00:47:58, most of the session and not only at startup.
+**A pipeline that fails to create is a draw that cannot run, which is exactly
+"elements vanishing unexpectedly."** This is the strongest candidate for that
+symptom.
+
+`OutOfHostMemory` while the device has 4.5 GB free and the app sits at 1.1 GB
+RSS means it is not a system-wide shortage. Either a Vulkan host allocation is
+failing against a limit, or fragmentation from the 2560x1440 swapchain with 4
+images. Tickets 27 and 28 own parts of this.
+
+### The SPIR-V rejection is separate and smaller than it looked
+
+35 `SPIR-V parsing FAILED` and 43 `spirv_to_nir failed`, all
+`OpBitcast must have the same total number of bits`. Fewer than in the first
+session and all early. A real translator bug, but it does not explain the
+vanishing elements on its own: a rejected shader yields a failed pipeline, not
+a silently missing draw.
+
+## What to do next, in order
+
+1. **Channel count.** `nOutputChannels` is asserted 1.4 million times on the
+   audio thread. Find what the game expects and return that. This is the audio
+   fix.
+2. **Pipeline `ErrorOutOfHostMemory`.** 15 draws skipped over 8 minutes. This
+   is the vanishing-elements fix. Start with swapchain size and memory limits.
+3. **Resampler rate.** 1821 constructions with a drifting source rate.
+4. **SPIR-V OpBitcast.** Real, but lower priority than the two above.
