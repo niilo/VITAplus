@@ -232,6 +232,23 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
     // make a copy of the queue, this way we have no issue if it is modified in a callback
     std::vector<ngs::Voice *> queue_copy = queue;
 
+    // A voice can point at a released rack. sceNgsRackRelease destroys the
+    // voices and then the rack, and the path with no callback calls
+    // release_rack directly rather than waiting for the update to finish, so a
+    // voice copied out of the queue here can name a destroyed rack. Reading
+    // through such a voice faults at the offset of the member it reaches, which
+    // is what PCSA00080 hit in sceNgsSystemUpdate. Drop those voices once, before
+    // any loop below reads through a voice.
+    queue_copy.erase(std::remove_if(queue_copy.begin(), queue_copy.end(),
+                         [this](ngs::Voice *voice) {
+                             if (voice && voice->rack && voice->rack->vdef)
+                                 return false;
+                             if (voice)
+                                 deque_voice(voice);
+                             return true;
+                         }),
+        queue_copy.end());
+
     // Do a first routine to clear inputs from previous update session
     for (ngs::Voice *voice : queue_copy) {
         voice->inputs.reset_inputs();
