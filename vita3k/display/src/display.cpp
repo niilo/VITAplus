@@ -44,6 +44,7 @@
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <renderer/state.h>
+#include <util/hotpath.h>
 #include <util/perf_log.h>
 #include <util/thread_priority.h>
 
@@ -126,6 +127,11 @@ static void freeze_watchdog_thread(EmuEnvState &emuenv) {
         prev = now;
     }
 }
+
+// The hot-path counters dump once per this many vblanks, which is about one
+// second at 60Hz. It matches the perf log's own one-second flush, so a counter
+// row is never written after the interval it belongs to has been flushed.
+static constexpr uint64_t kHotpathDumpTicks = 60;
 
 static void vblank_sync_thread(EmuEnvState &emuenv) {
     util::set_thread_name("vita3k-vblank");
@@ -444,6 +450,11 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             const auto error_us = std::chrono::duration_cast<std::chrono::microseconds>(woke - deadline).count();
             perf_log::write("vblank", "steady_us,wake_error_us", fmt::format("{},{}", perf_log::now_us(), error_us));
         }
+
+        // One dump per vblank is one row set per frame, which is far more rows
+        // than a reading needs. Only the interval boundary writes.
+        if (hotpath::enabled() && (tick % kHotpathDumpTicks) == 0)
+            hotpath::dump_interval();
     }
 
     watchdog.join();

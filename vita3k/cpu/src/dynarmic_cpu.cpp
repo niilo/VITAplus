@@ -23,6 +23,7 @@
 #include <cpu/functions.h>
 #include <mem/functions.h>
 #include <mem/ptr.h>
+#include <util/hotpath.h>
 
 #include <dynarmic/frontend/A32/a32_ir_emitter.h>
 #include <dynarmic/interface/A32/coprocessor.h>
@@ -371,6 +372,9 @@ public:
     }
 
     void PreCodeTranslationHook(bool is_thumb, Dynarmic::A32::VAddr pc, Dynarmic::A32::IREmitter &ir) override {
+        // Translation time, not execution time: this runs once per instruction
+        // compiled and stops once the block exists.
+        hotpath::count_translated_instruction();
         if (!is_thumb) {
             if (const MonoLoaderOp op = classify_mono_loader_lock(pc); op != MonoLoaderOp::None) {
                 static std::once_flag announced;
@@ -391,6 +395,7 @@ public:
         if (addr >= parent->mem->host_page_size && is_valid_addr_synced(*parent->mem, static_cast<Address>(addr))) {
             static std::atomic<uint32_t> transient_count{ 0 };
             const uint32_t n = transient_count.fetch_add(1, std::memory_order_relaxed);
+            hotpath::count_invalid_access_recovery();
             if (n < 16)
                 LOG_CRITICAL("TRANSIENT invalid {} at 0x{:X} recovered (PC 0x{:X}, thread {}) — lock-free validity race caught in the act",
                     what, addr, this->cpu->get_pc(), parent->thread_id);
@@ -429,6 +434,10 @@ public:
 
     template <typename T>
     T MemoryRead(Dynarmic::A32::VAddr addr) {
+        // Only a page-table run pays for this: with fastmem the JIT resolves the
+        // address itself and never calls back here.
+        if (parent->mem->use_page_table)
+            hotpath::count_page_table_read();
         Ptr<T> ptr{ addr };
         if (!ptr || !ptr.valid(*parent->mem) || ptr.address() < parent->mem->host_page_size) {
             if (!confirm_invalid_access(addr, "read"))
@@ -476,6 +485,8 @@ public:
 
     template <typename T>
     void MemoryWrite(Dynarmic::A32::VAddr addr, T value) {
+        if (parent->mem->use_page_table)
+            hotpath::count_page_table_write();
         Ptr<T> ptr{ addr };
         if (!ptr || !ptr.valid(*parent->mem) || ptr.address() < parent->mem->host_page_size) {
             if (!confirm_invalid_access(addr, "write")) {
@@ -864,6 +875,7 @@ std::size_t DynarmicCPU::processor_id() const {
 }
 
 void DynarmicCPU::invalidate_jit_cache(Address start, size_t length) {
+    hotpath::count_cache_invalidation(length);
     jit->InvalidateCacheRange(start, length);
 }
 
