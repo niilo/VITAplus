@@ -204,10 +204,10 @@ EXPORT(int, sceNgsPatchCreateRouting, SceNgsPatchSetupInfo *patch_info, Ptr<ngs:
     // Make the scheduler order this right based on dependencies request
     ngs::Voice *source = patch_info->source.get(emuenv.mem);
 
-    if (!source)
+    if (!source || !source->system())
         return RET_ERROR(SCE_NGS_ERROR);
 
-    *handle = source->rack->system->voice_scheduler.patch(emuenv.mem, patch_info);
+    *handle = source->system()->voice_scheduler.patch(emuenv.mem, patch_info);
 
     if (!*handle) {
         return RET_ERROR(SCE_NGS_ERROR);
@@ -703,8 +703,8 @@ EXPORT(SceInt32, sceNgsVoiceGetInfo, ngs::Voice *voice, SceNgsVoiceInfo *info) {
     }
     info->num_modules = static_cast<SceUInt32>(voice->datas.size());
     info->num_inputs = static_cast<SceUInt32>(voice->inputs.inputs.size());
-    info->num_outputs = voice->rack->vdef->output_count;
-    info->num_patches_per_output = static_cast<SceUInt32>(voice->rack->patches_per_output);
+    info->num_outputs = voice->rack && voice->rack->vdef ? voice->rack->vdef->output_count : 0;
+    info->num_patches_per_output = voice->rack ? static_cast<SceUInt32>(voice->rack->patches_per_output) : 0;
     info->update_passed = voice->frame_count;
 
     return SCE_NGS_OK;
@@ -738,6 +738,8 @@ EXPORT(int, sceNgsVoiceGetModuleType, ngs::Voice *voice, const SceUInt32 module,
 
     if (!voice || !module_type)
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    if (!voice->rack)
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     if (module >= voice->rack->modules.size())
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     *module_type = voice->rack->modules[module]->module_id();
@@ -757,6 +759,9 @@ EXPORT(SceInt32, sceNgsVoiceGetOutputPatch, ngs::Voice *voice, const SceInt32 ou
     if ((output_subindex < 0) || (output_index < 0)) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
+
+    if (!voice->rack || !voice->rack->vdef)
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
 
     if ((output_index >= static_cast<SceInt32>(voice->rack->vdef->output_count)) || (output_subindex >= voice->rack->patches_per_output)) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
@@ -855,7 +860,7 @@ EXPORT(SceInt32, sceNgsVoiceInit, ngs::Voice *voice, const SceNgsVoicePreset *pr
     if (init_flags & SCE_NGS_VOICE_INIT_PRESET) {
         if (!preset) {
             STUBBED("Default preset not implemented");
-            for (size_t i = 0; i < voice->rack->modules.size(); i++) {
+            for (size_t i = 0; voice->rack && i < voice->rack->modules.size(); i++) {
                 if (voice->rack->modules[i])
                     voice->rack->modules[i]->set_default_preset(emuenv.mem, voice->datas[i]);
             }
@@ -883,10 +888,13 @@ EXPORT(SceInt32, sceNgsVoiceKeyOff, ngs::Voice *voice) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
+    if (!voice->system())
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+
     voice->is_keyed_off = true;
-    voice->rack->system->voice_scheduler.off(emuenv.mem, voice);
+    voice->system()->voice_scheduler.off(emuenv.mem, voice);
     voice->is_keyed_off = false;
-    voice->rack->system->voice_scheduler.stop(emuenv.mem, voice);
+    voice->system()->voice_scheduler.stop(emuenv.mem, voice);
 
     // call the finish callback, I got no idea what the module id should be in this case
     voice->invoke_callback(emuenv.kernel, emuenv.mem, thread_id, voice->finished_callback, voice->finished_callback_user_data, 0);
@@ -903,7 +911,10 @@ EXPORT(int, sceNgsVoiceKill, ngs::Voice *voice) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
-    voice->rack->system->voice_scheduler.stop(emuenv.mem, voice);
+    if (!voice->system())
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+
+    voice->system()->voice_scheduler.stop(emuenv.mem, voice);
 
     return 0;
 }
@@ -1007,7 +1018,10 @@ EXPORT(int, sceNgsVoicePause, ngs::Voice *voice) {
         return SCE_NGS_OK;
     }
 
-    if (!voice->rack->system->voice_scheduler.pause(emuenv.mem, voice)) {
+    if (!voice->system())
+        return RET_ERROR(SCE_NGS_ERROR);
+
+    if (!voice->system()->voice_scheduler.pause(emuenv.mem, voice)) {
         return RET_ERROR(SCE_NGS_ERROR);
     }
 
@@ -1024,8 +1038,11 @@ EXPORT(SceUInt32, sceNgsVoicePlay, ngs::Voice *voice) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
+    if (!voice->system())
+        return RET_ERROR(SCE_NGS_ERROR);
+
     voice->is_pending = true;
-    if (!voice->rack->system->voice_scheduler.play(emuenv.mem, voice)) {
+    if (!voice->system()->voice_scheduler.play(emuenv.mem, voice)) {
         // A refused play left is_pending set forever, so GetInfo could never report this voice AVAILABLE again.
         voice->is_pending = false;
         return RET_ERROR(SCE_NGS_ERROR);
@@ -1053,7 +1070,10 @@ EXPORT(int, sceNgsVoiceResume, ngs::Voice *voice) {
         return SCE_NGS_OK;
     }
 
-    if (!voice->rack->system->voice_scheduler.resume(emuenv.mem, voice)) {
+    if (!voice->system())
+        return RET_ERROR(SCE_NGS_ERROR);
+
+    if (!voice->system()->voice_scheduler.resume(emuenv.mem, voice)) {
         return RET_ERROR(SCE_NGS_ERROR);
     }
 
