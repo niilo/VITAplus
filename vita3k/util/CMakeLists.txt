@@ -7,6 +7,7 @@ add_library(
 	src/float_to_half.cpp
 	src/fs_utils.cpp
 	src/hash.cpp
+	src/hotpath.cpp
 	src/instrset_detect.cpp
 	src/logging.cpp
 	src/mem_snapshot.cpp
@@ -29,7 +30,7 @@ file(WRITE "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h.tmp"
 	"#pragma once\n#define FORK_BUILD_SEQ 0\n#define FORK_BUILD_CHANGES \"niilo/Vita3K build\"\n")
 file(COPY_FILE "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h.tmp" "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h" ONLY_IF_DIFFERENT)
 target_include_directories(util PRIVATE "${VITA3K_FORK_BUILD_DIR}")
-target_link_libraries(util PUBLIC ${Boost_LIBRARIES} fmt spdlog http mem)
+target_link_libraries(util PUBLIC ${Boost_LIBRARIES} fmt spdlog http mem nids)
 target_link_libraries(util PRIVATE libcurl crypto SDL3::SDL3)
 if(ANDROID)
 	target_link_libraries(util PUBLIC emuenv android xxHash::xxhash)

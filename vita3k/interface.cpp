@@ -41,6 +41,7 @@
 
 #include <modules/module_parent.h>
 #include <string>
+#include <util/hotpath.h>
 #include <util/log.h>
 #include <util/perf_log.h>
 #include <util/string_utils.h>
@@ -533,6 +534,11 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
         perf_log::start(emuenv.log_path / "perf");
     else
         perf_log::stop();
+
+    // Counters go here so a session never carries the previous game's totals.
+    // They need perf-log for the files, so they stay off without it.
+    hotpath::set_enabled(emuenv.cfg.hle_counters && emuenv.cfg.perf_log, emuenv.cfg.hle_counters_time);
+    hotpath::reset();
 
     if (process_param) {
         auto preload_disabled_ptr = Ptr<SceUInt32>(process_param->process_preload_disabled);

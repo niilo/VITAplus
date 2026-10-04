@@ -394,6 +394,10 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths)
         ->group("Logging");
     config->add_flag("--log-uniforms,-U", command_line.log_uniforms, "Log Uniforms")
         ->group("Logging");
+    config->add_flag("--hle-counters", command_line.hle_counters, "Count HLE import calls per NID into the perf log. Needs perf-log.")
+        ->group("Logging");
+    config->add_flag("--hle-counters-time", command_line.hle_counters_time, "Also record HLE self-time per NID. Needs hle-counters. Adds a clock read per call.")
+        ->group("Logging");
     // clang-format on
 
     // Parse the inputs
@@ -475,6 +479,8 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths)
         LOG_INFO("log-level: {}", LIST_LOG_LEVEL[cfg.log_level]);
         LOG_INFO_IF(cfg.log_active_shaders, "log-active-shaders: enabled");
         LOG_INFO_IF(cfg.log_uniforms, "log-uniforms: enabled");
+        LOG_INFO_IF(cfg.hle_counters, "hle-counters: enabled (self-time {})",
+            cfg.hle_counters_time ? "on" : "off");
     }
     // Save any changes made in command-line arguments
     if (cfg.overwrite_config || !fs::exists(check_path(cfg.config_path))) {
