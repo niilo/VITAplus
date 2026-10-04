@@ -105,6 +105,9 @@ EXPORT(int, sceNgsAT9GetSectionDetails, uint32_t samples_start, const uint32_t n
     if (!info)
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
 
+    if (!Ptr<SceNgsAT9SkipBufferInfo>(info, emuenv.mem).valid(emuenv.mem))
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+
     // Check magic!
     if ((config_data & 0xFF) != 0xFE)
         return RET_ERROR(SCE_NGS_ERROR);
@@ -691,6 +694,12 @@ EXPORT(SceInt32, sceNgsVoiceGetInfo, ngs::Voice *voice, SceNgsVoiceInfo *info) {
         return SCE_NGS_OK;
 
     if (!voice || !info) {
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    }
+
+    // The guest owns this pointer. Validating it here follows the fix for
+    // sceNgsPatchGetInfo, where an uninitialised stack address reached a write.
+    if (!Ptr<SceNgsVoiceInfo>(info, emuenv.mem).valid(emuenv.mem)) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
