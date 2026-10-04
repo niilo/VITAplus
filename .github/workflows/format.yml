@@ -1,22 +1,28 @@
 name: Format Check
 
+# This runs on every push and every pull request, with no path filter.
+#
+# It used to filter on paths, so a commit that touched only documentation or
+# .scratch did not run it. That is fine on its own, but branch protection on
+# master requires these two checks, and a required check that never reports
+# holds a merge open forever. A docs-only commit would have been stuck.
+#
+# The jobs use a sparse checkout of one directory each, so the cost is the same
+# two clang-format passes as before. The filter only saved the runner startup,
+# and correctness of the merge gate is worth that.
 on:
   push:
-    paths:
-      - .clang-format
-      - vita3k/**
-      - tools/**
-
   pull_request:
-    paths:
-      - .clang-format
-      - vita3k/**
-      - tools/**
 
 jobs:
   format-check:
     name: Format Check (${{ matrix.path }})
     runs-on: ubuntu-latest
+
+    # Branch protection requires this check, so a job that hangs would hold a
+    # merge open until someone noticed. Ten minutes is far more than two
+    # clang-format passes need.
+    timeout-minutes: 10
 
     strategy:
       fail-fast: false

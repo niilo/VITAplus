@@ -13,6 +13,12 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+
+    # Branch protection on master requires this check, so a job that hangs would
+    # hold a merge open until someone noticed. The job only reads git history, so
+    # five minutes is generous.
+    timeout-minutes: 5
+
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - run: bash tools/release/check-no-signing-keys.sh
