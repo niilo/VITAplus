@@ -41,6 +41,40 @@ path that is already a callback.
 
 Build, ctest and the format check are clean.
 
+### Measured on the device
+
+Same run as ticket 01: Pocket S, release APK of this branch, `PCSA00080`, page
+table mapping, counters on. Rates are per one-second interval.
+
+| counter | per second |
+| --- | --- |
+| `page_table_reads` | 28,600 |
+| `translated_instructions` | 9,809 |
+| `page_table_writes` | 1,950 |
+| `cache_invalidations` | 0.2 |
+| `cache_invalidation_bytes` | 2 |
+
+Three of these answer the questions the steps were aimed at:
+
+- **The page table is missing constantly.** 28,600 read callbacks per second
+  against 9,809 translated instructions per second. Every one of those is a
+  fast-path miss: the JIT had a cached translation and still had to call out to
+  the host to resolve the address. This is the number ticket 10 on memory
+  mapping modes wanted, and it is not a small tail. Read it as misses *per
+  translated instruction*, roughly 2.9, not as a percentage of total accesses,
+  because the denominator here is translation work rather than all guest memory
+  traffic.
+- **Translation is still happening.** About 9,809 instructions per second reach
+  the translator, so blocks are not fully resident; some code is being recompiled
+  during play rather than only at load.
+- **Cache invalidation is a non-issue here.** One invalidation in five seconds,
+  of 12 bytes. Ticket 14 found the 128 MiB code cache only 4.6% touched, and this
+  agrees: pressure is not what is limiting this game.
+
+`invalid_access_recoveries` never appeared, which is the designed behaviour: a
+zero counter is left out rather than written as 0. So the transient-recovery
+path is not taken here, and that distinction stays log-only in practice.
+
 ## Goal
 
 Four counters on branches that already exist. Each one measures whether a fast

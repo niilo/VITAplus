@@ -44,11 +44,79 @@ game's totals.
   `DumpResetsSoIntervalsAreDeltas`. The collision test finds a colliding pair
   rather than relying on luck.
 - `./format.sh` is clean.
-- **Overhead is not measured.** That needs a device, which this run does not
-  have. It is the one acceptance item still open, and it belongs with a
-  gameplay run rather than here.
-
 12 new tests, all passing. Build, ctest and the format check are clean.
+
+### Measured on the device
+
+Pocket S, Android 13, release APK of this branch, `PCSA00080` (Jak and Daxter
+Collection) with page-table memory mapping. `perf-log` on for every run, because
+the counters need it; `hle-counters` is the only thing that differs.
+
+| run | `hle-counters` | app CPU (`top`, % of one core) | FPS | frame p99 |
+| --- | --- | --- | --- | --- |
+| baseline | off | 124, 128, 125, 132, 128 (mean 127.4) | 30.00 | 34.49 ms |
+| counters | on | 125, 128, 128, 125, 132, 128 (mean 127.7) | 30.00 | 34.96 ms |
+| counters + self-time | on | 125, 129, 125, 132 (mean 127.8) | 30.00 | 34.96 ms |
+
+The cost is inside the noise: about 0.3% of one core for the counts alone, and
+self-time does not separate from that either at this resolution. The game holds
+its 30 FPS cap in all three, so nothing regressed. These are single runs at
+about one sample per two seconds, so this says the overhead is *small*, not
+that it is exactly zero.
+
+What the counters say about Jak and Daxter, per second:
+
+- `sceGxmWaitEvent` 2.15 M calls, 190 ms, 88 ns per call. This is the real CPU
+  hot path in HLE, and it is worth looking at first.
+- `sceGxmWaitEvent` is called 500 times more often than anything else in the
+  list. Nothing else is close.
+- Mutex traffic is modest: `sceKernelLockLwMutex` 2924 calls and
+  `sceKernelUnlockLwMutex2` 3017 calls per second, 4.3 and 2.0 us per call.
+- `sceKernelGetThreadId` 6553 calls per second, which is the kind of call that
+  wants a cached answer.
+- `sceClibMemset`, `sceClibMemcmp` and `sceClibMemcpy` together are 1475 calls
+  per second, all in the low microseconds.
+
+The large `ms/sec` numbers belong to `sceKernelWaitLwCond`, `sceAudioOutOutput`,
+`sceKernelDelayThread` and the two display functions, at 880 to 2190 ms per
+second. **Those are guest threads blocking, not emulator CPU.** They wait on a
+frame or a queue, and the guest has three cores of work with a 30 FPS cap, so
+most of that wall time is idle waiting. Reading them as cost would point the
+optimisation at the wrong code. `sceGxmWaitEvent` is the only high-frequency
+entry where the duration is real work.
+
+### Getting the device to run a game
+
+Four things had to be fixed before any game would boot. None of them are about
+this ticket, and all four cost most of the time spent here.
+
+1. **A fresh APK install resets `pref-path`.** The app writes a config pointing
+   at its own `files/vita`, which is empty, so every title reports
+   `not found in apps list`. Restore the real path after installing.
+2. **`perf-log` set in `config.yml` is ignored.** `read_config_object` in
+   `vita3k/android/jni/native_config.cpp:566` overwrites `perf_log` from the
+   Kotlin settings object on every load, so the YAML value never reaches
+   `perf_log::start`. The symptom is silent: `hle-counters` reports "enabled" in
+   the log, no `Performance log is on` line appears, and no `perf/` folder is
+   created. **This is pre-existing**, from `be25c7c1`, and it affects any YAML
+   setting that `read_config_object` touches, not just this one. Driving the
+   toggle through the app's settings UI is the only path that persists today.
+   `hle-counters` and `hle-counters-time` are unaffected, because they have no
+   JNI field to be overwritten from.
+3. **The installed games are unreadable.** The tree under
+   `/storage/4CDE-C1FC/emu-app-data/psvita` is `0770` and owned by `media_rw`,
+   so the app (uid 10205) cannot read it, and there is no root on the device to
+   fix that with. Copy the game out instead.
+4. **A copy made by `adb shell` is owned by `shell`**, which the app also cannot
+   read, so a plain `cp` fails the same way. `chmod -R 777` the copy, and put it
+   under `<root>/ux0/app/<title_id>/` plus `<root>/ux0/license/<title_id>/`. The
+   license directory holds the `.rif` file; without it module loading fails with
+   `Failed to decrypt`, which is a different error from the `Failed to read`
+   that a permissions problem gives, and the two are easy to confuse.
+
+Also: the screen dozes, and a black screenshot looks like a hang. `input keyevent
+KEYCODE_WAKEUP`, then `wm dismiss-keyguard`. A `mCurrentFocus` of
+`NotificationShade` means the lock screen still has focus.
 
 ## Goal
 
