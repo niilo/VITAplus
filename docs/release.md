@@ -269,10 +269,62 @@ user has to uninstall the old app once, because the signature is different. A
 self-signed key cannot be revoked, so delete the old releases that are signed
 with it.
 
-The APKs that you build in the container (`container/vita3k.sh android release`)
-are signed with the debug key of the container. A CI APK cannot update them.
-Uninstall once when you change from one to the other. The games and saves stay,
-because they are in the `pref-path` folder.
+## Two Android apps: release and development
+
+A device can hold two apps from this project at the same time. They are separate
+apps, each with its own application ID, its own signing key and its own name.
+
+| | release | development |
+| --- | --- | --- |
+| Built by | CI, on a pushed tag | anyone, at any time |
+| Build type | `release` | `reldebug` or `debug` |
+| Application ID | `org.vita3k.emulator` | `org.vita3k.emulator.debug` |
+| Launcher name | `VITA+` | `VITAdev` |
+| Signing key | the release key | the debug key |
+| Command | `container/vita3k.sh android release` | `container/vita3k.sh android` |
+
+Within one row the builds replace each other. Android matches an install on the
+application ID, so a new release APK replaces the release app already on the
+device, and a new development APK replaces the development app. Each row also
+keeps its own data: the `pref-path` folder, the games and the saves of the other
+app are untouched by an update.
+
+Across rows nothing is shared. The IDs differ, so the two install side by side,
+and the keys differ, so neither can replace the other even if the IDs matched.
+
+A release build fails when no release key is passed in, rather than falling back
+to the debug key. A debug-key release APK cannot be installed over a CI release
+app, so it appears as a second app and can never become the release app on that
+device. Failing at build time is clearer than that.
+
+To build a release APK locally, put the release key in `.signing/release/` (see
+[Where the key is](#where-the-key-is)) and run:
+
+```sh
+VITA_SIGN_WITH_RELEASE_KEY=1 container/vita3k.sh android release
+```
+
+The result is signed with the same key CI uses, so it replaces the release app
+on a device in the same way a CI APK does.
+
+The development app name is in `android/app/src/reldebug/res/values/strings.xml`,
+and `android/app/src/debug/res/values/strings.xml` for the `debug` build type.
+Both override `app_name` from `src/main`, which a release build keeps as `VITA+`.
+
+### One app ID changed once
+
+The release application ID was `org.vita3kplus.emulator` up to the commit
+`e07fd837`, and is `org.vita3k.emulator` after it. A device that still has a
+release app from before that commit sees the first new release APK as a second
+app, because Android does not know the two are related. Uninstall the old app
+once:
+
+```sh
+adb uninstall org.vita3kplus.emulator
+```
+
+The games and saves stay, because they are in the `pref-path` folder and not in
+the app.
 
 ## Targets and the other platforms
 

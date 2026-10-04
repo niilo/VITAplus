@@ -47,6 +47,13 @@ android {
 
 	defaultConfig {
 		// namespace stays org.vita3k.emulator: it is the Java package the JNI symbols are bound to
+		// The application ID of a release build. A development build adds the .debug
+		// suffix below, so the two are separate apps and both can be installed. Each
+		// app replaces the build before it, because Android matches an install on the
+		// application ID and updates in place.
+		//
+		// Only an app signed with the release key can replace the release app. A build
+		// signed with another key cannot be installed over it at all.
 		applicationId = "org.vita3k.emulator"
 		minSdk = 28
 		targetSdk = 35
@@ -70,6 +77,30 @@ android {
 		}
 	}
 
+	// A release APK has to carry the release key, or Android refuses to install
+	// it over the release app that is already on the device. Falling back to the
+	// debug key used to produce an APK that installed as a separate app and
+	// could never replace the release one, with no warning.
+	//
+	// The check goes in a task rather than in the release build type, because
+	// build.gradle is evaluated once for every build type. A check in the
+	// release block made a reldebug build fail, because the release block is
+	// read even when it is not built. This task only runs when a release APK is
+	// packaged.
+	gradle.taskGraph.whenReady { graph ->
+		def buildsRelease = graph.allTasks.any { it.name ==~ /package.*Release/ }
+		if (buildsRelease && !hasCiSigning) {
+			throw new GradleException(
+				"A release build needs the release signing key, and none was passed in. " +
+				"Set SIGNING_STORE_PATH, SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS and " +
+				"SIGNING_KEY_PASSWORD, which the container scripts do when the key is in " +
+				".signing/release/ (see docs/release.md). Without the key the APK " +
+				"cannot be installed over the release app already on a device, so it " +
+				"would show up as a second app instead of replacing it. " +
+				"To build a development build instead, use `android reldebug`.")
+		}
+	}
+
 	buildTypes {
 		debug {
 			debuggable = true
@@ -87,7 +118,11 @@ android {
 			}
 			minifyEnabled = false
 			shrinkResources = false
+			// The development app ID, so a development build installs next to the release
+			// app instead of over it. Development builds share this one ID and replace
+			// each other, which is what makes a tester able to update one in place.
 			applicationIdSuffix = '.debug'
+			// The launcher name is VITAdev, from src/reldebug/res/values/strings.xml.
 			signingConfig = signingConfigs.debug
 		}
 
@@ -102,7 +137,11 @@ android {
 			minifyEnabled = true
 			shrinkResources = true
 			proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-			signingConfig = hasCiSigning ? signingConfigs.ci : signingConfigs.debug
+			// A release APK has to carry the release key. The build fails without
+			// it, in the taskGraph check above. An earlier version fell back to the
+			// debug key, which produced an APK that installed as a separate app
+			// and could never replace the release one, with no warning.
+			signingConfig = signingConfigs.ci
 		}
 	}
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        The launcher label of a development build. A release build uses
+        app_name from src/main, which is VITA+.
+
+        Both apps can be installed at the same time, because a development build
+        has the .debug application ID suffix. Without this file they would show
+        the same name in the launcher and the only way to tell them apart would
+        be the icon or the order of the list.
+
+        src/debug/res/values/strings.xml holds the same string, for the plain
+        debug build type.
+    -->
+    <string name="app_name">VITAdev</string>
+</resources>

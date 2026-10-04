@@ -33,8 +33,17 @@ Vita3K with picked Plus commits) is the branch `pre-plus-master`.
 Plus does not commit `vita3k/util/include/util/fork_build.h`. The build
 generates a default one (`vita3k/util/CMakeLists.txt`).
 
-The Android app ID is `org.vita3k.emulator`, as in upstream. Plus uses
-`org.vita3kplus.emulator`, so both apps can be installed side by side.
+The Android app ID of a release build is `org.vita3k.emulator`, as in
+upstream. A development build adds the `.debug` suffix
+(`org.vita3k.emulator.debug`), so the two install side by side. A development
+build is named `VITAdev` in the launcher and a release build `VITA+`; see
+`android/app/src/reldebug/res/values/strings.xml`.
+
+An older release used the app ID `org.vita3kplus.emulator`, up to the commit
+`e07fd837`. A device that still has that app installed sees the first build with
+the new ID as a second app, because Android matches on the ID. It has to
+uninstall the old app once. After that, builds with the same ID replace each
+other.
 
 Unmerged Adreno work exists on `feat/ayaneo-pocket-s-performance`,
 `feat/vulkan13-adreno` and `feat/vulkan-device-profiles`. It was merged into
