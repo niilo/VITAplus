@@ -67,14 +67,15 @@ fi
 export CCACHE_BASEDIR=/src
 
 # The build version is computed by tools/release/version-info.sh at CMake
-# configure time and written into a generated vita3k/config/version.cpp.
-# Gradle reuses the configure it already did in android/app/.cxx, so a build
-# after a new commit keeps the version of the first build and its version.cpp
-# is never regenerated. The APK then reports the wrong commit, which makes two
-# different builds indistinguishable on a device. Deleting the CMake cache
-# forces the configure step to run again. It costs one configure and no
-# recompile, because ccache still serves every object.
-find android/app/.cxx -name CMakeCache.txt -delete
+# configure time and written into vita3k/config/version.cpp. That file is
+# rewritten on every configure by FORCE in vita3k/config/CMakeLists.txt, and
+# Gradle does run the configure step, so nothing extra is needed here.
+#
+# An earlier version of this script deleted CMakeCache.txt to force the
+# configure. That broke the build: SDL's own CMake needs the cached feature
+# detection results and fails on a cold configure inside the container with
+# "SDL could not find X11 or Wayland development libraries", which is wrong
+# for an Android target. Do not delete it.
 
 # Same asset staging as .ci/build-android.sh.
 mkdir -p android/app/assets
