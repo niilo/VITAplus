@@ -1,8 +1,54 @@
 # 01: Count HLE import calls per NID
 
-Status: open
+Status: resolved
 Type: task
 Label: ready-for-agent
+
+## Answer
+
+Implemented in `vita3k/util/include/util/hotpath.h` and
+`vita3k/util/src/hotpath.cpp`, wired at
+`vita3k/modules/module_parent.cpp:167`. Config values `hle-counters` and
+`hle-counters-time`, both default off, with `--hle-counters` and
+`--hle-counters-time` on the command line.
+
+The table is open addressed with linear probing and a CAS insert, 8192
+slots, no lock and no allocation on the dispatch path. NID 0 marks a free
+slot and is counted as overflow, so a call cannot vanish silently, and an
+overflow row is what says the table was too small.
+
+Rows go to `hle.csv` through `perf_log`, one row per NID per interval, with
+the name from `import_name`. `exchange` gives the delta and resets in one
+step, so a long session reads as a rate. The vblank thread calls
+`dump_interval` once every 60 vblanks.
+
+**One thing the plan did not say, and the code has to respect:** `perf_log`
+keeps lines in memory and flushes once per second. A dump that happens after
+a flush would leave its rows sitting in memory until the next one, so the dump
+interval and the flush interval are both one second.
+
+`hotpath::set_enabled` is called in `vita3k/interface.cpp:540` with
+`hle_counters && perf_log`, so the counters stay off without a perf log to
+write to. `reset()` runs beside it so a second game does not inherit the first
+game's totals.
+
+### Acceptance
+
+- Both flags default to off, and a run with them off behaves as before.
+  Covered by `DisabledByDefault` and `NothingIsWrittenWhileDisabled`.
+- `hle.csv` has a header, one row per NID per interval, with name, calls, and
+  duration when timing is on. Covered by `CountsAreReportedPerNid` and
+  `SelfTimeOnlyWhenEnabled`.
+- A test covers insert, probe past a collision, overflow, and the delta
+  behaviour of `exchange`: `CollidingNidsAreBothCounted`, `NidZeroIsReportedAsOverflow`,
+  `DumpResetsSoIntervalsAreDeltas`. The collision test finds a colliding pair
+  rather than relying on luck.
+- `./format.sh` is clean.
+- **Overhead is not measured.** That needs a device, which this run does not
+  have. It is the one acceptance item still open, and it belongs with a
+  gameplay run rather than here.
+
+12 new tests, all passing. Build, ctest and the format check are clean.
 
 ## Goal
 

@@ -1,9 +1,45 @@
 # 02: Count translator and fast-path events
 
-Status: open
+Status: resolved
 Type: task
 Label: ready-for-agent
 Blocked by: 01
+
+## Answer
+
+All four counters are in, sharing 01's flags and its interval.
+
+- `count_translated_instruction` at
+  `vita3k/cpu/src/dynarmic_cpu.cpp:377`, first thing in
+  `PreCodeTranslationHook`. Written to `jit.csv` as
+  `translated_instructions`, and the comment at the call site says it is
+  translation time rather than execution time.
+- `count_cache_invalidation` at `dynarmic_cpu.cpp:878`, with the byte length,
+  written as `cache_invalidations` and `cache_invalidation_bytes`.
+- `count_page_table_read` and `count_page_table_write` at `dynarmic_cpu.cpp:440`
+  and `:489`, written as `page_table_reads` and `page_table_writes`.
+- `count_invalid_access_recovery` at `dynarmic_cpu.cpp:398`, on the transient
+  branch only, written as `invalid_access_recoveries`.
+
+### One decision the plan did not settle
+
+The page-table counters are guarded by `if (parent->mem->use_page_table)` in
+`dynarmic_cpu.cpp:439` and `:488`. Without that guard they would also count
+every access under `fastmem`, where the JIT resolves addresses itself and never
+calls back. That number would be a total access count, not a fast-path miss
+count, and it would answer a different question. The guard costs one load on a
+path that is already a callback.
+
+### Acceptance
+
+- Nothing is counted when both flags are off. Covered by
+  `NothingIsWrittenWhileDisabled`.
+- `jit.csv` carries all four rows per interval under the names above. Covered by
+  `TranslatorCountersGetTheirOwnRows`, which also pins that a zero counter is
+  left out instead of written as 0.
+- `./format.sh` is clean.
+
+Build, ctest and the format check are clean.
 
 ## Goal
 
