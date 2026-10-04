@@ -84,7 +84,8 @@ public fingerprint if you need to name the key; see below.
 
 ## What this repository is
 
-This checkout is `niilo/Vita3K` (`origin`). Since 2026-09-29 the code base
+This checkout is `niilo/VITAplus` (`origin`), renamed from `niilo/Vita3K` on
+2026-10-04; GitHub redirects the old name. Since 2026-09-29 the code base
 is Vita3K-Plus (nckstwrt/Vita3K-Plus, read-only remote `plus`, branch
 `plus/all-enhancements`), with our own work on top, on `master`. The reason
 and the plan are in `.scratch/plus-base/`. The old code base (upstream

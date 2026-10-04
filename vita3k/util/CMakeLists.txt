@@ -27,7 +27,7 @@ target_include_directories(util PUBLIC include)
 # Generate a default one so that a clean clone builds. A file in include/util takes priority.
 set(VITA3K_FORK_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(WRITE "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h.tmp"
-	"#pragma once\n#define FORK_BUILD_SEQ 0\n#define FORK_BUILD_CHANGES \"niilo/Vita3K build\"\n")
+	"#pragma once\n#define FORK_BUILD_SEQ 0\n#define FORK_BUILD_CHANGES \"niilo/VITAplus build\"\n")
 file(COPY_FILE "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h.tmp" "${VITA3K_FORK_BUILD_DIR}/util/fork_build.h" ONLY_IF_DIFFERENT)
 target_include_directories(util PRIVATE "${VITA3K_FORK_BUILD_DIR}")
 target_link_libraries(util PUBLIC ${Boost_LIBRARIES} fmt spdlog http mem nids)
