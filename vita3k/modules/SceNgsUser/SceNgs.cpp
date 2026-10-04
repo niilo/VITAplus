@@ -231,10 +231,21 @@ EXPORT(SceInt32, sceNgsPatchGetInfo, ngs::Patch *patch, SceNgsPatchAudioPropInfo
         return RET_ERROR(SCE_NGS_ERROR);
     }
 
+    // Both out-pointers come straight from the guest and were written to
+    // without being checked. A guest can pass uninitialised stack, which this
+    // game did: the fault address was 0xCCCCCCDC, its stack fill pattern, and
+    // the write through it killed the process. Reading a Ptr does not validate
+    // it either, so each is checked before use.
+    if (prop_info && !Ptr<SceNgsPatchAudioPropInfo>(prop_info, emuenv.mem).valid(emuenv.mem))
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+
+    if (deli_info && !Ptr<SceNgsPatchDeliveryInfo>(deli_info, emuenv.mem).valid(emuenv.mem))
+        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+
     if (prop_info) {
         memcpy(prop_info->volume_matrix.matrix, patch->volume_matrix, sizeof(patch->volume_matrix));
-        prop_info->in_channels = dest->rack->channels_per_voice;
-        prop_info->out_channels = source->rack->channels_per_voice;
+        prop_info->in_channels = dest->rack ? dest->rack->channels_per_voice : 0;
+        prop_info->out_channels = source->rack ? source->rack->channels_per_voice : 0;
     }
 
     if (deli_info) {
