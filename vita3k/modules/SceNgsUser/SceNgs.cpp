@@ -250,8 +250,15 @@ EXPORT(SceInt32, sceNgsPatchGetInfo, ngs::Patch *patch, SceNgsPatchAudioPropInfo
 
     if (prop_info) {
         memcpy(prop_info->volume_matrix.matrix, patch->volume_matrix, sizeof(patch->volume_matrix));
-        prop_info->in_channels = dest->rack ? dest->rack->channels_per_voice : 0;
-        prop_info->out_channels = source->rack ? source->rack->channels_per_voice : 0;
+        // A released rack leaves this voice with none. Reporting 0 there made
+        // PCSA00080 assert patchRouteInfo.nOutputChannels == 2 more than a
+        // million times on its audio thread and refuse to play. The mixer is
+        // always stereo, SCE_NGS_MAX_SYSTEM_CHANNELS is 2, and
+        // AudioState::audio_output works in stereo, so the internal count is the
+        // right answer and the rack's own count is only a way to learn it.
+        constexpr SceInt32 kInternalChannels = SCE_NGS_MAX_SYSTEM_CHANNELS;
+        prop_info->in_channels = kInternalChannels;
+        prop_info->out_channels = kInternalChannels;
     }
 
     if (deli_info) {
