@@ -183,6 +183,32 @@ Note the two port-lookup paths agree: zero "non-existen output patch"
 warnings, so the voice does report an output patch port. That points at
 patch creation or the handle, not at the port lookup.
 
+### Root cause found — `sceNgsVoiceKill` on a dead voice
+
+The log identifies the exact branch: `source missing or rack released`
+(`system=0x0`). `sceNgsRackRelease` destroys all voices in the rack
+(`ngs.cpp:484-494`), then the game calls `sceNgsVoiceKill` on those
+dead voices. `Voice::system()` returns null after the rack is gone
+(see the guard comment at `system.h:346-350`, written for PCSA00080),
+so `sceNgsVoiceKill` returned `SCE_NGS_ERROR_INVALID_ARG` instead of
+OK. On real hardware, killing an already-dead voice is a no-op.
+
+That error poisoned the NGS state machine: the game's audio thread then
+called `sceNgsPatchCreateRouting` on voices whose racks were already
+released → all subsequent `GetInfo`/`SetVolumesMatrix`/`VoicePlay` calls
+failed → the audio thread asserted over 1000 times and refused to mix.
+
+### Fix applied
+
+`vita3k/modules/SceNgsUser/SceNgs.cpp`:
+- `sceNgsVoiceKill`: `!voice->system()` → return 0 (was `RET_ERROR(INVALID_ARG)`)
+- `sceNgsVoiceKeyOff`: `!voice->system()` → return `SCE_NGS_OK` (was `RET_ERROR(INVALID_ARG)`)
+
+Both are lifecycle operations on a voice whose rack has already been
+released — the voice is already dead, nothing to kill/key off.
+This is the same class of bug PCSA00080 hit (the guard comment at
+`system.h:346-350` was written for that exact scenario).
+
 ## Ordering
 
 The symptoms are separate. Do not treat "missing elements" and "missing
@@ -190,23 +216,117 @@ audio" as one bug: one is in the renderer (rejected SPIR-V) and one is in
 NGS (failed routing patch). Uncharted is unaffected by both, consistent
 with it not using these shader paths.
 
+### Fix applied (audio cascade — take 1: broken dummy handle)
+
+The VoiceKill/KeyOff fix removed those errors, but the cascade continued:
+`sceNgsPatchCreateRouting` returned `SCE_NGS_ERROR` on the `!source->system()`
+branch (the source voice's rack had been released). The null handle then made
+`sceNgsPatchGetInfo` return `INVALID_ARG`, and the game's audio thread asserted
+in a per-frame retry loop.
+
+The first attempt returned a dummy handle with guest address `0xDEADBEEF` from
+`sceNgsPatchCreateRouting` and `sceNgsVoiceGetOutputPatch`, and checked for it in
+`sceNgsPatchGetInfo` with `reinterpret_cast<uintptr_t>(patch) == 0xDEADBEEF`.
+
+This check never matched. The `patch` parameter in the export function is a
+**host pointer** — the CPU emulator resolves the guest address `0xDEADBEEF` to
+a host address before calling the export. The host pointer value is not
+`0xDEADBEEF`, so the check always fell through to the `INVALID_ARG` return.
+
+280,665 errors per session with this approach — no improvement.
+
+### Fix applied (audio cascade — take 2: null handles)
+
+The fix uses null handles and makes the functions handle null/invalid pointers
+gracefully. This is the same class of fix as the existing PCSA00080 workaround
+at `sceNgsPatchGetInfo`: report stereo channel info instead of failing.
+
+`vita3k/modules/SceNgsUser/SceNgs.cpp`:
+- `sceNgsPatchCreateRouting`: `!source->system()` → `*handle = Ptr<ngs::Patch>()`
+  (null), return `SCE_NGS_OK`
+- `sceNgsVoiceGetOutputPatch`: `!voice->rack` or patch missing → `*patch =
+  Ptr<ngs::Patch>()` (null), return 0
+- `sceNgsPatchGetInfo`: `!patch || !valid(patch)` → report stereo channel info
+  and zeroed delivery info, return `SCE_NGS_OK` (was `RET_ERROR(INVALID_ARG)`)
+- `sceNgsVoicePatchSetVolume/SetVolumes/SetVolumesMatrix`: `!patch` → return
+  success (no-op)
+- `sceNgsVoicePause`, `sceNgsVoicePlay`, `sceNgsVoiceResume`:
+  `!voice->system()` → return success (rack released, voice is dead)
+
+All are lifecycle or routing operations on a voice whose rack has already been
+released — the voice is already dead, nothing to patch/play/pause/resume.
+Same class of bug as PCSA00080 (see `system.h:346-350`).
+
+### Test result (corrected 2026-10-05, device log `/tmp/vitalogs/vita3k.log`)
+
+Build `v1.2.1-dev.18` (`00514fb7`), Pocket S, Adreno 740. The log holds 6
+boots of PCSA00080. Boots 0-1 are stock (`Driver version: 512.676.0`,
+`mapping_method=DoubleBuffer`). Boots 2-5 are Turnip (`Driver version:
+26.2.99`, `mapping_method=PageTable`). Boots 0, 2, 4 are the menu
+(`Jak Collection main...`, SCREAM init, `Menu.bnk` open). Boots 1, 3, 5 are
+in-game (`sceAppMgrLoadExec "app0:Jak1.self"`, GOAL start). The earlier note
+said resamplers were created on Turnip. That was the menu boot. The in-game
+Turnip boots create zero resamplers.
+
+- `sceNgs.*failed` errors: 0 (was 280,665 per session)
+- `Assertion failed` count: 0 (was 1.2 million+ total)
+- In-game stock (boot 1): 12,424 `NGSRATE` resamplers, 0 `rack released`
+  warnings, 0 `STALE HOST POINTER`
+- In-game Turnip (boots 3, 5): 0 `NGSRATE` resamplers, 65 `rack released`
+  warnings each, 4 `STALE HOST POINTER` each
+- Menu boots on both drivers: SCREAM init, AAC decoder, `Menu.bnk` open,
+  `StartMenuMusic`
+
+The null-handle change removed the errors. It did not restore mixing on
+Turnip. The game creates `audio_out_thread` and two `SndStreamThread`
+threads on every in-game boot. Only stock turns them into resamplers.
+
+### Why Turnip in-game is silent
+
+Order of events on boots 3 and 5:
+
+1. `release_external_shadow_pages` releases 293-898 MiB of arena pages
+   shadowed by external mappings.
+2. `STALE HOST POINTER` at `sceNgsSystemUpdate` (guests `0x89F3B010`,
+   `0x89F14600`).
+3. `STALE HOST POINTER` at `sceNgsVoiceKill` (guests `0x89F19140`,
+   `0x89F2AFC0`).
+4. 65 `sceNgsPatchCreateRouting: source missing or rack released
+   (system=0x0)`.
+
+`vita3k/mem/src/mem.cpp:546-553` defines the stale case: a host-side access
+into the arena whose live backing is a mapped buffer. The data diverges from
+what the guest reads. The NGS structs live in that arena. A host read through
+a stale pointer sees a null `rack->system`. The take-2 fix treats that as a
+released rack and returns a null patch. All later routing is then a no-op.
+
+`source == null system` now has two causes. One is a truly released rack.
+The other is a stale host view of a live rack. The current fix treats both
+the same. Turnip hits the second case. Stock forces `DoubleBuffer` and never
+logs a stale pointer, so it never hits it. This supersedes the "audio
+cascade fixed" claim above: the errors are gone, the silence is not.
+
+### Why stock has effects but no music
+
+In-game boots 1, 3, 5 never log a `.bnk` open. They never log `SCREAM` or
+`StartMenuMusic`. Boot 1 has PCM resamplers but no music start. Menu boots
+log `FluxFOpen: /audio/Menu.bnk` and `StartMenuMusic`. The music bank never
+starts in `Jak1.self` in these logs. This is separate from the Turnip total
+silence. Tracked in issue 08.
+
 ## Next
 
 1. Done: the site is `:1344`, not `:1391`, and the fix is in. See above.
 2. Done: `CURRENT_VERSION` is 16, so the stale `vk15` modules are dropped
    instead of being reused. See above.
-3. Build an APK and run the same Jak sequence on Turnip. Watch for
-   `SPIR-V parsing FAILED` and `spirv_to_nir failed`: both should be gone,
-   and the compiled-shader count should rise above the 16 the 10:55
-   session reached. The log will show "Current version of cache: 15, is
-   outdated, recreate it." on the first run, which is expected. The
-   pipeline count is the number to watch.
-4. For audio, log which of the three `sceNgsPatchCreateRouting` early
-   returns fires, then fix that one. Re-test that `sceNgsPatchGetInfo`
-   stops returning `INVALID_ARG` on the game's audio thread; the
-   per-frame assert count is the signal to watch.
+3. Done: SPIR-V fix verified, pipeline count rose above 16. See above.
+4. Take 2 removed the errors but not the silence. The remaining work is
+   issues 08 and 09. Issue 09 is first: without it Turnip mixes nothing, so
+   issue 08 cannot be tested on Turnip.
 5. Re-run the same Jak sequence on both drivers after each fix, so the
-   driver comparison stays clean.
+   driver comparison stays clean. Count `NGSRATE` per in-game boot, not per
+   log: the log holds menu and in-game boots, and the menu masks the
+   in-game result.
 
 The message Turnip prints, for reference:
 
