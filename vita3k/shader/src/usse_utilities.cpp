@@ -1341,9 +1341,20 @@ void store(spv::Builder &b, const SpirvShaderParameters &params, SpirvUtilFuncti
         if (dest.bank == RegisterBank::INDEX) {
             dest.num -= 1;
 
-            if (!b.isIntType(source)) {
-                std::vector<spv::Id> ops{ source };
-                source = b.createOp(spv::OpBitcast, b.makeIntType(32), ops);
+            // One index register holds one 32-bit word, both here and where it
+            // is read back, so a wider source has to be narrowed to its low
+            // component. OpBitcast needs the same total bit width on both
+            // sides, so bitcasting a vec2 (64 bits) to an i32 emits a module
+            // that a validating driver rejects.
+            const spv::Id source_type = b.getTypeId(source);
+            if (b.isVectorType(source_type)) {
+                source = b.createCompositeExtract(source, b.getContainedTypeId(source_type), 0);
+            }
+
+            // isIntType() takes a type id. On a value id it reports the opcode
+            // of the instruction that produced it, so the check never held.
+            if (!b.isIntType(b.getTypeId(source))) {
+                source = b.createUnaryOp(spv::OpBitcast, b.makeIntType(32), source);
             }
 
             // if dest is a 8 or 16 bits integer
