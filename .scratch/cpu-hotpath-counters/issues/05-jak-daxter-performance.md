@@ -147,3 +147,52 @@ resolution.** Candidates now:
 
 Ticket 28 owns the output surface size. Shrinking the swapchain is the direct
 test of candidate 2 and nothing else has moved it yet.
+
+`swapchain-scale` now exists for that, in commit `c4d2daed`. It multiplies the
+swapchain extent, which `resolution-multiplier` never touched. Default 1.0,
+clamped to 0.25 to 1.0, both dimensions rounded down to a whole number of
+8-pixel tiles. The device is set to 0.5 for the next run.
+
+## The version string lies when Gradle reuses a configure
+
+The emulator reported "failed to initialize emulator" three times on 2026-10-05
+at 08:48, 08:49 and 09:05. The log line is:
+
+```
+[E] [initialize_session]: Failed to initialise config.
+```
+
+**It was not a config failure and it was not the swapchain change.** Deleting
+`config.yml` and letting the app write a new one made the next launch succeed,
+which is what made it look like a config problem.
+
+The actual cause: the installed APK was `v1.2.1-dev.15` but the log said
+`v1.2.1-dev.12`. The stale version was the only symptom, and it was wrong
+because **`configure_file(... FORCE)` from commit `3467d9fd` never ran.**
+Gradle reuses the configure it already did under `android/app/.cxx`, so the
+generated `vita3k/config/version.cpp` still carried the value from when it was
+first written:
+
+```
+version.cpp mtime     Oct  5 01:10
+build ran             Oct  5 08:26
+```
+
+So the earlier claim that FORCE is "the whole fix and does not need the cache
+gone" was wrong. FORCE guarantees the write **when configure runs**; it does
+nothing when the configure step is skipped entirely. That is what the deleted
+`CMakeCache.txt` was trying to solve, and it was the right idea implemented
+badly: deleting the cache breaks SDL.
+
+What works is removing `android/app/.cxx`, which is what this session did. That
+forces a full reconfigure and SDL configures cleanly from scratch, unlike a
+configure with a deleted cache but stale CMake state.
+
+Two lessons worth keeping:
+
+1. **A stale version string is a real signal**, not cosmetic. It was the only
+   evidence that the configure had been skipped, and it was the reason a
+   correct-looking APK could not be told apart from a stale one.
+2. **Deleting `config.yml` fixed the symptom and hid the cause.** The next
+   launch succeeded, which suggested the config was at fault. It was not. Do
+   not delete user config to diagnose an emulator failure.
