@@ -107,6 +107,33 @@ are gone. Every remaining `OpBitcast` has equal widths on both sides.
 Not measured on the device: this has not run through Turnip, so the claim
 that the missing elements come back is not yet observed.
 
+## The cached modules had to be invalidated too
+
+Installing a new APK alone would not have shown the fix. The four bad
+modules are cached on the device as `vk15-<hash>.spv`, and
+`load_shader_generic()` returns a cached module without calling the
+translator (`shaders.cpp:180-183`). The `15` is `CURRENT_VERSION`, and the
+fix does not change it, so the same invalid modules would have been reused.
+
+`CURRENT_VERSION` is now 16. Every cache key derives from it, and there is
+no hardcoded `vk15` anywhere:
+
+- `vk15-<hash>.spv` becomes `vk16-<hash>.spv` (`pipeline_cache.cpp:938`,
+  `:1578`), so all 90 cached modules for this title miss and recompile.
+- `pipeline-cache-vk15.dat` becomes `pipeline-cache-vk16.dat`
+  (`:320`, `:389`).
+- `hashs-vk.dat` has no version in its name, but stores the version inside
+  (`shaders.cpp:51-60`). On mismatch it removes the whole `shaders_path` and
+  `shaders_log_path` and logs "Current version of cache: 15, is outdated,
+  recreate it." So the bump also drops the stale modules and the stale GXP
+  dumps on disk, across every title, not only this one.
+- The OpenGL path keys off the same constant as `v16-...`
+  (`renderer.cpp:391`, `gl/renderer.cpp:258`), so GL titles recompile too.
+
+Cost: one full shader recompile per title on first run after the bump. On
+the Pocket S that is stutter on first launch of each game and nothing
+after.
+
 The third candidate this ticket listed, the `uvec2` to physical buffer
 pointer bitcast at `:754` and `:759`, is not the fault either. It appears
 once per module as `dest ptr<...> <- src vec2<u32>`, and Turnip never names
@@ -166,15 +193,19 @@ with it not using these shader paths.
 ## Next
 
 1. Done: the site is `:1344`, not `:1391`, and the fix is in. See above.
-2. Build an APK and run the same Jak sequence on Turnip. Watch for
+2. Done: `CURRENT_VERSION` is 16, so the stale `vk15` modules are dropped
+   instead of being reused. See above.
+3. Build an APK and run the same Jak sequence on Turnip. Watch for
    `SPIR-V parsing FAILED` and `spirv_to_nir failed`: both should be gone,
    and the compiled-shader count should rise above the 16 the 10:55
-   session reached. The pipeline count is the number to watch.
-3. For audio, log which of the three `sceNgsPatchCreateRouting` early
+   session reached. The log will show "Current version of cache: 15, is
+   outdated, recreate it." on the first run, which is expected. The
+   pipeline count is the number to watch.
+4. For audio, log which of the three `sceNgsPatchCreateRouting` early
    returns fires, then fix that one. Re-test that `sceNgsPatchGetInfo`
    stops returning `INVALID_ARG` on the game's audio thread; the
    per-frame assert count is the signal to watch.
-4. Re-run the same Jak sequence on both drivers after each fix, so the
+5. Re-run the same Jak sequence on both drivers after each fix, so the
    driver comparison stays clean.
 
 The message Turnip prints, for reference:
