@@ -207,12 +207,81 @@ session and all early. A real translator bug, but it does not explain the
 vanishing elements on its own: a rejected shader yields a failed pipeline, not
 a silently missing draw.
 
+## Third session, dev.12, and the channel fix worked
+
+`tmp/play-jak3/vita3k.log`, 466 MB, 3400694 lines, 07:54:11 to 08:02:03.
+Build `v1.2.1-dev.12`, commit `edbff3f7`, which carries `c737b97d`.
+
+**Our error returns collapsed.** In the second session these ran in the
+thousands. Here every one of the eight `sceNgs*` error returns happens exactly
+once, all inside a 21 ms window:
+
+```
+1  sceNgsVoicePlay returned SCE_NGS_ERROR
+1  sceNgsVoicePause returned SCE_NGS_ERROR
+1  sceNgsVoicePatchSetVolumesMatrix returned SCE_NGS_ERROR_INVALID_ARG
+1  sceNgsVoiceKill returned SCE_NGS_ERROR_INVALID_ARG
+1  sceNgsVoiceKeyOff returned SCE_NGS_ERROR_INVALID_ARG
+1  sceNgsPatchGetInfo returned SCE_NGS_ERROR_INVALID_ARG
+1  sceNgsPatchGetInfo returned SCE_NGS_ERROR
+1  sceNgsPatchCreateRouting returned SCE_NGS_ERROR
+```
+
+So the guards now reject a stale handle once and the game stops asking. That
+part is fixed.
+
+**The game still asserts, and on different lines.** The assertions are now
+mostly in the game's own source, which the log names:
+
+```
+483317  snd_synth_interface.cpp @ line: 514
+483301  snd_synth_interface.cpp @ line: 529
+324716  snd_synth_interface.cpp @ line: 574
+```
+
+`patchRouteInfo.nOutputChannels == 2` is down to 483366 from 1446977, so the
+channel fix helped but did not remove it. Lines 514, 529 and 574 are where the
+synth gives up: it is the game's sound synth refusing to produce audio.
+
+The breakpoint counter on `audio_out_thread` reaches **1163156** while only 22
+breakpoints are logged, so the emulator logs the first few per thread and
+counts the rest. The counter is the rate, not 22 events.
+
+### Loading audio and gameplay audio are different paths
+
+This is the most useful thing the user reported: **audio plays during loading
+and is silent in gameplay.** The log confirms they are separate:
+
+- Loading uses the **avPlayer** path. `SceAvPlayerAutoPlayEventCallback [153]:
+  Audio on Stream 0 - Channels 2, Sampling Rate 48000`, plus an
+  `AacDecoderState` and an `avPlayer AudioDec` thread.
+- Gameplay uses **NGS**, the game's own synth (`snd_synth_interface.cpp`),
+  driven from `audio_out_thread`.
+
+So working loading audio says the audio device and SDL are fine, which the
+earlier AudioFlinger reading already showed, and it says nothing about NGS.
+**The NGS synth is what fails, and it fails inside the game.**
+
+### Where that leaves the audio problem
+
+The emulator's error returns are no longer the cause. The game is asserting
+in its own synth code, roughly 1.29 million times, and stops rendering. The
+channel count from `sceNgsPatchGetInfo` is now 2, so that is no longer what it
+asserts against. What it reads at `snd_synth_interface.cpp:514` is not yet
+known, and the guest breakpoint is on a call through a function pointer at
+`0x81519330` with `r9=0xFFFFFFFF`, which is a failed result from some call.
+
+**The next step is to find what the synth queries and gets a bad value from.**
+That needs either a new log at the NGS entry points this run shows nothing
+for, or reading the game's assertion source, which is not in this repository.
+
 ## What to do next, in order
 
-1. **Channel count.** `nOutputChannels` is asserted 1.4 million times on the
-   audio thread. Find what the game expects and return that. This is the audio
-   fix.
-2. **Pipeline `ErrorOutOfHostMemory`.** 15 draws skipped over 8 minutes. This
-   is the vanishing-elements fix. Start with swapchain size and memory limits.
-3. **Resampler rate.** 1821 constructions with a drifting source rate.
-4. **SPIR-V OpBitcast.** Real, but lower priority than the two above.
+1. **Find what the synth reads at `snd_synth_interface.cpp:514`.** The game's
+   own code, and it is where audio dies. Needs a log of the NGS calls this
+   title makes during gameplay, which no current log line covers.
+2. **Channel count.** `nOutputChannels` is asserted 483366 times. Our value is
+   now 2, so either the game reads it elsewhere or reads it before our fix
+   takes effect. Still open.
+3. **Pipeline `ErrorOutOfHostMemory`.** This is the vanishing-elements fix.
+4. **Resampler rate.** 1821 constructions with a drifting source rate.

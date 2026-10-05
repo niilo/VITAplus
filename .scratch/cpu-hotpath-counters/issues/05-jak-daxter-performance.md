@@ -113,3 +113,37 @@ produce failed pipelines rather than slow ones.
 - No CPU profile of this session, so the split between the guest, the mixer
   and the renderer is unknown.
 - Whether the 595 MHz reading is a limit or the normal bin under load.
+
+## Third session: resolution 1 made no difference, and why
+
+`dev.12`, and the user tried `res_multiplier=1`. Findings:
+
+**42 pipelines still fail with `ErrorOutOfHostMemory`**, 07:55:25 to 07:59:26.
+Essentially the same count as the 43 at resolution 2. So the pipeline failures
+are **not** a resolution problem.
+
+**And the swapchain did not change.** The log shows both:
+
+```
+session config: res_multiplier=1
+create_swapchain: extent=2560x1440
+```
+
+`res_multiplier` scales the rendered guest image, not the output surface. The
+swapchain is still 2560x1440 in both runs, so halving the internal resolution
+left every Vulkan allocation the same size. That is why the host-memory
+pressure did not move, and it is the most useful thing this session showed.
+
+**So the `ErrorOutOfHostMemory` cause is still open, and it is not the
+resolution.** Candidates now:
+
+1. A per-pipeline host memory limit or pool being hit as pipelines accumulate.
+   The counter in the message, "N succeeded so far", reaches the hundreds, so
+   the count is growing when it fails.
+2. Fragmentation from the 2560x1440 swapchain with 4 images, which never
+   changed.
+3. Something the app allocates per pipeline, since 42 of them fail and the
+   rest succeed.
+
+Ticket 28 owns the output surface size. Shrinking the swapchain is the direct
+test of candidate 2 and nothing else has moved it yet.
