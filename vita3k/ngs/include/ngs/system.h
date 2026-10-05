@@ -306,6 +306,10 @@ struct Voice {
 
     void init(Rack *mama);
 
+    // The system this voice belongs to, or null when its rack is gone.
+    // Defined below, where Rack is complete.
+    System *system() const;
+
     ModuleData *module_storage(const uint32_t index);
 
     bool remove_patch(const MemState &mem, const Ptr<Patch> patch);
@@ -338,6 +342,15 @@ struct Rack : public MempoolObject {
 
     static uint32_t get_required_memspace_size(MemState &mem, SceNgsRackDescription *description);
 };
+
+// sceNgsRackRelease destroys the voices and then the rack, and a game can still
+// hold a voice handle afterwards. Reading voice->rack->system then follows a
+// null pointer, so every export that takes a Voice has to ask through this
+// instead. PCSA00080 crashed twice this way, in sceNgsSystemUpdate and in
+// sceNgsPatchCreateRouting.
+inline System *Voice::system() const {
+    return rack ? rack->system : nullptr;
+}
 
 struct System : public MempoolObject {
     std::vector<Rack *> racks;
