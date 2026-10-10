@@ -198,21 +198,35 @@ EXPORT(int, sceNgsPatchCreateRouting, SceNgsPatchSetupInfo *patch_info, Ptr<ngs:
         return 0;
     }
 
-    if (!patch_info || !handle)
+    if (!patch_info || !handle) {
+        LOG_WARN("sceNgsPatchCreateRouting: invalid patch_info or handle");
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    }
 
-    if (!patch_info->source || !patch_info->dest)
+    if (!patch_info->source || !patch_info->dest) {
+        LOG_WARN("sceNgsPatchCreateRouting: missing source or dest");
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    }
 
     // Make the scheduler order this right based on dependencies request
     ngs::Voice *source = patch_info->source.get(emuenv.mem);
 
-    if (!source || !source->system())
-        return RET_ERROR(SCE_NGS_ERROR);
+    if (!source || !source->system()) {
+        // The source voice's rack has been released. The game still holds the
+        // voice handle and tries to create a routing patch on it. On real
+        // hardware this is a no-op that succeeds. Return success with a null
+        // handle so the game's audio thread does not assert in a retry loop.
+        // Same class of bug as PCSA00080 (see system.h:346-350).
+        LOG_WARN("sceNgsPatchCreateRouting: source missing or rack released (source={}, system={})",
+            fmt::ptr(source), fmt::ptr(source ? source->system() : nullptr));
+        *handle = Ptr<ngs::Patch>();
+        return SCE_NGS_OK;
+    }
 
     *handle = source->system()->voice_scheduler.patch(emuenv.mem, patch_info);
 
     if (!*handle) {
+        LOG_WARN("sceNgsPatchCreateRouting: voice_scheduler.patch returned empty handle");
         return RET_ERROR(SCE_NGS_ERROR);
     }
 
@@ -224,12 +238,34 @@ EXPORT(SceInt32, sceNgsPatchGetInfo, ngs::Patch *patch, SceNgsPatchAudioPropInfo
     if (!emuenv.cfg.current_config.ngs_enable)
         return SCE_NGS_OK;
 
-    // patch is a guest handle and is read on the next line, so it has to be a
-    // valid guest address and not only non-null. PCSA00080 passed 0xCCCCCCCC,
-    // its uninitialised stack fill, and the read of patch->source at offset 16
+    // patch is a guest handle and is read below, so it has to be a valid
+    // guest address and not only non-null. PCSA00080 passed 0xCCCCCCCC, its
+    // uninitialised stack fill, and the read of patch->source at offset 16
     // faulted at 0xCCCCCCDC.
-    if (!patch || !Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem))
-        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    //
+    // A released rack leaves the voice with no patch, and the game still
+    // holds the voice handle and calls GetInfo on the null handle. Report
+    // stereo channel info and zeroed delivery info so the audio thread does
+    // not assert. The mixer is always stereo, SCE_NGS_MAX_SYSTEM_CHANNELS is
+    // 2, and AudioState::audio_output works in stereo, so the internal count
+    // is the right answer. Same class of bug as PCSA00080 (see
+    // system.h:346-350).
+    if (!patch || !Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem)) {
+        if (prop_info && Ptr<SceNgsPatchAudioPropInfo>(prop_info, emuenv.mem).valid(emuenv.mem)) {
+            constexpr SceInt32 kInternalChannels = SCE_NGS_MAX_SYSTEM_CHANNELS;
+            prop_info->in_channels = kInternalChannels;
+            prop_info->out_channels = kInternalChannels;
+            memset(prop_info->volume_matrix.matrix, 0, sizeof(prop_info->volume_matrix.matrix));
+        }
+        if (deli_info && Ptr<SceNgsPatchDeliveryInfo>(deli_info, emuenv.mem).valid(emuenv.mem)) {
+            deli_info->input_index = 0;
+            deli_info->output_index = 0;
+            deli_info->output_subindex = 0;
+            deli_info->source_voice_handle = Ptr<ngs::Voice>();
+            deli_info->dest_voice_handle = Ptr<ngs::Voice>();
+        }
+        return SCE_NGS_OK;
+    }
 
     ngs::Voice *source = patch->source.get(emuenv.mem);
     ngs::Voice *dest = patch->dest.get(emuenv.mem);
@@ -790,8 +826,14 @@ EXPORT(SceInt32, sceNgsVoiceGetOutputPatch, ngs::Voice *voice, const SceInt32 ou
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
-    if (!voice->rack || !voice->rack->vdef)
-        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+    if (!voice->rack || !voice->rack->vdef) {
+        // The voice's rack has been released. The game still holds the voice
+        // handle and asks for its output patch. Return a null handle so the
+        // paired sceNgsPatchGetInfo returns stereo channel info instead of
+        // asserting. Same class of bug as PCSA00080 (see system.h:346-350).
+        *patch = Ptr<ngs::Patch>();
+        return 0;
+    }
 
     if ((output_index >= static_cast<SceInt32>(voice->rack->vdef->output_count)) || (output_subindex >= voice->rack->patches_per_output)) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
@@ -801,7 +843,7 @@ EXPORT(SceInt32, sceNgsVoiceGetOutputPatch, ngs::Voice *voice, const SceInt32 ou
     const bool patch_missing = !(*patch) || (patch->get(emuenv.mem))->output_sub_index == -1;
     if (patch_missing) {
         LOG_WARN_ONCE("Getting non-existen output patch port {}:{}", output_index, output_subindex);
-        *patch = Ptr<ngs::Patch>(0);
+        *patch = Ptr<ngs::Patch>();
     }
 
     // Remember the voice so the paired SetVolumesMatrix can capture the implicit master-routing gain.
@@ -919,7 +961,7 @@ EXPORT(SceInt32, sceNgsVoiceKeyOff, ngs::Voice *voice) {
     }
 
     if (!voice->system())
-        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+        return SCE_NGS_OK; // rack already released, voice is already dead
 
     voice->is_keyed_off = true;
     voice->system()->voice_scheduler.off(emuenv.mem, voice);
@@ -942,7 +984,7 @@ EXPORT(int, sceNgsVoiceKill, ngs::Voice *voice) {
     }
 
     if (!voice->system())
-        return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
+        return 0; // rack already released, voice is already dead
 
     voice->system()->voice_scheduler.stop(emuenv.mem, voice);
 
@@ -984,7 +1026,12 @@ EXPORT(SceInt32, sceNgsVoicePatchSetVolume, ngs::Patch *patch, const SceInt32 ou
     if (!emuenv.cfg.current_config.ngs_enable)
         return SCE_NGS_OK;
 
-    if (!patch || !Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem) || patch->output_sub_index == -1)
+    // The source rack may have been released, leaving a null patch handle.
+    // On real hardware this is a no-op that succeeds.
+    if (!patch)
+        return SCE_NGS_OK;
+
+    if (!Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem) || patch->output_sub_index == -1)
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
 
     patch->volume_matrix[output_channel][input_channel] = vol;
@@ -997,7 +1044,12 @@ EXPORT(SceInt32, sceNgsVoicePatchSetVolumes, ngs::Patch *patch, const SceInt32 o
     if (!emuenv.cfg.current_config.ngs_enable)
         return SCE_NGS_OK;
 
-    if (!patch || !Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem) || patch->output_sub_index == -1)
+    // The source rack may have been released, leaving a null patch handle.
+    // On real hardware this is a no-op that succeeds.
+    if (!patch)
+        return SCE_NGS_OK;
+
+    if (!Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem) || patch->output_sub_index == -1)
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
 
     if (!volumes || !Ptr<const SceFloat32>(volumes, emuenv.mem).valid(emuenv.mem))
@@ -1015,6 +1067,9 @@ EXPORT(SceInt32, sceNgsVoicePatchSetVolumesMatrix, ngs::Patch *patch, const SceN
         return 0;
 
     // Gain for a routing GetOutputPatch could not hand back: capture it as the voice's implicit master-mix volume.
+    // This has to be read before the null-patch return below. sceNgsVoiceGetOutputPatch
+    // hands back a null handle and records the voice, so the pair arrives here with no
+    // patch at all, and that is the case the capture exists for.
     const bool patch_usable = patch && Ptr<ngs::Patch>(patch, emuenv.mem).valid(emuenv.mem)
         && patch->output_sub_index != -1;
     if (!patch_usable && matrix && last_missing_output_patch_voice) {
@@ -1029,6 +1084,11 @@ EXPORT(SceInt32, sceNgsVoicePatchSetVolumesMatrix, ngs::Patch *patch, const SceN
 
         return SCE_NGS_OK;
     }
+
+    // The source rack may have been released, leaving a null patch handle, and no
+    // voice to attribute the gain to. On real hardware this is a no-op that succeeds.
+    if (!patch)
+        return SCE_NGS_OK;
 
     if (!patch_usable)
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
@@ -1060,7 +1120,7 @@ EXPORT(int, sceNgsVoicePause, ngs::Voice *voice) {
     }
 
     if (!voice->system())
-        return RET_ERROR(SCE_NGS_ERROR);
+        return SCE_NGS_OK; // rack already released, voice is already dead
 
     if (!voice->system()->voice_scheduler.pause(emuenv.mem, voice)) {
         return RET_ERROR(SCE_NGS_ERROR);
@@ -1080,7 +1140,7 @@ EXPORT(SceUInt32, sceNgsVoicePlay, ngs::Voice *voice) {
     }
 
     if (!voice->system())
-        return RET_ERROR(SCE_NGS_ERROR);
+        return SCE_NGS_OK; // rack already released, voice is already dead
 
     voice->is_pending = true;
     if (!voice->system()->voice_scheduler.play(emuenv.mem, voice)) {
@@ -1112,7 +1172,7 @@ EXPORT(int, sceNgsVoiceResume, ngs::Voice *voice) {
     }
 
     if (!voice->system())
-        return RET_ERROR(SCE_NGS_ERROR);
+        return 0; // rack already released, voice is already dead
 
     if (!voice->system()->voice_scheduler.resume(emuenv.mem, voice)) {
         return RET_ERROR(SCE_NGS_ERROR);
