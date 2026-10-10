@@ -20,24 +20,25 @@
 #include <algorithm>
 
 namespace ngs {
-void OutputModule::initialize_voice_data(ModuleData &data) const {
-    Module::initialize_voice_data(data);
-    data.guest_state_data.resize(static_cast<size_t>(data.parent->rack->system->granularity) * sizeof(std::uint16_t) * 2);
+void OutputModule::initialize_voice_data(const MemState &mem, ModuleData &data) const {
+    Module::initialize_voice_data(mem, data);
+    data.guest_state_data.resize(static_cast<size_t>(data.parent.get(mem)->rack.get(mem)->system.get(mem)->granularity) * sizeof(std::uint16_t) * 2);
 }
 
 bool OutputModule::process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) {
     // Merge all voices. This buss manually outputs 2 channels
     std::fill(data.guest_state_data.begin(), data.guest_state_data.end(), 0);
 
-    if (data.parent->inputs.inputs.empty()) {
+    if (data.parent.get(mem)->inputs.inputs.empty()) {
         return false;
     }
 
     int16_t *dest_data = reinterpret_cast<std::int16_t *>(data.guest_state_data.data());
-    float *source_data = reinterpret_cast<float *>(data.parent->inputs.inputs[0].data());
+    float *source_data = reinterpret_cast<float *>(data.parent.get(mem)->inputs.inputs[0].data());
 
     // Convert FLTP to S16
-    for (int i = 0; i < data.parent->rack->system->granularity * 2; i++) {
+    const int32_t granularity = data.parent.get(mem)->rack.get(mem)->system.get(mem)->granularity;
+    for (int i = 0; i < granularity * 2; i++) {
         dest_data[i] = static_cast<std::int16_t>(std::clamp(source_data[i] * 32768.0f, -32768.0f, 32767.0f));
     }
 

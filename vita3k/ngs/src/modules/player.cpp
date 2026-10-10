@@ -37,7 +37,7 @@ void PlayerModule::on_state_change(const MemState &mem, ModuleData &data, const 
     PlayerLogicalState *logical = data.get_logical_state<PlayerLogicalState>();
     SceNgsPlayerParams *params = data.get_parameters<SceNgsPlayerParams>(mem);
 
-    if (data.parent->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE) {
+    if (data.parent.get(mem)->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE) {
         state->samples_generated_since_key_on = 0;
         state->bytes_consumed_since_key_on = 0;
         state->current_buffer = params->start_buffer;
@@ -50,7 +50,7 @@ void PlayerModule::on_state_change(const MemState &mem, ModuleData &data, const 
         logical->starved_ticks = 0;
 
         std::memset(&logical->adpcm_history, 0, sizeof(logical->adpcm_history));
-    } else if (data.parent->is_keyed_off) {
+    } else if (data.parent.get(mem)->is_keyed_off) {
         state->current_buffer = params->start_buffer;
         state->current_byte_position_in_buffer = params->start_bytes;
         logical->current_loop_count = 0;
@@ -109,8 +109,8 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
     PlayerRuntimeState *runtime = data.get_runtime_state<PlayerRuntimeState>();
     bool finished = false;
 
-    const int32_t sample_rate = data.parent->rack->system->sample_rate;
-    const int32_t granularity = data.parent->rack->system->granularity;
+    const int32_t sample_rate = data.parent.get(mem)->rack.get(mem)->system.get(mem)->sample_rate;
+    const int32_t granularity = data.parent.get(mem)->rack.get(mem)->system.get(mem)->granularity;
 
     // fix right now because it might be set by default in SceNgsVoiceInit, which we do not support
     if (params->channels == 0) {
@@ -371,14 +371,14 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
     const uint32_t samples_to_be_passed = std::min<uint32_t>(available_samples, granularity);
 
     if (available_samples >= static_cast<uint32_t>(granularity)) {
-        data.parent->products[0].data = logical->decoded_pcm.read_bytes();
+        data.parent.get(mem)->products[0].data = logical->decoded_pcm.read_bytes();
     } else {
         data.ensure_scratch_size(static_cast<size_t>(granularity) * sizeof(float) * 2);
         std::fill(data.scratch_data.begin(), data.scratch_data.end(), 0);
         if (available_samples > 0) {
             std::memcpy(data.scratch_data.data(), logical->decoded_pcm.read_bytes(), static_cast<size_t>(available_samples) * sizeof(float) * 2);
         }
-        data.parent->products[0].data = data.scratch_data.data();
+        data.parent.get(mem)->products[0].data = data.scratch_data.data();
     }
 
     logical->decoded_pcm.consume_frames(samples_to_be_passed);

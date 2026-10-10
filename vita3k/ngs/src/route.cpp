@@ -36,7 +36,7 @@ bool deliver_data_to_master(const MemState &mem, Voice *master, Voice *source, c
     return master->inputs.receive(mem, &implicit, data_to_deliver) == 0;
 }
 
-bool deliver_data(const MemState &mem, const std::vector<Voice *> &voice_queue, Voice *source, const uint8_t output_port,
+bool deliver_data(const MemState &mem, const std::vector<Ptr<Voice>> &voice_queue, Voice *source, const uint8_t output_port,
     const VoiceProduct &data_to_deliver) {
     if (!data_to_deliver.data) {
         return false;
@@ -51,7 +51,7 @@ bool deliver_data(const MemState &mem, const std::vector<Voice *> &voice_queue, 
             continue;
 
         Voice *dest = patch->dest.get(mem);
-        if (!dest || !std::ranges::contains(voice_queue, dest))
+        if (!dest || !std::ranges::contains(voice_queue, patch->dest))
             continue;
 
         const bool carries_audio = patch->volume_matrix[0][0] != 0.0f

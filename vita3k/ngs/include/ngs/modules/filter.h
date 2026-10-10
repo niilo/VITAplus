@@ -82,10 +82,10 @@ bool filter_is_off(const SceNgsParamFilter &filter);
 
 // Count the modules of type T in the rack before `data`, and in total.
 template <typename T>
-void module_position(const ModuleData &data, uint32_t &before, uint32_t &total) {
+void module_position(const MemState &mem, const ModuleData &data, uint32_t &before, uint32_t &total) {
     before = 0;
     total = 0;
-    const auto &modules = data.parent->rack->modules;
+    const auto &modules = data.parent.get(mem)->rack.get(mem)->modules;
     for (uint32_t i = 0; i < modules.size(); i++) {
         if (dynamic_cast<const T *>(modules[i].get())) {
             if (i < data.index)
@@ -97,7 +97,7 @@ void module_position(const ModuleData &data, uint32_t &before, uint32_t &total) 
 
 // Return a buffer for output `index` that the caller can change. If another
 // output uses the same buffer, copy it to the scratch memory of `data` first.
-float *own_product(ModuleData &data, uint32_t index);
+float *own_product(const MemState &mem, ModuleData &data, uint32_t index);
 
 struct FilterLogicalState : public ModuleLogicalState {
     FilterStage stage;

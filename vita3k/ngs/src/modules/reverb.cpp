@@ -31,13 +31,13 @@ std::unique_ptr<ModuleRuntimeState> ReverbModule::create_runtime_state() const {
 }
 
 void ReverbModule::on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) {
-    if (data.parent->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE)
+    if (data.parent.get(mem)->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE)
         data.get_runtime_state<ReverbRuntimeState>()->reverb.reset();
 }
 
 bool ReverbModule::process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) {
     // A reverb bus has an input mixer before this module; keep its input as the output if nothing set one
-    Voice *const bus = data.parent;
+    Voice *const bus = data.parent.get(mem);
     if (!bus->products[0].data && !bus->inputs.inputs.empty())
         bus->products[0].data = bus->inputs.inputs[0].data();
 
@@ -48,9 +48,9 @@ bool ReverbModule::process(KernelState &kern, const MemState &mem, const SceUID 
     if (!params || (params->desc.id != SCE_NGS_REVERB_PARAMS_STRUCT_ID && params->desc.id != SCE_NGS_REVERB_PARAMS_STRUCT_ID_V2))
         return false;
 
-    Voice *voice = data.parent;
+    Voice *voice = data.parent.get(mem);
     float *signal = reinterpret_cast<float *>(voice->products[0].data);
-    if (!signal || voice->rack->system->granularity <= 0)
+    if (!signal || voice->rack.get(mem)->system.get(mem)->granularity <= 0)
         return false;
 
     dsp::ReverbSettings settings;
@@ -71,7 +71,7 @@ bool ReverbModule::process(KernelState &kern, const MemState &mem, const SceUID 
     settings.early_scalar_percent = params->fEarlyReflectionScalar;
     settings.wet_scale = reverb_level;
 
-    data.get_runtime_state<ReverbRuntimeState>()->reverb.process(signal, voice->rack->system->granularity, voice->rack->system->sample_rate, settings);
+    data.get_runtime_state<ReverbRuntimeState>()->reverb.process(signal, voice->rack.get(mem)->system.get(mem)->granularity, voice->rack.get(mem)->system.get(mem)->sample_rate, settings);
     return false;
 }
 } // namespace ngs

@@ -147,7 +147,10 @@ struct PCMFrameQueue {
 };
 
 struct ModuleData {
-    Voice *parent;
+    // Guest address, not a host pointer. See the note on Voice::rack. This is
+    // the first hop every module reads, so a stale value here would fault before
+    // the rack is even reached.
+    Ptr<Voice> parent;
     uint32_t index;
 
     Ptr<void> callback;
@@ -238,7 +241,7 @@ public:
     virtual void on_key_on(const MemState &mem, ModuleData &data) {}
     virtual void cleanup_voice_state(ModuleData &data) {}
 
-    virtual void initialize_voice_data(ModuleData &data) const {
+    virtual void initialize_voice_data(const MemState &mem, ModuleData &data) const {
         const uint32_t guest_state_size = get_guest_state_size();
         if (guest_state_size != 0) {
             data.guest_state_data.assign(guest_state_size, 0);
@@ -281,7 +284,16 @@ struct VoiceInputManager {
 };
 
 struct Voice {
-    Rack *rack;
+    // The rack this voice belongs to, as a guest address.
+    //
+    // This was a host pointer, resolved once when the voice was created. An
+    // external GPU mapping over the arena moves the guest data into a buffer
+    // and releases the arena page, so a host pointer resolved before that keeps
+    // its value and names memory where the guest data is gone. The read returned
+    // zero, a live rack looked released, and every later routing call became a
+    // no-op. Storing the guest address and calling get(mem) resolves it through
+    // the page table on every read, which is where the guest data now lives.
+    Ptr<Rack> rack;
 
     std::vector<ModuleData> datas;
     VoiceState state;
@@ -304,11 +316,11 @@ struct Voice {
     Ptr<void> finished_callback;
     Ptr<void> finished_callback_user_data;
 
-    void init(Rack *mama);
+    void init(const MemState &mem, Ptr<Rack> mama);
 
     // The system this voice belongs to, or null when its rack is gone.
     // Defined below, where Rack is complete.
-    System *system() const;
+    System *system(const MemState &mem) const;
 
     ModuleData *module_storage(const uint32_t index);
 
@@ -328,8 +340,9 @@ struct Voice {
 struct System;
 
 struct Rack : public MempoolObject {
-    System *system;
-    VoiceDefinition *vdef;
+    // Guest addresses, not host pointers. See the note on Voice::rack.
+    Ptr<System> system;
+    Ptr<VoiceDefinition> vdef;
 
     int32_t channels_per_voice;
     int32_t max_patches_per_input;
@@ -338,22 +351,26 @@ struct Rack : public MempoolObject {
     std::vector<Ptr<Voice>> voices;
     std::vector<std::unique_ptr<Module>> modules;
 
-    explicit Rack(System *mama, const Ptr<void> memspace, const uint32_t memspace_size);
+    explicit Rack(Ptr<System> mama, const Ptr<void> memspace, const uint32_t memspace_size);
 
     static uint32_t get_required_memspace_size(MemState &mem, SceNgsRackDescription *description);
 };
 
 // sceNgsRackRelease destroys the voices and then the rack, and a game can still
-// hold a voice handle afterwards. Reading voice->rack->system then follows a
-// null pointer, so every export that takes a Voice has to ask through this
-// instead. PCSA00080 crashed twice this way, in sceNgsSystemUpdate and in
-// sceNgsPatchCreateRouting.
-inline System *Voice::system() const {
-    return rack ? rack->system : nullptr;
+// hold a voice handle afterwards, so reading voice->rack->system can reach a
+// rack that is gone. PCSA00080 crashed twice this way, in sceNgsSystemUpdate and
+// in sceNgsPatchCreateRouting.
+//
+// Each hop is a get(mem), so a rack that only moved in the page table is still
+// found, and a rack that was really released still reads as gone.
+inline System *Voice::system(const MemState &mem) const {
+    Rack *const live = rack.get(mem);
+    return live ? live->system.get(mem) : nullptr;
 }
 
 struct System : public MempoolObject {
-    std::vector<Rack *> racks;
+    // Guest addresses, not host pointers. See the note on Voice::rack.
+    std::vector<Ptr<Rack>> racks;
     int32_t max_voices;
     int32_t granularity;
     int32_t sample_rate;
@@ -364,7 +381,7 @@ struct System : public MempoolObject {
     static uint32_t get_required_memspace_size(SceNgsSystemInitParams *parameters);
 };
 
-bool deliver_data(const MemState &mem, const std::vector<Voice *> &voice_queue, Voice *source, const uint8_t output_port, const VoiceProduct &data_to_deliver);
+bool deliver_data(const MemState &mem, const std::vector<Ptr<Voice>> &voice_queue, Voice *source, const uint8_t output_port, const VoiceProduct &data_to_deliver);
 bool deliver_data_to_master(const MemState &mem, Voice *master, Voice *source, const VoiceProduct &data_to_deliver);
 
 inline constexpr bool default_patch_volume_is_unity = true;
@@ -388,7 +405,7 @@ extern float reverb_level;
 
 bool init_system(State &ngs, const MemState &mem, SceNgsSystemInitParams *parameters, Ptr<void> memspace, const uint32_t memspace_size);
 void release_system(State &ngs, const MemState &mem, System *system);
-bool init_rack(State &ngs, const MemState &mem, System *system, SceNgsBufferInfo *init_info, const SceNgsRackDescription *description);
+bool init_rack(State &ngs, const MemState &mem, Ptr<System> system, SceNgsBufferInfo *init_info, const SceNgsRackDescription *description);
 void release_rack(State &ngs, const MemState &mem, System *system, Rack *rack);
 
 void voice_definition_init(State &ngs, MemState &mem);
