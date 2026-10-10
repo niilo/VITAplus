@@ -1,8 +1,9 @@
 # 09: Turnip NGS reads a stale host view and drops all in-game audio
 
-Status: open
+Status: claimed
 Type: task
 Label: ready-for-agent
+Claimed: 2026-10-10 agent
 
 ## Goal
 
