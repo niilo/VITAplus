@@ -74,3 +74,27 @@ stage (`shaders.cpp:164-167`), and a precompile pass runs from that list
 ## Answer
 
 ## Comments
+
+### 2026-10-12: a latent fault in the async compile path
+
+`CompileRequest` (`vita3k/renderer/src/vulkan/pipeline_cache.cpp:84`) stores
+only `record_pipeline_len` bytes, which is
+`offsetof(GxmRecordState, vertex_streams)` (`:52`), then casts the buffer to a
+`GxmRecordState *`. The comment on the cast says the object is only half
+defined and only the defined part is read.
+
+That holds today. `compile_pipeline` (`:1096`) takes `has_color_surface_data`
+as its own parameter and reads only fields inside the prefix. `color_surface`
+is at `vita3k/renderer/include/renderer/types.h:140`, past the prefix, and is
+never read.
+
+The path only runs with `async-pipeline-compilation`, which defaults to false
+(`vita3k/config/include/config/config.h:176`), so this is latent. It is
+recorded here because the async work in this ticket is the only work that
+touches `CompileRequest`, and because
+`.scratch/emucorev-fixes/issues/15-raw-half-float-subpass-fetch.md` reads
+`record.color_surface.data` inside `compile_pipeline`, which would arm it.
+
+Written up as
+`.scratch/emucorev-fixes/issues/16-pipeline-compile-request-truncated-record.md`.
+It does not address any of this ticket's asks.

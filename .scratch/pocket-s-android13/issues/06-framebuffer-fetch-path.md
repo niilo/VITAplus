@@ -148,3 +148,29 @@ verdict.
 ## Answer
 
 ## Comments
+
+### 2026-10-12: a second input attachment is wanted by another ticket
+
+`preserve_f16_nan_as_u16` is on by default here:
+`vita3k/renderer/src/vulkan/renderer.cpp:877` reduces it to
+`independentBlend`, which both the stock Qualcomm driver and Turnip report.
+Neither Adreno path takes the shader-interlock branch, because Turnip forces
+`support_shader_interlock` false at `:863`. So `with_raw_attachment`
+(`vita3k/renderer/src/vulkan/pipeline_cache.cpp:1164`) is true and
+`direct_fragcolor` is used.
+
+The fetch then reads the colour attachment as float only
+(`vita3k/shader/src/spirv_recompiler.cpp:942`), which does not return the raw
+16 bits per channel that the flag promises. The flag is currently a promise
+the shader does not keep.
+
+Correcting it means a second `SubpassData` image of `uint` at input attachment
+1, binding 2, selected by a uniform. That is the opposite direction from this
+ticket's step 2, which wants an unused input attachment removed to keep the
+pass in GMEM.
+
+This is a decision, not a merge conflict, so it is recorded rather than
+resolved. Write the decision into
+`.scratch/emucorev-fixes/issues/15-raw-half-float-subpass-fetch.md` step 1
+before starting either. The measurement this ticket already asks for, draws per
+frame and residency on Turnip, is what settles it.
