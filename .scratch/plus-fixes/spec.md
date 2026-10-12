@@ -141,57 +141,88 @@ a submodule pointer from Plus.
 compiles and does nothing. It would also add a barrier to every pipeline switch
 on the driver that reaches 30 FPS, so it needs a measurement either way.
 
-## Found in the comparison, no ticket written
+## Verified on 2026-10-13
 
-Reported from reading the diffs. The line numbers are what that reading
-produced and **have not been confirmed by reading this repository**. Confirm
-before writing a ticket.
+Every row below was opened and read in this repository. Reported line numbers
+had drifted; the corrected ones are given. No ticket has been written for any of
+them yet.
 
-| Commit | Reported location here | Claim |
-| --- | --- | --- |
-| `75c7b17a` | `modules/SceSysmem/SceSysmem.cpp:165` | Also subtracts `size` where the allocator adds `mappedSize`; the driver path at `SceSysmemForDriver.cpp:271` never removes the uid from `vm_blocks` |
-| `75c7b17a` | `modules/SceGxm/SceGxm.cpp:4502` | `sceGxmSetUniformDataF` writes up to three floats past the requested range when `componentCount` is not a multiple of four |
-| `75c7b17a` | `renderer/src/vulkan/pipeline_cache.cpp:502` | The pipeline and shader cache keys omit `output_register_format` and the surface base format |
-| `129cc7b2` | `display/src/display.cpp:491` | `wait_vblank` iterates `vblank_callbacks` unlocked and runs guest code inside the iteration |
-| `129cc7b2` | `renderer/src/vulkan/context.cpp:703` | A partial-rect `BufferSyncRequest` carries the whole surface size, so the partial write-back is dropped as not fully mapped |
-| `129cc7b2` | `modules/SceAppUtil/SceAppUtil.cpp:251` | `sceAppUtilSaveDataDataRemove` reads `files[0]` when `fileNum` is 0 and does not check `files` |
-| `129cc7b2` | `io/src/state_functions.cpp:67` | `FileStats::write` and `truncate` use a null `FILE*` when the host open failed, and `open_file` does not report it |
-| `363285b8` | `kernel/src/sync_primitives.cpp:2437` | `msgpipe_delete` busy-waits on `remainingThreads`; the comment already says FIXME |
-| `363285b8` | `ngs/src/rate_resampler.cpp:145` | The `SwrContext` is freed and recreated on every reset |
-| `7451f9f4` | `renderer/src/vulkan/pipeline_cache.cpp:1073` | `compile_pipeline` and `precompile_shader` let an exception escape; a lost device reaches `std::terminate` |
-| `7451f9f4` | `renderer/src/vulkan/pipeline_cache.cpp:522` | `retrieve_shader` does not clear its compiling sentinel if translation throws, so later draws spin forever |
-| `7451f9f4` | `renderer/src/batch.cpp:326`, `screen_renderer.cpp:824` | The render loop and the swapchain rebuild do not survive a `vk::SystemError` |
-| `7451f9f4` | `modules/SceGxm/SceGxm.cpp:3078` | `sceGxmInitialize` does not reset `display_entries_done` |
-| `d4d7cdd7` | `kernel/src/kernel.cpp:191` | `create_thread` does not check `SDL_CreateSemaphore` or `SDL_CreateThread`, so a failed create blocks the caller forever |
-| `d4d7cdd7` | `modules/SceKernelThreadMgr/SceThreadmgr.cpp:1084` | `sceKernelDelayThreadCB` does not service callbacks during the delay |
-| `cdc40165` | `modules/SceNgsUser/SceNgs.cpp:271`, `:322` | `sceNgsPatchGetInfo` and `sceNgsPatchRemoveRouting` dereference a guest handle instead of finding the owning live voice |
-| `cdc40165` | `ngs/src/ngs.cpp:483` | Releasing a rack leaves other racks' patches pointing at destructed voices |
-| `cdc40165` | `ngs/src/ngs.cpp:339`, `ngs/src/scheduler.cpp:410` | `invoke_callback` and the deferred path use `kernel.get_thread()` without a null check |
-| `cdc40165` | `ngs/src/modules/atrac9.cpp:110`, `player.cpp:223` | Guest buffer indices are tested only against `-1` before indexing a four-element array |
-| `181aa153` | `modules/SceGxm/SceGxm.cpp:2869` | `sceGxmExecuteCommandList` splices the guest's command nodes into the render thread's queue, which frees them |
-| `181aa153` | `modules/SceGxm/SceGxm.cpp:2562` | A precomputed state's texture count is not the bound, so the draw reads past its texture array |
-| `181aa153` | `modules/SceGxm/SceGxm.cpp:2547` | `gxmDrawElementGeneral` does not set `last_precomputed`, so the next draw skips rebinding the programs |
-| `7c52fc78` | `renderer/src/vulkan/surface_cache.cpp:645` | The cache only invalidates on a larger surface, so a shrink writes back at the cached size |
-| `ca3ad408` | `renderer/src/vulkan/surface_cache.cpp:102` | `pack_rgba8_to_r4g4b4a4` puts R and A in the wrong nibbles and walks the stride instead of the width |
-| `ca3ad408` | `renderer/src/vulkan/surface_cache.cpp:864` | A linear texture region is measured one stride too long |
-| `ca3ad408` | `renderer/src/vulkan/pipeline_cache.cpp:319` | A cache file written for another GPU is fed to the driver as initial data |
-| `24702197` | `renderer/src/vulkan/sync_state.cpp` | Turnip LRZ workaround, per-driver, needs a measurement on both drivers |
-| `779751e5` | `mem/src/mem.cpp:280` | `alloc_aligned` frees only the front remnant, so the back one leaks per allocation |
-| `779751e5` | `renderer/src/vulkan/pipeline_cache.cpp:301` | Compile workers drain the whole backlog at shutdown instead of abandoning it |
-| `779751e5` | `shader/src/translator/branch_cond.cpp:403` | `VTEST` with write-back-enable does not write the ALU result to the destination |
-| `987bfea4` | `renderer/src/vulkan/gxm_to_vulkan.cpp:396` | `U1U5U5U5` routes through the ABGR swizzle table for an alpha-first format |
-| `44775966` | `modules/SceGxm/SceGxm.cpp:2114` | `sceGxmColorSurfaceSetScaleMode` is `UNIMPLEMENTED()` |
-| `092f3db6` | `shader/src/translator/data.cpp:806` | A thread-buffer register offset is masked with `0xFFFF`, not offset by `0x1000000` |
-| `e0f9d51a`, `24702197` | `renderer/src/vulkan/pipeline_cache.cpp:661` | The subpass-0 dependency omits `eInputAttachmentRead` |
-| `39be7875` | `renderer/src/vulkan/texture.cpp:41` | A `U8U8U8U8` texture over a depth-stencil surface is not served from a GPU alias; a compute repack is missing |
-| `96cdc106` | `renderer/src/vulkan/surface_cache.cpp` | Six colour surfaces rendered as a cube cannot be sampled; no cube surface path exists |
-| `93639d0b` | `codec/src/mjpeg.cpp:81` | The YUV pitch cannot be padded, so `SCE_JPEGENC_PITCH_HW_CSC` is ignored |
-| `93639d0b` | `modules/SceJpegEnc/SceJpegEncUser.cpp:77` | A HLE module reads guest memory that aliases a render target without syncing it first |
-| `e3147337` | `shader/src/usse_utilities.cpp:1334` | A raw `VMOV` to the fragment output is always treated as not holding the declared type |
-| `121ad4ea` | `ngs/src/modules/player.cpp:186` | A zero-byte player buffer stalls the chain instead of following `next_buffer_index` |
-| `d5de4bed` | `renderer/src/vulkan/surface_cache.cpp:2518` | A float colour surface is written back with linear filtering |
-| `b87189eb` | `shader/src/translator/alu.cpp:1236` | `sop2m` drops the lanes its write mask does not cover |
-| `dec3399a` | `shader/src/translator/branch_cond.cpp:481` | `vtstmsk` on a float source returns 0.0 or 1.0 instead of a bit mask |
-| `092f3db6`, `cef53700` | `renderer/src/vulkan/types.h:273`, `vkutil/include/vkutil/objects.h:93` | The vertex ring has no fence tracking, so a large scene overwrites data an in-flight submission reads |
+Three corrections to the table this replaces. `renderer/src/vulkan/batch.cpp`
+is `renderer/src/batch.cpp`, and `renderer/src/vulkan/types.h` is
+`renderer/include/renderer/vulkan/types.h`. The `092f3db6` row on
+`data.cpp:806` was inverted: this repository already subtracts `0x1000000`, and
+`092f3db6` changes that to a `0xFFFF` mask, so the missing work is the mask plus
+a `thread_buffer_f32_count` clamp, not the offset.
+
+| Commit | Verdict | Corrected location | Finding |
+| --- | --- | --- | --- |
+| `75c7b17a` | **Confirmed** | `modules/SceSysmem/SceSysmemForDriver.cpp:289` | The driver free path erases from `blocks` only, so the uid stays in `vm_blocks` (added at `SceSysmem.cpp:112`) and `sceKernelSyncVMDomain` then invalidates JIT on freed pages. The `mappedSize` half is `.scratch/plus-fixes/issues/07`, already written. |
+| `75c7b17a` | **Confirmed** | `modules/SceGxm/SceGxm.cpp:4504-4513` | `component_to_copy_remain_per_elem` is never clamped to `component_left_to_copy`, so the first iteration copies a whole element and both pointers advance past the buffers. Guest-controlled `componentCount`. |
+| `75c7b17a` | **Partial** | `renderer/src/vulkan/pipeline_cache.cpp:501-508` and `:1426-1445` | `output_register_format` is in neither key. The surface base format is already in the pipeline key: `color_base_format` sits at `renderer/include/renderer/types.h:106`, before `vertex_streams`, and `hash_pipeline_record` does not zero it. Only the shader key is missing it. |
+| `129cc7b2` | **Confirmed** | `display/src/display.cpp:490-498` | No `display.mutex`, although register and unregister take it (`SceDisplay.cpp:218`, `:229`), and `Callback::execute` runs guest code inside the iteration. This is the second half of `.scratch/plus-fixes/issues/01`. |
+| `129cc7b2` | **Confirmed** | `renderer/src/vulkan/context.cpp:703-708` | `location` is the rect origin and `size` is the whole surface, so the check at `:138` rejects the request and the partial write-back is dropped as not fully mapped. Already step 5 of `.scratch/emucorev-fixes/issues/14`. |
+| `129cc7b2` | **Confirmed, not a Plus delta** | `modules/SceAppUtil/SceAppUtil.cpp:259` | `files[0].mode` is read with no `files` check and no `fileNum > 0` test. The function is identical in Plus, so `129cc7b2` is not the commit that fixes it. Belongs to an upstream bug list. |
+| `129cc7b2` | **Confirmed** | `io/src/state_functions.cpp:67-80` and `io/src/io.cpp:403-411` | `can_write_file()` tests mode bits only (`io/include/io/state.h:51`), and `create_shared_file` returns an empty `FilePtr` on `fopen` failure (`io/include/io/filesystem.h:39`). `open_file` hands back a valid fd regardless, so `fwrite` and `ftruncate` get a null `FILE*`. |
+| `363285b8` | **Confirmed** | `kernel/src/sync_primitives.cpp:2450-2451` | `while (std::atomic_load(&msgpipe->remainingThreads) != 0) // FIXME busy loop bad`. Spins only while threads drain. |
+| `363285b8` | **Confirmed** | `ngs/src/rate_resampler.cpp:145-152` | Every `needs_reset` frees and rebuilds the `SwrContext` and reruns filter design. This repository already counts creations at `:66` with an `[NGSRATE]` log, so it is measurable rather than speculative. |
+| `7451f9f4` | **Partial** | `renderer/src/vulkan/pipeline_cache.cpp:1565-1596` | `compile_pipeline` does catch `vk::SystemError` at `:1218` and `:1246`. `precompile_shader` has no handler at all, and `createShaderModule` at `:1589` runs on the guest thread. |
+| `7451f9f4` | **Confirmed, high** | `renderer/src/vulkan/pipeline_cache.cpp:510`, `:523-535`, `:557-564` | The compiling sentinel is `~0ULL` at `:510`, set at `:535`, and waiters spin on it at `:529`. Translation and module creation at `:557` and `:564` are unguarded, so a throw leaves the sentinel forever and every later draw of that shader spins. An unrecoverable hang. |
+| `7451f9f4` | **Confirmed** | `renderer/src/batch.cpp:326-371`, `renderer/src/vulkan/screen_renderer.cpp:824-856` | Neither the render loop nor the swapchain rebuild has a `try`. Only `renderer.cpp:1860`, `:2383` and `pipeline_cache.cpp` catch `vk::SystemError`. A lost device reaches `std::terminate`. Needs a policy for what happens after a device loss. |
+| `7451f9f4` | **Confirmed** | `modules/SceGxm/SceGxm.cpp:3062-3082` | `sceGxmInitialize` resets the queue at `:3077` but never `display_entries_done`, which is only written at `:957`. A re-init after `sceGxmTerminate` inherits the old count. One line. |
+| `d4d7cdd7` | **Confirmed** | `kernel/src/kernel.cpp:191-194` | Neither `SDL_CreateSemaphore` nor `SDL_CreateThread` is checked. A null semaphore is dereferenced; a null thread leaves the caller waiting on a semaphore nobody signals, forever. Same severity class as the `strlen` rows and the same size of fix. |
+| `d4d7cdd7` | **Confirmed** | `modules/SceKernelThreadMgr/SceThreadmgr.cpp:1084-1094` | Callbacks are serviced once before the sleep in `delay_thread` at `:1071`, never during it. |
+| `cdc40165` | **Confirmed** | `modules/SceNgsUser/SceNgs.cpp:271-272` and `:322` | Both read the guest `Patch` struct instead of searching live racks. At `:322` the address is not validated at all. |
+| `cdc40165` | **Confirmed** | `ngs/src/ngs.cpp:483-507` | `release_rack` runs `v->~Voice()` and `rack->~Rack()` and erases only its own rack. Nothing sweeps `patch->dest` and `patch->source` held by voices in the other racks. The fix has to hold each source voice's `voice_mutex`, so it is not a one-liner. |
+| `cdc40165` | **Confirmed** | `ngs/src/ngs.cpp:339-340`, `ngs/src/scheduler.cpp:410` | `kernel.get_thread()` returns `lock_and_find` (`kernel.cpp:167`), so null is possible, and both dereference it. Null deref on the audio thread. |
+| `cdc40165` | **Confirmed** | `ngs/src/modules/atrac9.cpp:110`, `player.cpp:223` | `next_buffer_index` is a guest `SceInt16` tested only against `-1`, then used to index a four-element array (`atrac9.h:43`, `player.h:37`). The same file does bound-check elsewhere (`player.cpp:135`, `:148`), so the omission is local. One helper fixes both modules. |
+| `181aa153` | **Confirmed, memory safety** | `modules/SceGxm/SceGxm.cpp:2871-2879` | Guest-owned `Command` nodes are linked into the immediate list that `sceGxmEndScene` at `:2845` submits. The deferred context still owns them and frees them in `free_command_list` at `:1075-1100` when the guest recycles the VDM range, before the render thread reaches them. `renderer::append_command_list` does not exist here. |
+| `181aa153` | **Confirmed** | `modules/SceGxm/SceGxm.cpp:2560-2576` | No `frag_texture_count` clamp, so all 16 entries of a precomputed texture array are read when the program declares fewer. |
+| `181aa153` | **Confirmed** | `modules/SceGxm/SceGxm.cpp:2547-2553`, function ends `:2634` | Only `sceGxmDrawPrecomputed` sets `last_precomputed`, at `:2777`. After a precomputed draw through the general path the next draw skips `set_program`. Same function as the previous two rows, so one ticket. |
+| `7c52fc78` | **Confirmed** | `renderer/src/vulkan/surface_cache.cpp:645-653` | Only growth invalidates. `bound_width` and `bound_height` do not exist anywhere in the tree. Already step 6 of `.scratch/emucorev-fixes/issues/14`. |
+| `ca3ad408` | **Confirmed** | `renderer/src/vulkan/surface_cache.cpp:91-105` | The nibbles are the wrong way round for `eR4G4B4A4UnormPack16`: R goes to bits 0-3 and A to 12-15. The loop also walks `pixel_stride` rather than `width`, and the function has no width parameter. |
+| `ca3ad408` | **Confirmed** | `renderer/src/vulkan/surface_cache.cpp:864` | `stride_bytes * original_height` with no linear special case. A region starting part way along a row measures one stride longer than it spans. |
+| `ca3ad408` | **Confirmed** | `renderer/src/vulkan/pipeline_cache.cpp:319-372` | No `VkPipelineCacheHeaderVersionOne` vendorID, deviceID or `pipelineCacheUUID` check, so a cache written for another GPU is passed to the driver as initial data. The overflow guard at `:346` is also missing. |
+| `779751e5` | **Confirmed** | `mem/src/mem.cpp:280-306`, `:284`, `:294` | Only `remnant_front` is returned to the allocator. The tail past `align_addr + size` stays allocated, bounded by the alignment on every aligned allocation. |
+| `779751e5` | **Confirmed** | `renderer/src/vulkan/pipeline_cache.cpp:286-314`, called from `:414-417` | The sentinel is appended after every pending request and workers use FIFO `wait_dequeue`, so each worker compiles the whole backlog before exiting. A device that discards the surface makes `cleanup()` wait seconds for nothing. |
+| `779751e5` | **Confirmed** | `shader/src/translator/branch_cond.cpp:348`, `:403` | `test_wben` is declared at `:348` and never referenced in `vtst_impl`; the only other use is `if (!test_wben)` in `vtstmsk` at `:469`. The ALU result computed at `:305` is dropped and `:405` stores the predicate only. |
+| `987bfea4` | **Confirmed** | `renderer/src/vulkan/gxm_to_vulkan.cpp:396-399` and `:701-704` | The format is fixed to `eA1R5G5B5UnormPack16` at `:459`, which is alpha-first, and both the colour and texture paths use `translate_swizzle4_abgr`. A TODO is already at `:457`. |
+| `44775966` | **Confirmed** | `modules/SceGxm/SceGxm.cpp:2114-2118` | `UNIMPLEMENTED()`. `surface->downscale` is read at `context.cpp:219,229,238,651` and `surface_cache.cpp:1550,1587`, so the field matters and nothing can set it. |
+| `092f3db6` | **Inverted, see above** | `shader/src/translator/data.cpp:806-811` | This repository already subtracts `0x1000000`. Missing is the `0xFFFF` mask and the `thread_buffer_f32_count` clamp, neither of which is in the tree. |
+| `e0f9d51a`, `24702197` | **Confirmed** | `renderer/src/vulkan/pipeline_cache.cpp:661-668` | `dependencies[0]` has no `eInputAttachmentRead` and no `eShaderRead` in `dstAccessMask`, and lacks `eEarlyFragmentTests` in `srcStageMask` and `eFragmentShader` in `dstStageMask`. |
+| `39be7875` | **Confirmed absent** | `renderer/src/vulkan/texture.cpp:37-60` | `is_depth_stencil_compatible_format` returns false for `U8U8U8U8`, with a comment at `:37` saying the depth alias is not implemented yet. No `depth_alias_pack.comp` exists in `shaders-builtin/vulkan/`, and there is no repack in `surface_cache.cpp`. A missing feature, not a defect. |
+| `96cdc106` | **Confirmed absent** | decision site is `renderer/src/vulkan/texture.cpp:145-152` | The comment there reads that surface-cache views are always 2D, so a cube texture must skip it. `retrieve_color_surfaces_as_cube` does not exist and `surface_cache.cpp` has no cube or face handling. The cube path at `texture.cpp:415-520` is the uploaded-texture route only. A missing feature. |
+| `93639d0b` | **Confirmed** | `codec/src/mjpeg.cpp:79`, `:117-127` | No destination pitch parameter, and `dst_strides[]` is derived from `width`. `SCE_JPEGENC_PITCH_HW_CSC` exists as an enum at `codec/include/codec/types.h:40` and is referenced nowhere in the tree. |
+| `93639d0b` | **Confirmed, feature absent** | `modules/SceJpegEnc/SceJpegEncUser.cpp:52-77` | The buffer is read with no flush. No `sync_guest_range`, no `sync_surfaces_for_cpu_read`, and no such `CommandOpcode`: `renderer/include/renderer/commands.h` ends at `MemoryUnmapFlush`, which is used only before unmapping (`SceSysmem.cpp:158`). |
+| `e3147337` | **Confirmed** | `shader/src/usse_utilities.cpp:1334-1335` | `!raw_move && is_float_data_type(dest.type)` always stores false for a raw move. `store` has no parameter for the case, so this needs the per-word store-type tracking the commit adds. |
+| `121ad4ea` | **Confirmed** | `ngs/src/modules/player.cpp:187-211` | A zero-length buffer breaks out of the loop or returns end-of-data. `next_buffer_index` is only read at `:223`, after `loop_count` expires, so the chain stalls instead of advancing. Fold into the buffer-index ticket. |
+| `d5de4bed` | **Confirmed** | `renderer/src/vulkan/surface_cache.cpp:2518` | `sync_filter` has no case for `F32` or `F32F32`, so a float surface whose sync is not from the raw image is written back with `eLinear`, which averages the raw words. One line. |
+| `b87189eb` | **Confirmed** | `shader/src/translator/alu.cpp:1236-1239` | No `finalize` before the store, and `store` compacts components into masked lanes (`usse_utilities.cpp:1517-1536`), so a non-contiguous `wmask` writes the wrong lanes. The same commit fixes two more spots in these files: `alu.cpp:263` indexes `ExtPredicate` out of range for VMAD2's 3-bit predicate, and `usse_program_analyzer.cpp:72-73` orders the VMAD2 case above VMAD. |
+| `dec3399a` | **Confirmed** | `shader/src/translator/branch_cond.cpp:484-491`, `:529`, `:261-263` | The float case at `:484` sets `output_type = type_f32` and selects 0.0 or 1.0 instead of `0xFFFFFFFF`, while the integer branch at `:494-524` is correct. And `:261-263` still sends an unsigned sign test to component 2, which is `.scratch/plus-fixes/issues/12`. |
+| `092f3db6`, `cef53700` | **Confirmed** | `renderer/include/renderer/vulkan/types.h:273-278`, `vkutil/include/vkutil/objects.h:93-99`, `vkutil/src/objects.cpp:204-213` | `vertex_stream_ring_buffer` has no marks, and `RingBuffer::allocate` at `:204` wraps with `if (cursor + data_size > capacity) cursor = 0;`. A scene that submits more vertex data than the ring holds overwrites bytes an in-flight submission still reads. |
+
+Not checked: the `24702197` Turnip LRZ workaround in `sync_state.cpp`. It is a
+per-driver behaviour change and needs a measurement on both drivers, which no
+amount of reading answers.
+
+### Three that are worth a ticket before the rest
+
+Ranked by what each would do to a running game, across both specs.
+
+1. `181aa153`, the command-list splice at `SceGxm.cpp:2871`, and the two
+   adjacent rows at `:2560` and `:2547`. A use-after-free of guest-owned
+   command nodes, and all three are in one function.
+2. `7451f9f4`, the `retrieve_shader` sentinel at `pipeline_cache.cpp:510`. A
+   throw leaves `~0ULL` in the map and every later draw of that shader spins on
+   the render thread. A small `try` that nulls the slot closes an
+   unrecoverable hang.
+3. `d4d7cdd7`, the unchecked `SDL_CreateThread` at `kernel.cpp:191`, and the
+   `strlen` on a null name in the eight `*_create` functions. Both are guest
+   reachable and both are a couple of lines each.
+
+Then `129cc7b2` for the null `FILE*`, `cdc40165` for the three NGS null
+dereferences and the dangling cross-rack patches, `75c7b17a` for the uniform
+copy overrun, and the shader translator rows last, because they are real but
+their effect is per-title visuals and they need a picture comparison to
+verify.
 
 ## Comments
