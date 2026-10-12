@@ -47,8 +47,8 @@ dsp::BiquadCoeffs filter_coeffs(const SceNgsParamCoEff &coeff) {
     return dsp::biquad_is_valid(coeffs) ? coeffs : dsp::BiquadCoeffs{};
 }
 
-float *own_product(ModuleData &data, const uint32_t index) {
-    Voice *voice = data.parent;
+float *own_product(const MemState &mem, ModuleData &data, const uint32_t index) {
+    Voice *const voice = data.parent.get(mem);
     uint8_t *buffer = voice->products[index].data;
     if (!buffer)
         return nullptr;
@@ -58,7 +58,7 @@ float *own_product(ModuleData &data, const uint32_t index) {
         shared |= i != index && voice->products[i].data == buffer;
 
     if (shared) {
-        const size_t size = static_cast<size_t>(voice->rack->system->granularity) * sizeof(float) * 2;
+        const size_t size = static_cast<size_t>(voice->rack.get(mem)->system.get(mem)->granularity) * sizeof(float) * 2;
         data.ensure_scratch_size(size);
         std::memcpy(data.scratch_data.data(), buffer, size);
         voice->products[index].data = data.scratch_data.data();
@@ -72,24 +72,24 @@ std::unique_ptr<ModuleLogicalState> FilterModule::create_logical_state() const {
 }
 
 void FilterModule::on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) {
-    if (data.parent->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE)
+    if (data.parent.get(mem)->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE)
         data.get_logical_state<FilterLogicalState>()->stage = {};
 }
 
 bool FilterModule::process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) {
-    Voice *voice = data.parent;
+    Voice *const voice = data.parent.get(mem);
 
     // Definitions with filters have 2 outputs, and each output has its own
     // filter: the first filter module acts on output 0, the second on output
     // 1 (vitaAL puts its distance filter on the first one and plays output 0).
     // Both outputs start from the same signal.
     uint32_t send, filters;
-    module_position<FilterModule>(data, send, filters);
+    module_position<FilterModule>(mem, data, send, filters);
     if (send == 0)
         voice->products[1] = voice->products[0];
 
     FilterLogicalState *logical = data.get_logical_state<FilterLogicalState>();
-    if (data.is_bypassed || !effect_enabled(EFFECT_FILTER) || send >= voice->rack->vdef->output_count) {
+    if (data.is_bypassed || !effect_enabled(EFFECT_FILTER) || send >= voice->rack.get(mem)->vdef.get(mem)->output_count) {
         logical->stage.active = false;
         return false;
     }
@@ -102,7 +102,7 @@ bool FilterModule::process(KernelState &kern, const MemState &mem, const SceUID 
             logical->stage.active = false;
             return false;
         }
-        coeffs = filter_coeffs(params->params, voice->rack->system->sample_rate);
+        coeffs = filter_coeffs(params->params, voice->rack.get(mem)->system.get(mem)->sample_rate);
     } else if (desc && desc->id == SCE_NGS_FILTER_PARAMS_COEFF_STRUCT_ID) {
         coeffs = filter_coeffs(reinterpret_cast<const SceNgsFilterParamsCoEff *>(desc)->params);
     } else {
@@ -110,8 +110,8 @@ bool FilterModule::process(KernelState &kern, const MemState &mem, const SceUID 
         return false;
     }
 
-    if (float *signal = own_product(data, send))
-        logical->stage.run(signal, voice->rack->system->granularity, coeffs);
+    if (float *signal = own_product(mem, data, send))
+        logical->stage.run(signal, voice->rack.get(mem)->system.get(mem)->granularity, coeffs);
 
     return false;
 }

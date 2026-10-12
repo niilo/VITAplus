@@ -68,9 +68,9 @@ bool CompressorModule::process(KernelState &kern, const MemState &mem, const Sce
         return false;
     }
 
-    Voice *voice = data.parent;
-    const int32_t granularity = voice->rack->system->granularity;
-    const int32_t sample_rate = voice->rack->system->sample_rate;
+    Voice *voice = data.parent.get(mem);
+    const int32_t granularity = voice->rack.get(mem)->system.get(mem)->granularity;
+    const int32_t sample_rate = voice->rack.get(mem)->system.get(mem)->sample_rate;
     if (granularity <= 0 || voice->inputs.inputs.empty())
         return false;
 

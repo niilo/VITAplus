@@ -171,6 +171,16 @@ container/vita3k.sh run <cmd...>     # any command in the Linux container
   driver or a setting in the same scene. Needs an unlocked device. Results go
   to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` before a run.
 
+- `tools/android/touch_record.sh <package> <title_id> <label>` and
+  `tools/android/touch_replay.sh <package> <title_id> <label>` reach gameplay in
+  any title. `gameplay_scene.sh` is hardcoded to Uncharted; these two are not.
+  Record the walk once by hand, then replay it. The touches are recorded as the
+  numbers the touchscreen reported and are replayed unchanged, so a recording
+  does not depend on the screen orientation. The gaps are timed on the device, so
+  a replay runs at the recorded speed rather than at the speed of one adb call
+  per event. Results go to `tmp/touch/<label>/`. Read `scene.png` after a replay:
+  a walk that ends on a menu is a stale recording, not a broken game. See
+  `.scratch/cpu-hotpath-counters/issues/10-record-and-replay-touch-walks.md`.
 - `tools/android/gameplay_scene.sh <package> <label>` is the one to use for a
   real number. It walks the Uncharted menus into the saved chapter, then holds
   the right stick and the movement keys so the camera turns and the game has to
