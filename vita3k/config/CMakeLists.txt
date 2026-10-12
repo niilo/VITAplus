@@ -11,7 +11,12 @@ add_library(
 	version.cpp
 )
 
-configure_file(src/version.cpp.in version.cpp)
+# The version comes from tools/release/version-info.sh, so the generated file
+# has to be rewritten on every configure, not only when this template changes.
+# configure_file without FORCE skips the write when the generated result would
+# be identical, and it does not know the version is a variable, so a build after
+# a new commit kept the first build's version. FORCE guarantees the write.
+configure_file(src/version.cpp.in version.cpp FORCE)
 
 target_include_directories(config PUBLIC include)
 target_link_libraries(config PUBLIC input util)

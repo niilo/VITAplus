@@ -169,6 +169,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "v-sync", true, v_sync)                                                                  \
     code(int, "vblank-period-us", 16666, vblank_period_us)                                            \
     code(int, "swapchain-extra-images", 1, swapchain_extra_images)                                 \
+    code(float, "swapchain-scale", 1.0f, swapchain_scale)                                           \
     code(bool, "adpf", false, adpf)                                                            \
     code(int, "anisotropic-filtering", 1, anisotropic_filtering)                                        \
     code(bool, "texture-cache", true, texture_cache)                                                    \

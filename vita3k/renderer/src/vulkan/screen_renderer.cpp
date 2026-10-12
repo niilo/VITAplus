@@ -267,6 +267,24 @@ void ScreenRenderer::select_present_mode() {
     }
 }
 
+vk::Extent2D ScreenRenderer::scaled_extent(const vk::Extent2D &in) const {
+    // The guest image is tiled, so each dimension is rounded down to a whole
+    // number of 8-pixel tiles. The display scales the smaller surface up, so a
+    // rounded-down extent costs a little sharpness and nothing else.
+    const auto one = [this](uint32_t v, uint32_t floor) {
+        const uint32_t scaled = static_cast<uint32_t>(static_cast<float>(v) * scale);
+        return std::max((scaled / kTilePixels) * kTilePixels, std::max(floor, kTilePixels));
+    };
+
+    if (in.width == 0 || in.height == 0)
+        return in;
+
+    return vk::Extent2D{
+        one(in.width, surface_capabilities.minImageExtent.width),
+        one(in.height, surface_capabilities.minImageExtent.height)
+    };
+}
+
 void ScreenRenderer::create_swapchain() {
     surface_capabilities = state.physical_device.getSurfaceCapabilitiesKHR(surface);
 
@@ -277,6 +295,12 @@ void ScreenRenderer::create_swapchain() {
         extent.width = std::clamp<uint32_t>(static_cast<uint32_t>(frame_host->drawable_width()), surface_capabilities.minImageExtent.width, surface_capabilities.maxImageExtent.width);
         extent.height = std::clamp<uint32_t>(static_cast<uint32_t>(frame_host->drawable_height()), surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
     }
+
+    // Ticket 28: the scale is applied to the output surface extent, not to the
+    // guest image. Both call sites below use scaled_extent() so the extent that
+    // is created and the extent that is compared against cannot drift apart.
+    if (scale != 1.0f)
+        extent = scaled_extent(extent);
 
     if (extent.width == 0 || extent.height == 0)
         return;
@@ -304,10 +328,11 @@ void ScreenRenderer::create_swapchain() {
             surface_usage |= fsr_flags;
         swapchain_has_storage = static_cast<bool>(surface_usage & vk::ImageUsageFlagBits::eStorage);
 
-        LOG_INFO("swapchain: format={} colorspace={} extent={}x{} supportedUsage=0x{:X} chosenUsage=0x{:X} images={} currentTransform={} usedTransform=Identity",
+        LOG_INFO("swapchain: format={} colorspace={} extent={}x{} supportedUsage=0x{:X} chosenUsage=0x{:X} images={} currentTransform={} usedTransform=Identity{}",
             vk::to_string(surface_format.format), vk::to_string(surface_format.colorSpace), extent.width, extent.height,
             static_cast<uint32_t>(surface_capabilities.supportedUsageFlags), static_cast<uint32_t>(surface_usage),
-            swapchain_size, vk::to_string(surface_capabilities.currentTransform));
+            swapchain_size, vk::to_string(surface_capabilities.currentTransform),
+            scale == 1.0f ? "" : fmt::format(" swapchain-scale={}", scale));
 
         vk::CompositeAlphaFlagBitsKHR comp_alpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
         if (!(surface_capabilities.supportedCompositeAlpha & comp_alpha))
@@ -831,12 +856,18 @@ bool ScreenRenderer::rebuild_swapchain_if_visible() {
 }
 
 bool ScreenRenderer::surface_matches_window_size() {
+    // Ticket 28: the extent carries the scale, so comparing it to the window size
+    // directly would report a mismatch forever and rebuild the swapchain every
+    // frame. Compare against the extent the scale produces.
     auto *frame_host = static_cast<renderer::State &>(state).frame;
     if (frame_host->drawable_width() == 0 || frame_host->drawable_height() == 0)
         return true;
 
-    return extent.width == static_cast<uint32_t>(frame_host->drawable_width())
-        && extent.height == static_cast<uint32_t>(frame_host->drawable_height());
+    const vk::Extent2D expected = scaled_extent(vk::Extent2D{
+        static_cast<uint32_t>(frame_host->drawable_width()),
+        static_cast<uint32_t>(frame_host->drawable_height()) });
+
+    return extent.width == expected.width && extent.height == expected.height;
 }
 
 } // namespace renderer::vulkan

@@ -49,6 +49,12 @@ public:
     bool vsync = true;
     // Ticket 09: images added to minImageCount, so the A/B can use the minimum.
     uint32_t extra_images = 1;
+    // Ticket 28: multiplier on the output surface extent, 1.0 is the panel
+    // resolution. Lowering it shrinks the swapchain and its images, which is
+    // what resolution-multiplier does not do. The display scales it up.
+    float scale = 1.0f;
+    // Ticket 28: the extent is rounded to a whole number of these.
+    static constexpr uint32_t kTilePixels = 8;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
@@ -110,6 +116,10 @@ private:
     void create_layout_sync();
     void select_present_mode();
     void create_swapchain();
+    // Ticket 28: the extent that the current scale produces. create_swapchain()
+    // uses it to build the surface and surface_matches_window_size() uses it to
+    // compare, so the two cannot disagree.
+    vk::Extent2D scaled_extent(const vk::Extent2D &in) const;
     bool note_size_mismatch(bool mismatched);
     vk::Pipeline create_graphics_pipeline_impl(std::array<vk::PipelineShaderStageCreateInfo, 2> &shader_stages);
     bool create_graphics_pipelines();

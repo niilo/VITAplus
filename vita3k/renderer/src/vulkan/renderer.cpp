@@ -1040,6 +1040,11 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     }
 
     screen_renderer.extra_images = static_cast<uint32_t>(std::clamp(config.swapchain_extra_images, 0, 3));
+    // Ticket 28: the output surface is what the panel drives, so it stays at the
+    // panel resolution whatever resolution-multiplier does to the guest image.
+    // That is why lowering the multiplier did not change the host memory the
+    // swapchain and its images need. This scales the output surface instead.
+    screen_renderer.scale = std::clamp(config.swapchain_scale, 0.25f, 1.0f);
     // Ticket 09: the Vulkan backend never read the v-sync setting, so the
     // present mode ignored it. Seed it here, the same place extra_images is set,
     // and pending_vsync still overrides it when the setting changes mid-run.
