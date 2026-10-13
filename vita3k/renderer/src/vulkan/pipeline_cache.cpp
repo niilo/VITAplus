@@ -554,14 +554,25 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
     LOG_INFO("Generating vulkan spv shader {}", hash_text);
     const std::string shader_version = fmt::format("vk{}{}", shader::CURRENT_VERSION, version_suffix);
 
-    shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
+    // If anything below throws, the map keeps the sentinel and every other thread
+    // that needs this shader spins on it forever. Clear it before letting the
+    // exception out, so a second attempt starts from a clean slot.
+    try {
+        shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
 
-    vk::ShaderModuleCreateInfo shader_info{
-        .codeSize = sizeof(uint32_t) * source.size(),
-        .pCode = source.data()
-    };
+        vk::ShaderModuleCreateInfo shader_info{
+            .codeSize = sizeof(uint32_t) * source.size(),
+            .pCode = source.data()
+        };
 
-    *shader_module = state.device.createShaderModule(shader_info);
+        *shader_module = state.device.createShaderModule(shader_info);
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> guard(shaders_mutex);
+            *shader_module = nullptr;
+        }
+        throw;
+    }
     {
         std::lock_guard<std::mutex> guard(shaders_mutex);
         // Save shader cache hashes
