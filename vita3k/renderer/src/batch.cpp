@@ -195,8 +195,11 @@ void process_batches(renderer::State &state, const FeatureState &features, MemSt
         if (state.async_flip_requested.load(std::memory_order_relaxed))
             return;
 
-        // Try to wait for a batch (about 2 or 3ms, game should be fast for this)
-        auto cmd_list = state.command_buffer_queue.top(3);
+        // Try to wait for a batch (about 2 or 3ms, game should be fast for this).
+        // Queue::top takes microseconds, so this is three milliseconds as the
+        // comment says. It used to be top(3), which slept for three microseconds
+        // and left the render thread spinning a core whenever there was no work.
+        auto cmd_list = state.command_buffer_queue.top(3000);
 
         if (!cmd_list || !is_cmd_ready(mem, *cmd_list)) {
             // beginning of the game or homebrew not using gxm

@@ -42,3 +42,30 @@ user set it.
    user has no way to set the value at all. Say which of the two is being done.
 
 ## Comments
+### 2026-10-13: fixed guest-cores; one more mismatch found, left alone
+
+Changed `as_int(1)` to `as_int(out.guest_cores)` in `fix/mem-kernel-bookkeeping`.
+
+The audit in step 2 turned up a scriptable comparison of every
+`as_int`/`as_bool` in `settings.cpp` against the `code(...)` default in
+`config.h`. Twenty-eight keys read the built-in default already. Three pass a
+fallback equal to the documented default, which is harmless but means the two
+lists can drift: `accurate-thread-scheduling`, `preempt-on-wake-us` and
+`shader-cache` and `texture-cache` and `validation-layer`.
+
+One more mismatch beyond guest-cores:
+
+- `validation-layer`: `config.h` says `false`,
+  `settings.cpp:252` says `as_bool(true)`.
+
+Left as it is. `5bfca771` carries the same discrepancy, so the two repositories
+agree on it and it may well be deliberate: the validation layer being on when a
+config does not mention it is a defensible default even if `config.h` says
+otherwise. Turning it off is a behaviour change for every existing user on the
+strength of a guess about intent, which is not worth it. Worth a decision from
+whoever owns the config surface.
+
+Three keys have no `code(...)` entry at all: `enable-ngs`,
+`stretch-the-display-area`, `fullscreen-hd-res-pixel-perfect`. They read a
+default that is only in `settings.cpp`, so a value written to the config is not
+round-tripped through the same list. Not a default mismatch, so not fixed here.
