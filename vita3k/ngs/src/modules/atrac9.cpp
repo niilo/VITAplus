@@ -107,7 +107,11 @@ bool Atrac9Module::decode_more_data(KernelState &kern, const MemState &mem, cons
         state->current_byte_position_in_buffer = 0;
 
         if ((bufparam.loop_count != -1) && (logical->current_loop_count > bufparam.loop_count)) {
-            state->current_buffer = bufparam.next_buffer_index;
+            // next_buffer_index comes from the guest and is an SceInt16. Only -1 was
+            // checked, so any other out-of-range value indexed past
+            // buffer_params and was then dereferenced for a pointer and a count.
+            const SceInt16 next = bufparam.next_buffer_index;
+            state->current_buffer = (next >= 0 && next < SCE_NGS_AT9_MAX_BUFFER_PARAMS) ? next : -1;
             logical->current_loop_count = 0;
 
             if (state->current_buffer == -1) {
