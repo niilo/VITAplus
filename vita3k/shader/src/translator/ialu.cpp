@@ -442,7 +442,9 @@ bool USSETranslatorVisitor::i16mad(
     spv::Id source0_type = m_b.getTypeId(source0);
 
     auto mul_result = m_b.createBinOp(spv::OpIMul, source0_type, source0, source1);
-    auto add_result = m_b.createBinOp(spv::OpIAdd, source0_type, mul_result, source2);
+    // src2_neg was decoded off the instruction and never read, so an IMAD16
+    // whose third source is negative added instead of subtracting.
+    auto add_result = m_b.createBinOp(src2_neg ? spv::OpISub : spv::OpIAdd, source0_type, mul_result, source2);
 
     if (add_result != spv::NoResult) {
         store(inst.opr.dest, add_result, 0b1, dest_repeat_offset);
