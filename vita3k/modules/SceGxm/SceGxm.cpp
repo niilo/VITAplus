@@ -2468,7 +2468,15 @@ static void gxmSetUniformBuffers(renderer::State &state, GxmState &gxm, SceGxmCo
 
         uint32_t bytes_to_copy = sizes.at(i) * 4;
         if (sizes.at(i) == SCE_GXM_MAX_UB_IN_FLOAT_UNIT) {
-            auto ite = gxm.memory_mapped_regions.lower_bound(buffers[i].address());
+            // lower_bound returns the first region starting at or after the buffer, which is
+            // not the one containing it when that region starts earlier. When the
+            // next region begins after this one ends the containment test fails
+            // and the copy stays unbounded, so the read runs past the mapping.
+            // upper_bound and a step back finds the containing entry either way.
+            auto ite = gxm.memory_mapped_regions.upper_bound(buffers[i].address());
+            if (ite != gxm.memory_mapped_regions.begin()) {
+                --ite;
+            }
             if ((ite != gxm.memory_mapped_regions.end()) && ((ite->first + ite->second.size) > buffers[i].address())) {
                 // Bound the size
                 bytes_to_copy = std::min<uint32_t>(ite->first + ite->second.size - buffers[i].address(), bytes_to_copy);
@@ -4502,13 +4510,19 @@ EXPORT(int, sceGxmSetUniformDataF, void *uniformBuffer, const SceGxmProgramParam
         int component_left_to_copy = componentCount;
 
         while (component_left_to_copy > 0) {
-            memcpy(dest, source, component_to_copy_remain_per_elem * comp_size);
+            // The first pass copies whatever is left in the vector the write
+            // starts in, which can be more components than were asked for. The
+            // loop below reduced its count only after the first iteration, so it
+            // ran one component past the end of the caller's array and past the
+            // range of the uniform buffer.
+            const int copy_count = std::min(component_to_copy_remain_per_elem, component_left_to_copy);
+            memcpy(dest, source, copy_count * comp_size);
 
             // Add and align destination
-            dest += comp_size * component_to_copy_remain_per_elem + align_bytes;
-            source += component_to_copy_remain_per_elem * comp_size;
+            dest += comp_size * copy_count + align_bytes;
+            source += copy_count * comp_size;
 
-            component_left_to_copy -= component_to_copy_remain_per_elem;
+            component_left_to_copy -= copy_count;
             component_to_copy_remain_per_elem = std::min<int>(4, component_to_copy_remain_per_elem);
         }
     }
