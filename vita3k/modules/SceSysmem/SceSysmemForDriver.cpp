@@ -268,21 +268,28 @@ EXPORT(int, ksceKernelFreeMemBlock, SceUID uid) {
 
     free(emuenv.mem, block->second->mappedBase.address());
 
+    // A VM block was added to vm_blocks as well. Leaving it there lets
+    // sceKernelFreeMemBlockForVM find it again and free the same mapping twice.
+    state->vm_blocks.erase(uid);
+
+    // The allocation path added mappedSize, which is the requested size. The
+    // size field is only sizeof(SceKernelMemBlockInfo), so subtracting it makes
+    // the reported free memory drift on every allocation.
     switch (block->second->type) {
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_RX:
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_RW:
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_RW_UNCACHE:
-        state->allocated_user -= block->second->size;
+        state->allocated_user -= block->second->mappedSize;
         break;
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_CDRAM_RW:
-        state->allocated_cdram -= block->second->size;
+        state->allocated_cdram -= block->second->mappedSize;
         break;
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_RW:
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_MAIN_PHYCONT_NC_RW:
-        state->allocated_phycont -= block->second->size;
+        state->allocated_phycont -= block->second->mappedSize;
         break;
     default:
-        state->allocated_user -= block->second->size;
+        state->allocated_user -= block->second->mappedSize;
         break;
     }
 
