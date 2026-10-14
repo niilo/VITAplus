@@ -82,3 +82,13 @@ longer exists.
 - `tmp/gameplay/after-reboot/` a clean-HEAD failing run with step screenshots
 - `tmp/kz-walk/` the Killzone walk and the cache-clear run
 - `tmp/gameplay/space-turnip/` a failing run with 18 GB free on the card
+
+## The measurement record
+
+`issues/02-current-builds-fail-to-boot.md` holds the runs, the counted
+boot-and-stall totals, the bisect and the three reasons its answer is wrong.
+The short version: an older build boots every time, current builds stall 16
+times out of 19, and no single commit is responsible, because the failure is a
+timing-dependent stall rather than a switch one commit flipped. It is not a
+frame rate regression; where the current build runs at all it is the faster of
+the two.
