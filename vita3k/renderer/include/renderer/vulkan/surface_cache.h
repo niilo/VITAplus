@@ -38,6 +38,14 @@ struct VKState;
 struct Viewport;
 using CallbackRequestFunction = std::function<void()>;
 
+// Enqueues a cleanup callback on the request queue, or runs it inline when the
+// queue refuses. A refused push means the wait thread is gone and every pending
+// request was dropped without being called, so a callback that owns a fence or
+// a command buffer has to still run or those leak for the life of the process.
+// VKState::cleanup aborts the queue and then resets it, which is when the drops
+// happen.
+void push_cleanup_request(VKState &state, CallbackRequestFunction callback);
+
 // used for in-shader texture viewport
 struct TextureViewport {
     std::pair<float, float> ratio = { 1.0f, 1.0f };

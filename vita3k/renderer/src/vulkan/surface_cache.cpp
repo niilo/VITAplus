@@ -1525,7 +1525,7 @@ bool VKSurfaceCache::try_transfer_depth_gpu(Address src_address, Address dst_add
         std::lock_guard<std::mutex> lock(state.multithread_pool_mutex);
         state.device.freeCommandBuffers(state.multithread_command_pool, transfer_cmd);
     };
-    state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(vk_callback)) });
+    push_cleanup_request(state, std::move(vk_callback));
 
     LOG_INFO_ONCE("Depth transfer done on the GPU: 0x{:08X} -> 0x{:08X} {}x{} (scaled {}x{})", src_address, dst_address, width, height, copy_width, copy_height);
 
@@ -2109,13 +2109,28 @@ std::map<Address, ColorSurfaceCacheInfo *>::iterator VKSurfaceCache::find_color_
     return contains(it) ? it : color_address_lookup.end();
 }
 
+void push_cleanup_request(VKState &state, CallbackRequestFunction callback) {
+    auto owned = std::make_unique<CallbackRequestFunction>(std::move(callback));
+    if (state.request_queue.push(CallbackRequest{ owned.get() })) {
+        // The queue took the raw pointer and now owns it.
+        (void)owned.release();
+        return;
+    }
+
+    // The queue is aborted, so nothing will ever call this. It owns the fence and
+    // the command buffer, and the only other owner was the request that just got
+    // dropped. Running it here is the only thing that releases them.
+    LOG_WARN("Render request queue is closed; running a cleanup callback inline");
+    (*owned)();
+}
+
 bool VKSurfaceCache::check_for_surface(MemState &mem, Address source_address, CallbackRequestFunction &callback, Address target_address, uint32_t source_size) {
     if (!state.features.enable_memory_mapping || state.disable_surface_sync)
         return false;
 
     if (vector_utils::find_index(cpu_surfaces_changed, source_address) != -1) {
         // there is a transfer operation pending on this surface, just add the callback after and we are done
-        state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(callback)) });
+        push_cleanup_request(state, std::move(callback));
 
         if (target_address)
             cpu_surfaces_changed.push_back(target_address);
@@ -2180,14 +2195,14 @@ bool VKSurfaceCache::check_for_surface(MemState &mem, Address source_address, Ca
             std::lock_guard<std::mutex> lock(state.multithread_pool_mutex);
             state.device.freeCommandBuffers(state.multithread_command_pool, surface_cmd);
         };
-        state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(vk_callback)) });
+        push_cleanup_request(state, std::move(vk_callback));
 
         if (returned_info)
             state.request_queue.push(PostSurfaceSyncRequest{ returned_info });
     }
 
     // now push the callback
-    state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(callback)) });
+    push_cleanup_request(state, std::move(callback));
 
     if (target_address)
         cpu_surfaces_changed.push_back(target_address);
@@ -2262,7 +2277,7 @@ void VKSurfaceCache::submit_immediate_surface_sync(ColorSurfaceCacheInfo &surfac
         std::lock_guard<std::mutex> lock(state.multithread_pool_mutex);
         state.device.freeCommandBuffers(state.multithread_command_pool, surface_cmd);
     };
-    state.request_queue.push(CallbackRequest{ new CallbackRequestFunction(std::move(vk_callback)) });
+    push_cleanup_request(state, std::move(vk_callback));
 
     if (returned_info) {
         state.request_queue.push(PostSurfaceSyncRequest{ returned_info });

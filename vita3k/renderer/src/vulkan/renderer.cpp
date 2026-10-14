@@ -2088,13 +2088,16 @@ void VKState::unmap_memory(MemState &mem, Ptr<void> address) {
     {
         auto promise = std::make_shared<std::promise<void>>();
         std::future<void> future = promise->get_future();
-        request_queue.push(CallbackRequest{
-            new CallbackRequestFunction([promise]() { promise->set_value(); }),
-            /* wait_for_gpu = */ false });
-        while (future.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
-            if (render_abort.load(std::memory_order_relaxed) || request_queue.is_aborted())
-                break;
+        if (request_queue.push(CallbackRequest{
+                new CallbackRequestFunction([promise]() { promise->set_value(); }),
+                /* wait_for_gpu = */ false })) {
+            while (future.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
+                if (render_abort.load(std::memory_order_relaxed) || request_queue.is_aborted())
+                    break;
+            }
         }
+        // A refused push means the wait thread is gone, so there is nothing left
+        // to drain and nothing would ever set the promise.
     }
 
     // A range that fell back to page-table holds a vkutil::Buffer

@@ -77,18 +77,21 @@ public:
         return std::make_unique<T>(item);
     }
 
-    void push(const T &item) {
+    // Returns false when the item was dropped because the queue is aborted, so a
+    // caller whose item owns a resource can release it instead of leaking it.
+    bool push(const T &item) {
         {
             std::unique_lock<std::mutex> mlock(mutex_);
             while (!aborted && queue_.size() == maxPendingCount_) {
                 cond_.wait(mlock);
             }
             if (aborted) {
-                return;
+                return false;
             }
             queue_.push(item);
         }
         condempty_.notify_one();
+        return true;
     }
 
     size_t size() {

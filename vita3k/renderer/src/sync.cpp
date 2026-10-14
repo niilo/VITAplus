@@ -127,8 +127,12 @@ void finish(State &state, Context *context) {
         auto &vk_state = static_cast<vulkan::VKState &>(state);
         auto promise = std::make_shared<std::promise<void>>();
         std::future<void> future = promise->get_future();
-        vk_state.request_queue.push(vulkan::CallbackRequest{
-            new vulkan::CallbackRequestFunction([promise]() { promise->set_value(); }), /* wait_for_gpu = */ true });
+        // A refused push means the wait thread is gone and nothing would ever set
+        // the promise, so skip the wait rather than spin on it.
+        if (!vk_state.request_queue.push(vulkan::CallbackRequest{
+                new vulkan::CallbackRequestFunction([promise]() { promise->set_value(); }), /* wait_for_gpu = */ true })) {
+            return;
+        }
 
         while (future.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
             if (state.render_abort.load(std::memory_order_relaxed) || vk_state.request_queue.is_aborted())

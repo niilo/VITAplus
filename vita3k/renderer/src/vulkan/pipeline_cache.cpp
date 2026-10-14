@@ -81,13 +81,13 @@ struct CompileRequest {
     bool has_color_surface_data;
     shader::Hints hints;
 
-    // the content of the record useful for the pipeline creation
-    alignas(8) uint8_t record_data[record_pipeline_len];
-
-    const GxmRecordState *get_record() {
-        // note: this object is only half defined, but we are only looking at the part that's defined
-        return reinterpret_cast<const GxmRecordState *>(record_data);
-    }
+    // The whole record, not just the prefix the pipeline needs today. It used to
+    // be a byte array of record_pipeline_len with a reinterpret_cast over it, on
+    // the grounds that only the defined prefix is ever read. That holds, but it
+    // is a trap: anything reading a later field reads past the storage. A full
+    // record costs a pointer chase the compile thread already pays for the two
+    // program bindings.
+    GxmRecordState record;
 };
 
 PipelineCache::PipelineCache(VKState &state)
@@ -1070,7 +1070,7 @@ void PipelineCache::compiler_thread(MemState &mem) {
             // use this as an instruction to stop the thread
             break;
 
-        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_binding, *request->fragment_program_binding, *request->get_record(), request->has_color_surface_data, request->hints, mem);
+        vk::Pipeline pipeline = compile_pipeline(request->type, request->render_pass, *request->vertex_program_binding, *request->fragment_program_binding, request->record, request->has_color_surface_data, request->hints, mem);
         // mark a refused pipeline as failed rather than leaving it null, which would make every
         // later draw queue the same doomed compilation again
         *request->pipeline = pipeline ? pipeline : std::bit_cast<vk::Pipeline, uint64_t>(~1ULL);
@@ -1540,7 +1540,7 @@ vk::Pipeline PipelineCache::retrieve_pipeline(VKContext &context, SceGxmPrimitiv
             .has_color_surface_data = static_cast<bool>(record.color_surface.data),
             .hints = context.shader_hints
         };
-        memcpy(request->record_data, &record, record_pipeline_len);
+        request->record = record;
         it->second = pipeline_compiling;
 
         pipeline_compile_queue.enqueue(pipeline_compile_queue_token, request);
