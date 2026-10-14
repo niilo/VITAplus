@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <ngs/modules/atrac9.h>
+#include <ngs/modules/envelope.h>
 #include <ngs/scheduler.h>
 #include <ngs/system.h>
 
@@ -127,8 +128,14 @@ bool VoiceScheduler::stop(const MemState &mem, Voice *voice) {
         return false;
 
     voice->transition(mem, VOICE_STATE_AVAILABLE);
-    if (!voice->is_paused)
-        deque_voice(Ptr<Voice>(voice, mem));
+
+    // is_paused is set by sceNgsVoicePause and gates the queue insert in play.
+    // Leaving it set here meant a voice that was paused and then stopped stayed
+    // flagged, so a later play inserted nothing and the voice never produced
+    // sound again for the rest of the session.
+    voice->is_paused = false;
+
+    deque_voice(Ptr<Voice>(voice, mem));
 
     return true;
 }
@@ -352,13 +359,52 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
         ngs::Voice *const voice = handle.get(mem);
         // Modify the state, in peace....
         std::unique_lock<std::mutex> voice_lock(*voice->voice_mutex);
+
+        // An earlier voice's guest callback may have paused or stopped this one
+        // after queue_copy was taken. Read the current state rather than the
+        // snapshot, or a stopped voice runs another tick and a key-off is undone.
+        if (voice->is_paused || (voice->state != VOICE_STATE_ACTIVE && voice->state != VOICE_STATE_FINALIZING)) {
+            continue;
+        }
+
         memset(voice->products, 0, sizeof(voice->products));
 
         bool finished = false;
         uint32_t finished_module = 0;
 
         const auto &voice_modules = voice->rack.get(mem)->modules;
-        for (size_t i = 0; i < voice_modules.size(); i++) {
+
+        if (voice->state == VOICE_STATE_FINALIZING) {
+            // A looping source cannot reach an end after key-off, so with no
+            // release envelope the voice would never finish. Complete it here,
+            // before any more audio is decoded, and still let the callback run
+            // from the deferred boundary below.
+            bool has_release_envelope = false;
+            for (size_t i = 0; i < voice_modules.size(); ++i) {
+                const auto &module = voice_modules[i];
+                if (!module || module->module_id() != SCE_NGS_ENVELOPE_MODULE_ID) {
+                    continue;
+                }
+                ModuleData &data = voice->datas[i];
+                if (data.is_bypassed) {
+                    continue;
+                }
+                const auto *params = data.get_parameters<SceNgsEnvelopeParams>(mem);
+                has_release_envelope |= params && params->desc.id == SCE_NGS_ENVELOPE_PARAMS_STRUCT_ID && params->uNumPoints != 0;
+            }
+
+            if (!has_release_envelope) {
+                finished = true;
+                for (const auto &module : voice_modules) {
+                    if (module) {
+                        finished_module = module->module_id();
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (size_t i = 0; !finished && i < voice_modules.size(); i++) {
             if (voice_modules[i]) {
                 if (voice_modules[i]->process(kern, mem, thread_id, voice->datas[i], scheduler_lock, voice_lock)) {
                     finished = true;

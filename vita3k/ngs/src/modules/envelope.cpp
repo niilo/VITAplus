@@ -101,9 +101,12 @@ bool EnvelopeModule::process(KernelState &kern, const MemState &mem, const SceUI
     };
 
     const bool keyed_off = voice->is_keyed_off || voice->state == VOICE_STATE_FINALIZING;
-    const float start_gain = logical->releasing || keyed_off
-        ? logical->release_height
-        : height_at_current();
+    // A release continues from last tick's height, but its FIRST tick continues
+    // from where the envelope actually is. release_height is 0 until a release
+    // has run once, so reading it here started every first release from silence
+    // and multiplied the whole tail by zero, which is the click the key-off
+    // path is meant to remove.
+    const float start_gain = logical->releasing ? logical->release_height : height_at_current();
 
     // advance one tick
     if (!logical->releasing && keyed_off) {
