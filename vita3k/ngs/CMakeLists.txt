@@ -38,4 +38,26 @@ if(NOT ANDROID)
 	target_include_directories(ngs-tests PRIVATE include)
 	target_link_libraries(ngs-tests PRIVATE googletest)
 	add_test(NAME ngs COMMAND ngs-tests)
+
+	# The scheduler tests drive Voice and VoiceScheduler, which need guest
+	# memory and a KernelState, so they link the whole ngs library.
+	add_executable(
+		ngs-scheduler-tests
+		tests/scheduler_tests.cpp
+	)
+
+	# kernel/state.h reaches cpu/common.h and rtc/rtc.h, which reach fmt and
+	# spdlog, and the kernel target keeps those include directories to itself.
+	target_include_directories(ngs-scheduler-tests PRIVATE
+		include
+		../mem/include
+		../kernel/include
+		../cpu/include
+		../rtc/include
+		../emuenv/include
+		../util/include
+		../../external/fmt/include
+		../../external/spdlog/include)
+	target_link_libraries(ngs-scheduler-tests PRIVATE ngs googletest)
+	add_test(NAME ngs-scheduler COMMAND ngs-scheduler-tests)
 endif()
