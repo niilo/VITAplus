@@ -50,7 +50,11 @@ void PlayerModule::on_state_change(const MemState &mem, ModuleData &data, const 
         logical->starved_ticks = 0;
 
         std::memset(&logical->adpcm_history, 0, sizeof(logical->adpcm_history));
-    } else if (data.parent.get(mem)->is_keyed_off) {
+    } else if (data.parent.get(mem)->is_keyed_off && data.parent.get(mem)->state == VOICE_STATE_AVAILABLE) {
+        // Only rewind once the voice is fully stopped. A key-off moves it to
+        // FINALIZING first and leaves it there while the release runs, and
+        // rewinding there restarts the stream at the top of the loop for the
+        // whole tail.
         state->current_buffer = params->start_buffer;
         state->current_byte_position_in_buffer = params->start_bytes;
         logical->current_loop_count = 0;

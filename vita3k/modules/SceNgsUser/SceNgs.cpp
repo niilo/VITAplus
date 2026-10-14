@@ -986,13 +986,24 @@ EXPORT(SceInt32, sceNgsVoiceKeyOff, ngs::Voice *voice) {
     if (!system)
         return SCE_NGS_OK; // rack already released, voice is already dead
 
-    voice->is_keyed_off = true;
-    system->voice_scheduler.off(emuenv.mem, voice);
-    voice->is_keyed_off = false;
-    system->voice_scheduler.stop(emuenv.mem, voice);
+    ngs::VoiceScheduler &scheduler = system->voice_scheduler;
+    {
+        // Both locks are released before this returns. The updater calls the
+        // finished callback with neither held, so the guest is not re-entered
+        // while the caller still holds a lock the callback path takes.
+        const std::lock_guard<std::recursive_mutex> scheduler_lock(scheduler.mutex);
+        const std::lock_guard<std::mutex> voice_lock(*voice->voice_mutex);
 
-    // call the finish callback, I got no idea what the module id should be in this case
-    voice->invoke_callback(emuenv.kernel, emuenv.mem, thread_id, voice->finished_callback, voice->finished_callback_user_data, 0);
+        voice->is_keyed_off = true;
+        scheduler.off(emuenv.mem, voice);
+        voice->is_keyed_off = false;
+    }
+
+    // Key-off requests release processing, nothing more. The voice stays in
+    // VOICE_STATE_FINALIZING and in the queue while its envelope releases, and
+    // the updater stops it and calls its finished callback when a module
+    // actually finishes. Stopping it here cut the sound with a click, and
+    // calling the callback here emitted a second one for a voice already stopped.
     return SCE_NGS_OK;
 }
 

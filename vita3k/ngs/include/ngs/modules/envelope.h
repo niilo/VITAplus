@@ -20,6 +20,7 @@
 #include <ngs/types.h>
 
 #define SCE_NGS_ENVELOPE_PARAMS_STRUCT_ID 0x01015CE3
+#define SCE_NGS_ENVELOPE_MODULE_ID 0x5CE3
 
 #define SCE_NGS_ENVELOPE_MAX_POINTS 4
 
@@ -69,7 +70,7 @@ public:
     bool process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) override;
     void on_param_change(const MemState &mem, ModuleData &data) override;
     void on_key_on(const MemState &mem, ModuleData &data) override;
-    uint32_t module_id() const override { return 0x5CE3; }
+    uint32_t module_id() const override { return SCE_NGS_ENVELOPE_MODULE_ID; }
     uint32_t get_guest_state_size() const override { return sizeof(SceNgsEnvelopeStates); }
 
     static constexpr uint32_t get_max_parameter_size() {
