@@ -92,3 +92,48 @@ all and stopped right after `sceIoOpen` on `app0:/gamedata.bin` and a probe
 for the missing `SlotParam_1.bin`, where earlier sessions reached NGS init
 first. That difference is not explained yet and belongs in the answer if this
 ticket is worked.
+### 2026-10-15: a bisect named a commit, and the commit is innocent
+
+An older build, `00514fb7`, 25 commits behind master, boots Uncharted to the
+level on this device. Two runs, both reached the saved chapter, 23.4 and 25.5
+FPS. Master stalls every time it is tried. So the degradation is real and it is
+in that range.
+
+`git bisect start master 00514fb7`, judged per commit by building the APK,
+installing it, launching Uncharted, waiting 100 s and reading the emulator's own
+log, named this as the first bad commit:
+
+    a99ad6f6  Return success from NGS exports on a voice whose rack was released
+
+Its parent `593351a9` came back good, so the boundary is adjacent. It is the
+wrong answer, and here is the proof.
+
+Re-testing `a99ad6f6` itself on this device: 3169 `[NGSRATE]` lines, zero hang
+watchdogs. It boots. A commit cannot be the deterministic cause of a stall that
+a build containing it did not hit, and this one did not, earlier today at 20:40
+as well.
+
+Reverting it on top of master does not help either, in three steps:
+
+1. the five `if (!system) return SCE_NGS_OK` in KeyOff, Kill, Pause, Play and
+   Resume: still stalls
+2. plus `sceNgsPatchCreateRouting` and `sceNgsVoiceGetOutputPatch`: still stalls
+3. plus the `if (!patch) return SCE_NGS_OK` in SetVolume, SetVolumes and
+   SetVolumesMatrix, which is all nine returns the commit introduced: still
+   stalls
+
+What the numbers actually say, counted runs rather than one sample each:
+
+| Build | Boots | Stalls |
+| --- | --- | --- |
+| `00514fb7` and older recorded runs | 4 | 0 |
+| master and master plus the NGS work | 1 | 7 |
+
+So the failure is a timing-dependent stall that the newer code makes much more
+likely, not a switch one commit flipped. A bisect with one sample per commit
+cannot tell that apart from a single cause: a commit that shifts timing produces
+exactly the same kind of boundary.
+
+Do not repeat the bisect with single samples. Either run two or three times per
+step, or work the plan in this ticket, which is about the wait that never
+returns rather than about which commit introduced it.
