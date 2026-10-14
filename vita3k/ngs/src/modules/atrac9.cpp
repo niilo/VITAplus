@@ -61,7 +61,11 @@ void Atrac9Module::on_state_change(const MemState &mem, ModuleData &data, const 
                 LOG_DEBUG("[NGSLIFE] AT9 key-ons so far: {}", n);
         }
         std::memset(&logical->saved_state, 0, sizeof(logical->saved_state));
-    } else if (data.parent.get(mem)->is_keyed_off) {
+    } else if (data.parent.get(mem)->is_keyed_off && data.parent.get(mem)->state == VOICE_STATE_AVAILABLE) {
+        // Only rewind once the voice is fully stopped. A key-off moves it to
+        // FINALIZING first and leaves it there while the release runs, and
+        // rewinding there restarts the stream at the top of the loop for the
+        // whole tail.
         state->current_byte_position_in_buffer = 0;
         logical->current_loop_count = 0;
         state->current_buffer = 0;
