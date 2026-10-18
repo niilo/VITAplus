@@ -248,11 +248,25 @@ inline static int handle_timeout(KernelState &kernel, const ThreadStatePtr &thre
     return SCE_KERNEL_OK;
 }
 
+// The name argument comes from guest memory and is optional on the Vita, so
+// every *_create has to survive a null pointer. The length check below is a
+// strlen, and strlen of null ends the process.
+inline static int check_object_name(const char *export_name, const char *name) {
+    if (name) {
+        return SCE_KERNEL_OK;
+    }
+    LOG_ERROR_ONCE("{} called with a null name; the name is optional on hardware", export_name);
+    return SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+}
+
 // *****************
 // * Simple events *
 // *****************
 
 SceUID simple_event_create(KernelState &kernel, MemState &mem, const char *export_name, const char *name, SceUID thread_id, SceUInt32 attr, SceUInt32 init_pattern) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -454,6 +468,9 @@ inline uint64_t get_current_time() {
 }
 
 SceUID timer_create(KernelState &kernel, MemState &mem, const char *export_name, const char *name, SceUID thread_id, SceUInt32 attr) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -483,6 +500,9 @@ SceUID timer_create(KernelState &kernel, MemState &mem, const char *export_name,
 }
 
 SceUID timer_find(KernelState &kernel, const char *export_name, const char *pName) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
 
@@ -684,6 +704,9 @@ SceInt32 timer_stop(KernelState &kernel, const char *export_name, SceUID thread_
 // *********
 
 SceUID mutex_create(SceUID *uid_out, KernelState &kernel, MemState &mem, const char *export_name, const char *mutex_name, SceUID thread_id, SceUInt attr, int init_count, Ptr<SceKernelLwMutexWork> workarea, SyncWeight weight) {
+    if (auto error = check_object_name(export_name, mutex_name))
+        return error;
+
     if ((strlen(mutex_name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -742,6 +765,9 @@ SceUID mutex_create(SceUID *uid_out, KernelState &kernel, MemState &mem, const c
 }
 
 SceUID mutex_find(KernelState &kernel, const char *export_name, const char *pName) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
 
@@ -991,6 +1017,9 @@ MutexPtr mutex_get(KernelState &kernel, const char *export_name, SceUID thread_i
 // **************
 
 SceUID rwlock_create(KernelState &kernel, MemState &mem, const char *export_name, const char *name, SceUID thread_id, SceUInt32 attr) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -1171,6 +1200,9 @@ SceInt32 rwlock_delete(KernelState &kernel, MemState &mem, const char *export_na
 // **************
 
 SceUID semaphore_create(KernelState &kernel, const char *export_name, const char *name, SceUID thread_id, SceUInt attr, int init_val, int max_val) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -1202,6 +1234,9 @@ SceUID semaphore_create(KernelState &kernel, const char *export_name, const char
 }
 
 SceUID semaphore_find(KernelState &kernel, const char *export_name, const char *pName) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
 
@@ -1386,6 +1421,9 @@ int semaphore_cancel(KernelState &kernel, const char *export_name, SceUID thread
 // **********************
 
 SceUID condvar_create(SceUID *uid_out, KernelState &kernel, const char *export_name, const char *name, SceUID thread_id, SceUInt attr, SceUID assoc_mutexid, SyncWeight weight) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -1438,6 +1476,14 @@ int condvar_wait(KernelState &kernel, MemState &mem, const char *export_name, Sc
     const ThreadStatePtr thread = kernel.get_thread(thread_id);
     if (!thread) // the thread is being torn down so fail its last import instead of crashing the process
         return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID);
+
+    // Waiting on a condvar requires holding its mutex. A caller that does not own
+    // it gets an error at once on hardware. Waiting anyway parks the thread with
+    // nobody able to signal it, because the owner does not know a waiter exists.
+    if (condvar->associated_mutex && condvar->associated_mutex->owner_id != thread_id) {
+        return RET_ERROR(condvar->associated_mutex->workarea ? SCE_KERNEL_ERROR_LW_MUTEX_NOT_OWNED
+                                                             : SCE_KERNEL_ERROR_MUTEX_NOT_OWNED);
+    }
 
     thread->set_wait_reason("cond", condvar->uid, condvar->associated_mutex ? condvar->associated_mutex->uid : 0);
     std::unique_lock<std::mutex> condition_variable_lock(condvar->mutex);
@@ -1595,6 +1641,9 @@ SceUID eventflag_clear(KernelState &kernel, const char *export_name, SceUID evfI
 }
 
 SceUID eventflag_create(KernelState &kernel, const char *export_name, SceUID thread_id, const char *pName, SceUInt32 attr, SceUInt32 initPattern) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (((attr & 0x80) == 0x80) && (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -1624,6 +1673,9 @@ SceUID eventflag_create(KernelState &kernel, const char *export_name, SceUID thr
 }
 
 SceUID eventflag_find(KernelState &kernel, const char *export_name, const char *pName) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
 
@@ -2088,6 +2140,9 @@ int eventflag_delete(KernelState &kernel, const char *export_name, SceUID thread
 // *************
 
 SceUID msgpipe_create(KernelState &kernel, const char *export_name, const char *name, SceUID thread_id, SceUInt attr, SceSize bufSize) {
+    if (auto error = check_object_name(export_name, name))
+        return error;
+
     if ((strlen(name) > 31) && ((attr & 0x80) == 0x80)) {
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
     }
@@ -2121,6 +2176,9 @@ SceUID msgpipe_create(KernelState &kernel, const char *export_name, const char *
 }
 
 SceUID msgpipe_find(KernelState &kernel, const char *export_name, const char *pName) {
+    if (auto error = check_object_name(export_name, pName))
+        return error;
+
     if (strlen(pName) > KERNELOBJECT_MAX_NAME_LENGTH)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
 

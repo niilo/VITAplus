@@ -161,14 +161,24 @@ EXPORT(int, sceKernelFreeMemBlockForVM, SceUID uid) {
     const auto state = emuenv.kernel.obj_store.get<SysmemState>();
     const auto guard = std::lock_guard<std::mutex>(state->mutex);
 
-    assert(uid >= 0);
-    const Blocks::const_iterator block = state->vm_blocks.find(uid);
-    assert(block != state->vm_blocks.end());
+    if (uid < 0)
+        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_BLOCK_ID);
 
-    free(emuenv.mem, block->second->mappedBase.address());
-    state->allocated_user -= block->second->size;
-    state->blocks.erase(block);
-    state->vm_blocks.erase(block);
+    // The uid is looked up in vm_blocks to confirm it is a VM block, but the two
+    // maps hold their own nodes, so each erase needs its own lookup. Passing one
+    // map's iterator to another's erase unlinks a node twice.
+    //
+    // The counter was raised by mappedSize in sceKernelAllocMemBlockForVM, so
+    // that is what has to come back off. The guest-visible size field is only
+    // sizeof(SceKernelMemBlockInfo).
+    const auto vm_block = state->vm_blocks.find(uid);
+    if (vm_block == state->vm_blocks.end())
+        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_BLOCK_ID);
+
+    free(emuenv.mem, vm_block->second->mappedBase.address());
+    state->allocated_user -= vm_block->second->mappedSize;
+    state->blocks.erase(uid);
+    state->vm_blocks.erase(vm_block);
 
     return SCE_KERNEL_OK;
 }
