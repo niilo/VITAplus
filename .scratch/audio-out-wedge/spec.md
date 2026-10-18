@@ -92,3 +92,15 @@ times out of 19, and no single commit is responsible, because the failure is a
 timing-dependent stall rather than a switch one commit flipped. It is not a
 frame rate regression; where the current build runs at all it is the faster of
 the two.
+
+## A better-identified regression
+
+`issues/03-uniform-buffer-size-regression.md` is a visual regression with an
+exact one-commit boundary, found later by deploying revisions with a clean
+shader cache: `e6bc600c` renders correctly and its child `651f8a23` gives
+blinking textures and wrong colours. It is in the default uniform buffer size,
+and the guest is told one size while the renderer reserves another. It may be
+the cause of the boot stall above, which is a hypothesis with a test rather
+than a finding.
+
+The directory name no longer describes everything in it.
