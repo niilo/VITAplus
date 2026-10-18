@@ -491,19 +491,6 @@ static spv::Function *make_f16_pack_func(spv::Builder &b, const SpirvUtilFunctio
     f16_pack_func->addParamPrecision(0, spv::DecorationRelaxedPrecision);
     spv::Id extracted = f16_pack_func->getParamId(0);
 
-    // PackHalf2x16 rounds to nearest and lets anything above 65504 become
-    // infinity. The hardware saturates, so a legitimate shader result just above
-    // the half range has to come back as 65504 rather than Inf.
-    const spv::Id half_max = b.makeFloatConstant(65504.0f);
-    const spv::Id half_min = b.makeFloatConstant(-65504.0f);
-    const spv::Id saturated = b.createBuiltinCall(type_f32_v2, utils.std_builtins, GLSLstd450FClamp,
-        { extracted, b.makeCompositeConstant(type_f32_v2, { half_min, half_min }), b.makeCompositeConstant(type_f32_v2, { half_max, half_max }) });
-
-    // FClamp turns a NaN into one of the bounds, which would change the value.
-    // Select the original back where a component is NaN so it survives the pack.
-    const spv::Id is_nan = b.createUnaryOp(spv::OpIsNan, b.makeVectorType(b.makeBoolType(), 2), extracted);
-    extracted = b.createTriOp(spv::OpSelect, type_f32_v2, is_nan, extracted, saturated);
-
     // use packHalf2x16
     extracted = b.createBuiltinCall(type_ui32, utils.std_builtins, GLSLstd450PackHalf2x16, { extracted });
     extracted = b.createUnaryOp(spv::OpBitcast, type_f32, extracted);

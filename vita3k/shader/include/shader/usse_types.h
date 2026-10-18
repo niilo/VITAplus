@@ -40,9 +40,6 @@ enum class Opcode {
 #undef OPCODE
 };
 
-// The order matches the 3-bit predicate field in the instruction, which is 0 to
-// 7. PN, the result-negation predicate, is hardware value 7, so it has to come
-// before NEGP2 or it cannot be decoded at all.
 enum class ExtPredicate : uint8_t {
     NONE,
     P0,
@@ -51,8 +48,8 @@ enum class ExtPredicate : uint8_t {
     P3,
     NEGP0,
     NEGP1,
-    PN,
-    NEGP2
+    NEGP2,
+    PN
 };
 
 enum class ExtVecPredicate : uint8_t {

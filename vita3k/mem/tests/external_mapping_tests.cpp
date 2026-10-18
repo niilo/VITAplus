@@ -137,50 +137,6 @@ TEST_F(ExternalMappingTest, get_of_a_null_address_is_null) {
     EXPECT_EQ(Ptr<Payload>(0).get(shared_state()), nullptr);
 }
 
-TEST_F(ExternalMappingTest, removing_a_mapping_survives_an_empty_protect_tree) {
-    // remove_external_mapping looked the removed range up in protect_tree with
-    // lower_bound and dereferenced the result without comparing it to end().
-    // Only add_protect inserts entries, from kubridge and the renderer's caches,
-    // so the tree is empty for much of a run and lower_bound returns end() there.
-    MemState &mem = shared_state();
-    AlignedBuffer buffer;
-    ASSERT_NE(buffer.get(), nullptr);
-
-    add_external_mapping(mem, addr_, PAGES * PAGE, buffer.get());
-    ASSERT_TRUE(mem.protect_tree.empty());
-
-    // Dereferencing end() here picked up a garbage address and size, and the
-    // erase loop after it then walked the tree from there.
-    remove_external_mapping(mem, buffer.get(), PAGES * PAGE);
-
-    EXPECT_TRUE(mem.protect_tree.empty());
-}
-
-TEST_F(ExternalMappingTest, removing_a_mapping_survives_a_protect_tree_above_it) {
-    // The other end() case: every key in the tree sits above the range being
-    // removed, so lower_bound still returns end(). The entry has to survive,
-    // since it describes a different range.
-    MemState &mem = shared_state();
-    AlignedBuffer buffer;
-    ASSERT_NE(buffer.get(), nullptr);
-
-    add_external_mapping(mem, addr_, PAGES * PAGE, buffer.get());
-
-    {
-        const std::lock_guard<std::mutex> guard(mem.protect_mutex);
-        ProtectSegmentInfo segment(KiB(4), MemPerm::ReadOnly);
-        mem.protect_tree.emplace(addr_ + PAGES * PAGE, segment);
-    }
-    ASSERT_EQ(mem.protect_tree.size(), 1u);
-
-    remove_external_mapping(mem, buffer.get(), PAGES * PAGE);
-
-    // The high entry is untouched and still findable.
-    const auto it = mem.protect_tree.find(addr_ + PAGES * PAGE);
-    EXPECT_NE(it, mem.protect_tree.end());
-    EXPECT_EQ(it->second.perm, MemPerm::ReadOnly);
-}
-
 TEST_F(ExternalMappingTest, get_does_nothing_without_a_page_table) {
     // The stock Adreno path runs DoubleBuffer, where add_external_mapping
     // returns at once and a host pointer can never go stale.

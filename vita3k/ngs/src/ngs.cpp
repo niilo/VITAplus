@@ -337,13 +337,6 @@ void Voice::invoke_callback(KernelState &kernel, const MemState &mem, const SceU
     }
 
     const ThreadStatePtr thread = kernel.get_thread(thread_id);
-    // get_thread returns null for a thread being torn down, and this runs on the
-    // audio thread. There is no guest left to run the callback on, so drop it.
-    if (!thread) {
-        LOG_WARN("NGS: dropping a callback for thread {}, which no longer exists", thread_id);
-        return;
-    }
-
     const Address callback_info_addr = stack_alloc(*thread->cpu, sizeof(SceNgsCallbackInfo));
 
     SceNgsCallbackInfo *info = Ptr<SceNgsCallbackInfo>(callback_info_addr).get(mem);
@@ -492,52 +485,6 @@ void release_rack(State &ngs, const MemState &mem, System *system, Rack *rack) {
     // this function should only be called outside of ngs update and with the scheduler mutex acquired (except when releasing the system)
     if (!rack)
         return;
-
-    // Other racks can hold patches that point into this one. Their destructor has
-    // run by the time the scheduler next walks their patch list, so clear those
-    // handles first. Each source voice's own lock is held for the rewrite.
-    for (const auto &other : system->racks) {
-        Rack *other_rack = other.get(mem);
-        if (!other_rack || other_rack == rack) {
-            continue;
-        }
-
-        for (const auto &voice_handle : other_rack->voices) {
-            Voice *other_voice = voice_handle.get(mem);
-            if (!other_voice) {
-                continue;
-            }
-
-            if (!other_voice->voice_mutex) {
-                continue;
-            }
-            const std::lock_guard<std::mutex> voice_guard(*other_voice->voice_mutex);
-            for (auto &output_patches : other_voice->patches) {
-                for (auto &patch_handle : output_patches) {
-                    Patch *patch = patch_handle.get(mem);
-                    if (!patch) {
-                        continue;
-                    }
-
-                    // A patch's dest and source are Voices, so the rack they belong to
-                    // is what has to be compared, through the voice's own rack
-                    // handle.
-                    const Voice *dest_voice = patch->dest.get(mem);
-                    const Voice *source_voice = patch->source.get(mem);
-                    const bool into_released = (dest_voice && dest_voice->rack.get(mem) == rack)
-                        || (source_voice && source_voice->rack.get(mem) == rack);
-
-                    if (into_released) {
-                        LOG_DEBUG("[NGSLIFE] clearing patch {} of voice {} that points into released rack {}",
-                            fmt::ptr(patch), fmt::ptr(other_voice), fmt::ptr(rack));
-                        patch->output_sub_index = -1;
-                        patch->dest = Ptr<Voice>();
-                        patch->dest_index = -1;
-                    }
-                }
-            }
-        }
-    }
 
     // remove all queued voices
     for (const auto &voice : rack->voices) {

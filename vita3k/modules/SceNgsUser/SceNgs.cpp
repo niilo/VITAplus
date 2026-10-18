@@ -319,14 +319,6 @@ EXPORT(int, sceNgsPatchRemoveRouting, Ptr<ngs::Patch> patch) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
-    // A patch holds a guest handle to its source voice. Releasing the rack that
-    // voice lived in leaves that address pointing at destructed memory, and the
-    // address is still valid as far as get() can tell, so validate it the same
-    // way as the routing path above.
-    if (!patch.valid(emuenv.mem)) {
-        return RET_ERROR(SCE_NGS_ERROR);
-    }
-
     ngs::Voice *source = patch.get(emuenv.mem)->source.get(emuenv.mem);
     if (!source || !source->remove_patch(emuenv.mem, patch)) {
         return RET_ERROR(SCE_NGS_ERROR);

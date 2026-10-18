@@ -188,25 +188,6 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
     constexpr int8_t max_starved_ticks = 16;
 
     while (static_cast<int>(logical->decoded_pcm.available_frames()) < granularity) {
-        // A buffer with a valid pointer and zero bytes carries no samples. The
-        // game published a chain and this link is a placeholder, so follow
-        // next_buffer_index to one that has audio instead of stalling the chain.
-        // The walk is bounded by the number of buffers the module can hold.
-        if (state->current_buffer != -1
-            && params->buffer_params[state->current_buffer].buffer
-            && params->buffer_params[state->current_buffer].bytes_count == 0
-            && state->current_byte_position_in_buffer == 0
-            && state->bytes_consumed_since_key_on != 0) {
-            const SceInt16 next = params->buffer_params[state->current_buffer].next_buffer_index;
-            if (next >= 0 && next < SCE_NGS_PLAYER_MAX_BUFFERS
-                && params->buffer_params[next].buffer
-                && params->buffer_params[next].bytes_count > 0) {
-                state->current_buffer = next;
-                logical->current_loop_count = 0;
-                continue;
-            }
-        }
-
         if ((state->current_buffer == -1)
             || !params->buffer_params[state->current_buffer].buffer
             || (params->buffer_params[state->current_buffer].bytes_count == 0)) {
@@ -243,11 +224,7 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
             // Enable looping over the buffer if needed
             if (params->buffer_params[state->current_buffer].loop_count != -1
                 && logical->current_loop_count > params->buffer_params[state->current_buffer].loop_count) {
-                // next_buffer_index comes from the guest and is an SceInt16. Only -1 was
-                // checked, so any other out-of-range value indexed past
-                // buffer_params. Same bound as the atrac9 module.
-                const SceInt16 next = params->buffer_params[state->current_buffer].next_buffer_index;
-                state->current_buffer = (next >= 0 && next < SCE_NGS_PLAYER_MAX_BUFFERS) ? next : -1;
+                state->current_buffer = params->buffer_params[state->current_buffer].next_buffer_index;
                 logical->current_loop_count = 0;
 
                 if (state->current_buffer == -1) {
@@ -274,19 +251,6 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
         }
 
         logical->starved_ticks = 0;
-
-        // channels is a guest SceInt8, so it can be up to 127. Both adpcm_history
-        // arrays hold two entries, so an unclamped copy writes past them, on the
-        // audio thread, from a guest value.
-        if (params->channels < 1 || params->channels > SCE_NGS_PLAYER_MAX_PCM_CHANNELS) {
-            static uint32_t bad_channels = 0;
-            const uint32_t n = ++bad_channels;
-            if (n <= 16 || (n & 1023) == 0) {
-                LOG_WARN("NGS player: {} channels requested, expected 1 to {}; finishing the voice",
-                    static_cast<int>(params->channels), SCE_NGS_PLAYER_MAX_PCM_CHANNELS);
-            }
-            return true;
-        }
 
         runtime->decoder->source_channels = params->channels;
         runtime->decoder->source_frequency = params->playback_frequency;

@@ -565,21 +565,7 @@ void analyze(USSEBlockNode &root, USSEOffset end_offset, const AnalyzeReadFuncti
 
                 std::uint8_t predicate_writed_to = 0;
                 if (does_write_to_predicate(inst, predicate_writed_to)) {
-                    // Writing pN invalidates a condition that reads pN or that
-                    // reads its negation. The negated ordinals are named rather
-                    // than computed, because PN sits between NEGP1 and NEGP2 in
-                    // the enum and no longer follows NEGP0 in a run.
-                    static constexpr std::uint8_t negated_of[4] = {
-                        static_cast<std::uint8_t>(ExtPredicate::NEGP0),
-                        static_cast<std::uint8_t>(ExtPredicate::NEGP1),
-                        static_cast<std::uint8_t>(ExtPredicate::NEGP2),
-                        // There is no negated p3 on hardware, so writing p3
-                        // invalidates no negated condition.
-                        static_cast<std::uint8_t>(ExtPredicate::NONE),
-                    };
-                    const std::uint8_t written = predicate_writed_to;
-                    const std::uint8_t negated = written < std::size(negated_of) ? negated_of[written] : static_cast<std::uint8_t>(ExtPredicate::NONE);
-                    is_predicate_invalidated = (written + 1) == current_code->condition || negated == current_code->condition;
+                    is_predicate_invalidated = ((predicate_writed_to + 1) == current_code->condition) || ((predicate_writed_to + 5) == current_code->condition);
                 }
 
                 std::uint32_t offset_end = 0;

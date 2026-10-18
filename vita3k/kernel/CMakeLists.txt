@@ -9,7 +9,6 @@ set(SOURCE_LIST
 	include/kernel/debugger.h
 	include/kernel/load_self.h
 	include/kernel/callback.h
-	include/kernel/uid_class.h
 	src/kernel.cpp
 	src/thread.cpp
 	src/debugger.cpp
@@ -17,7 +16,6 @@ set(SOURCE_LIST
 	src/sync_primitives.cpp
 	src/relocation.cpp
 	src/callback.cpp
-	src/uid_class.cpp
 )
 
 add_library(

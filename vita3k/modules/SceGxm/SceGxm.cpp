@@ -2468,15 +2468,7 @@ static void gxmSetUniformBuffers(renderer::State &state, GxmState &gxm, SceGxmCo
 
         uint32_t bytes_to_copy = sizes.at(i) * 4;
         if (sizes.at(i) == SCE_GXM_MAX_UB_IN_FLOAT_UNIT) {
-            // lower_bound returns the first region starting at or after the buffer, which is
-            // not the one containing it when that region starts earlier. When the
-            // next region begins after this one ends the containment test fails
-            // and the copy stays unbounded, so the read runs past the mapping.
-            // upper_bound and a step back finds the containing entry either way.
-            auto ite = gxm.memory_mapped_regions.upper_bound(buffers[i].address());
-            if (ite != gxm.memory_mapped_regions.begin()) {
-                --ite;
-            }
+            auto ite = gxm.memory_mapped_regions.lower_bound(buffers[i].address());
             if ((ite != gxm.memory_mapped_regions.end()) && ((ite->first + ite->second.size) > buffers[i].address())) {
                 // Bound the size
                 bytes_to_copy = std::min<uint32_t>(ite->first + ite->second.size - buffers[i].address(), bytes_to_copy);
@@ -2628,13 +2620,13 @@ static int gxmDrawElementGeneral(EmuEnvState &emuenv, const char *export_name, c
 
     // increase the ringbuffer position if a default vertex or fragment buffer was reserved, we know the new position will fit in the ringbuffer
     if (context->was_vert_default_uniform_reserved) {
-        const size_t size = (size_t)gxm_vertex_program.renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+        const size_t size = (size_t)vertex_program_gxp.default_uniform_buffer_count * 4;
         context->state.vertex_ring_buffer_used += size;
         context->was_vert_default_uniform_reserved = false;
     }
 
     if (context->was_frag_default_uniform_reserved) {
-        const size_t size = (size_t)gxm_fragment_program.renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+        const size_t size = (size_t)fragment_program_gxp.default_uniform_buffer_count * 4;
         context->state.fragment_ring_buffer_used += size;
         context->was_frag_default_uniform_reserved = false;
     }
@@ -2771,13 +2763,13 @@ EXPORT(int, sceGxmDrawPrecomputed, SceGxmContext *context, SceGxmPrecomputedDraw
     // increase the ringbuffer position if a default vertex or fragment buffer was reserved, we know the new position will fit in the ringbuffer
     // also even in a precomputed draw, this is needed as some parts of the pipeline can be not precomputed
     if (context->was_vert_default_uniform_reserved) {
-        const size_t size = (size_t)vertex_program->renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+        const size_t size = (size_t)vertex_program_gxp.default_uniform_buffer_count * 4;
         context->state.vertex_ring_buffer_used += size;
         context->was_vert_default_uniform_reserved = false;
     }
 
     if (context->was_frag_default_uniform_reserved) {
-        const size_t size = (size_t)fragment_program->renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+        const size_t size = (size_t)fragment_program_gxp.default_uniform_buffer_count * 4;
         context->state.fragment_ring_buffer_used += size;
         context->was_frag_default_uniform_reserved = false;
     }
@@ -3851,12 +3843,9 @@ EXPORT(int, sceGxmReserveFragmentDefaultUniformBuffer, SceGxmContext *context, P
         return RET_ERROR(SCE_GXM_ERROR_INVALID_POINTER);
 
     const auto fragment_program = context->state.fragment_program.get(emuenv.mem);
+    const auto program = fragment_program->program.get(emuenv.mem);
 
-    // Size the reservation from the renderer, not from the program header. A shader that reads pa
-    // registers can still declare default_uniform_buffer_count as 0, and then this would hand the
-    // game a null buffer and report success. renderer_data has already been through
-    // get_program_input, so it holds the size the draw will ask for and the two cannot disagree.
-    const size_t size = (size_t)fragment_program->renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+    const size_t size = (size_t)program->default_uniform_buffer_count * 4;
     // data for the ring buffer must be 4 bytes aligned
     context->state.fragment_ring_buffer_used = align(context->state.fragment_ring_buffer_used, 4);
     const size_t next_used = context->state.fragment_ring_buffer_used + size;
@@ -3899,10 +3888,9 @@ EXPORT(int, sceGxmReserveVertexDefaultUniformBuffer, SceGxmContext *context, Ptr
         return RET_ERROR(SCE_GXM_ERROR_INVALID_POINTER);
 
     const auto vertex_program = context->state.vertex_program.get(emuenv.mem);
+    const auto program = vertex_program->program.get(emuenv.mem);
 
-    // Same reasoning as sceGxmReserveFragmentDefaultUniformBuffer: take the size from the renderer
-    // so the reservation matches what the draw will read.
-    const size_t size = (size_t)vertex_program->renderer_data->uniform_buffer_sizes.at(SCE_GXM_DEFAULT_UNIFORM_BUFFER_CONTAINER_INDEX) * 4;
+    const size_t size = (size_t)program->default_uniform_buffer_count * 4;
     // data for the ring buffer must be 4 bytes aligned
     context->state.vertex_ring_buffer_used = align(context->state.vertex_ring_buffer_used, 4);
     const size_t next_used = context->state.vertex_ring_buffer_used + size;
@@ -4510,19 +4498,13 @@ EXPORT(int, sceGxmSetUniformDataF, void *uniformBuffer, const SceGxmProgramParam
         int component_left_to_copy = componentCount;
 
         while (component_left_to_copy > 0) {
-            // The first pass copies whatever is left in the vector the write
-            // starts in, which can be more components than were asked for. The
-            // loop below reduced its count only after the first iteration, so it
-            // ran one component past the end of the caller's array and past the
-            // range of the uniform buffer.
-            const int copy_count = std::min(component_to_copy_remain_per_elem, component_left_to_copy);
-            memcpy(dest, source, copy_count * comp_size);
+            memcpy(dest, source, component_to_copy_remain_per_elem * comp_size);
 
             // Add and align destination
-            dest += comp_size * copy_count + align_bytes;
-            source += copy_count * comp_size;
+            dest += comp_size * component_to_copy_remain_per_elem + align_bytes;
+            source += component_to_copy_remain_per_elem * comp_size;
 
-            component_left_to_copy -= copy_count;
+            component_left_to_copy -= component_to_copy_remain_per_elem;
             component_to_copy_remain_per_elem = std::min<int>(4, component_to_copy_remain_per_elem);
         }
     }

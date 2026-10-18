@@ -259,11 +259,6 @@ spv::Id USSETranslatorVisitor::vtst_impl(Instruction inst, ExtPredicate pred, in
     int index_tb_comp = 0;
     if (is_signed_integer_data_type(load_data_type)) {
         index_tb_comp = 1;
-    } else if (load_data_type == DataType::UINT32) {
-        // A sign test on UINT32 reads bit 31, which is component 1. The narrower
-        // unsigned types are all-positive in their significant range and use
-        // component 2.
-        index_tb_comp = 1;
     } else if (is_unsigned_integer_data_type(load_data_type)) {
         index_tb_comp = 2;
     }
@@ -486,26 +481,9 @@ bool USSETranslatorVisitor::vtstmsk(
     spv::Id output_type;
     spv::Id zeros;
     spv::Id ones;
-    bool f32_mask_bits = false;
     switch (load_data_type) {
     case DataType::F16:
     case DataType::F32:
-        // A masked test writes a bit mask, not a result value, so a float source
-        // cannot produce 0.0 and 1.0 here. The mask is all ones or all zeros
-        // across the source width, and the destination is retyped to the
-        // matching unsigned type to hold it.
-        if (tst_mask_type == 0) {
-            const bool half = load_data_type == DataType::F16;
-            output_type = type_ui32;
-            zeros = m_b.makeUintConstant(0);
-            ones = m_b.makeUintConstant(half ? 0xFFFFu : 0xFFFFFFFFu);
-            if (half) {
-                inst.opr.dest.type = DataType::UINT16;
-            } else {
-                f32_mask_bits = true;
-            }
-            break;
-        }
         output_type = type_f32;
         if (output_4)
             output_type = m_b.makeVectorType(output_type, 4);
@@ -549,11 +527,6 @@ bool USSETranslatorVisitor::vtstmsk(
     }
 
     pred_result = m_b.createOp(spv::OpSelect, output_type, { pred_result, ones, zeros });
-    // The f32 mask is stored as the float it replaces, so the register
-    // bookkeeping the rest of the translator does stays unchanged.
-    if (f32_mask_bits) {
-        pred_result = m_b.createUnaryOp(spv::OpBitcast, type_f32, pred_result);
-    }
 
     store(inst.opr.dest, pred_result);
 
