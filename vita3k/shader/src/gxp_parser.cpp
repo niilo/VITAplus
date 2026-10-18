@@ -229,24 +229,14 @@ ProgramInput get_program_input(const SceGxmProgram &program) {
         return buffer.index == 14;
     });
 
-    // A shader can read pa registers without saying how big the default uniform buffer is. The
-    // count is 0 in every program this game ships and in about a third of the programs in a
-    // three-game sample, and the recompiler then emits no copy for the register bank, so every
-    // pa read returns zero and the shader writes black. The register bank is a vec4 per
-    // register, so primary_reg_count is the number of registers the shader was compiled with
-    // and bounds every one of them.
-    const bool declares_default_ub = (program.default_uniform_buffer_count != 0);
-    const bool uses_pa_registers = (program.primary_reg_count != 0);
-    const std::uint32_t inferred_default_ub_size = static_cast<std::uint32_t>(program.primary_reg_count) * 4;
-
-    if ((default_ub_ite == program_input.uniform_buffers.end()) && (declares_default_ub || uses_pa_registers)) {
+    if ((default_ub_ite == program_input.uniform_buffers.end()) && (program.default_uniform_buffer_count != 0)) {
         // Must there be a one if possible
         UniformBuffer buffer;
         buffer.index = 14;
-        buffer.reg_block_size = declares_default_ub ? program.default_uniform_buffer_count : inferred_default_ub_size;
+        buffer.reg_block_size = program.default_uniform_buffer_count;
         buffer.reg_start_offset = 0;
         buffer.rw = false;
-        buffer.size = declares_default_ub ? program.default_uniform_buffer_count : inferred_default_ub_size;
+        buffer.size = program.default_uniform_buffer_count;
 
         program_input.uniform_buffers.push_back(buffer);
         uniform_buffers.emplace(14, buffer);
