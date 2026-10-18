@@ -452,8 +452,12 @@ void VoiceScheduler::update(KernelState &kern, const MemState &mem, const SceUID
         switch (op.type) {
         case PendingType::ReleaseRack:
             release_rack(*op.release_data.state, mem, op.system.get(mem), op.release_data.rack.get(mem));
-            // run callback (we know it is defined)
-            kern.get_thread(thread_id)->run_callback(op.release_data.callback, { op.release_data.rack.cast<void>().address() });
+            // Run the callback, which is known to be defined. The thread may
+            // have exited while the operation was queued, so check before
+            // dereferencing.
+            if (const ThreadStatePtr thread = kern.get_thread(thread_id)) {
+                thread->run_callback(op.release_data.callback, { op.release_data.rack.cast<void>().address() });
+            }
             break;
         }
 

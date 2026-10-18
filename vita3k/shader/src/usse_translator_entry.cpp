@@ -899,8 +899,14 @@ spv::Id USSERecompiler::get_condition_value(const std::uint8_t pred, const bool 
 
     if (predicator >= ExtPredicate::P0 && predicator <= ExtPredicate::P3) {
         pred_opr.num = static_cast<int>(predicator) - static_cast<int>(ExtPredicate::P0);
-    } else if (predicator >= ExtPredicate::NEGP0 && predicator <= ExtPredicate::NEGP2) {
+    } else if (predicator >= ExtPredicate::NEGP0 && predicator <= ExtPredicate::NEGP1) {
         pred_opr.num = static_cast<int>(predicator) - static_cast<int>(ExtPredicate::NEGP0);
+        do_neg = !do_neg;
+    } else if (predicator == ExtPredicate::PN || predicator == ExtPredicate::NEGP2) {
+        // PN negates the comparison result and NEGP2 negates the operand, which
+        // for a condition value are both a negation applied to p2. They are not
+        // a contiguous range any more, so they are named.
+        pred_opr.num = 2;
         do_neg = !do_neg;
     }
 

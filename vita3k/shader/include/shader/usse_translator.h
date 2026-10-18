@@ -142,7 +142,11 @@ private:
 
     const int get_repeat_offset(Operand &op, const std::uint8_t repeat_index, RepeatMode repeat_mode, RegisterBank bank) {
         if (repeat_mode == RepeatMode::INTERNAL || repeat_mode == RepeatMode::BOTH) {
-            if (bank == RegisterBank::FPINTERNAL) {
+            // With INTERNAL the repeat offset belongs to the internal repeat
+            // register alone, which is operand index 3. Handing it to every
+            // FPINTERNAL operand reads the wrong source registers, so a shader
+            // that packs a vector gets white or garbage.
+            if (bank == RegisterBank::FPINTERNAL && (repeat_mode == RepeatMode::BOTH || op.index == 3)) {
                 return repeat_index;
             }
         }

@@ -88,18 +88,21 @@ static uint8_t unorm8_to_unorm4(uint8_t value) {
     return static_cast<uint8_t>((static_cast<uint32_t>(value) * 15 + 127) / 255);
 }
 
-static void pack_rgba8_to_r4g4b4a4(uint8_t *dst, const uint8_t *src, uint32_t pixel_stride, uint32_t height) {
+// eR4G4B4A4UnormPack16 keeps red in the high nibble and alpha in the low one,
+// and the loop covers the surface width rather than the row pitch. Walking the
+// pitch instead overwrote the row padding with image data.
+static void pack_rgba8_to_r4g4b4a4(uint8_t *dst, const uint8_t *src, uint32_t width, uint32_t pixel_stride, uint32_t height) {
     for (uint32_t y = 0; y < height; y++) {
         uint16_t *dst_row = reinterpret_cast<uint16_t *>(dst + y * pixel_stride * sizeof(uint16_t));
         const uint8_t *src_row = src + y * pixel_stride * 4;
 
-        for (uint32_t x = 0; x < pixel_stride; x++) {
+        for (uint32_t x = 0; x < width; x++) {
             const uint8_t r = unorm8_to_unorm4(src_row[x * 4 + 0]);
             const uint8_t g = unorm8_to_unorm4(src_row[x * 4 + 1]);
             const uint8_t b = unorm8_to_unorm4(src_row[x * 4 + 2]);
             const uint8_t a = unorm8_to_unorm4(src_row[x * 4 + 3]);
 
-            dst_row[x] = static_cast<uint16_t>(r | (g << 4) | (b << 8) | (a << 12));
+            dst_row[x] = static_cast<uint16_t>((r << 12) | (g << 8) | (b << 4) | a);
         }
     }
 }
@@ -2530,7 +2533,11 @@ ColorSurfaceCacheInfo *VKSurfaceCache::perform_surface_sync() {
             .dstSubresource = vkutil::color_subresource_layer,
             .dstOffsets = std::array<vk::Offset3D, 2>{ vk::Offset3D{ dst_x0, dst_y0, 0 }, vk::Offset3D{ dst_x1, dst_y1, 1 } },
         };
-        const vk::Filter sync_filter = sync_from_raw ? vk::Filter::eNearest : vk::Filter::eLinear;
+        // Interpolating an F32 or F32F32 attachment averages the raw 32-bit words as
+        // if they were colours, which produces values the guest never wrote.
+        const bool float_format = last_written_surface->format == SCE_GXM_COLOR_BASE_FORMAT_F32
+            || last_written_surface->format == SCE_GXM_COLOR_BASE_FORMAT_F32F32;
+        const vk::Filter sync_filter = (sync_from_raw || float_format) ? vk::Filter::eNearest : vk::Filter::eLinear;
         cmd_buffer.blitImage(image_to_copy, image_layout, blit_image.image, vk::ImageLayout::eTransferDstOptimal, blit, sync_filter);
 
         blit_image.transition_to(cmd_buffer, vkutil::ImageLayout::TransferSrc);
@@ -2694,7 +2701,7 @@ void VKSurfaceCache::perform_post_surface_sync(const MemState &mem, ColorSurface
     uint8_t *pixels = surface->data.cast<uint8_t>().get(mem);
 
     if (surface_sync_needs_u4u4u4u4_repack(*surface)) {
-        pack_rgba8_to_r4g4b4a4(pixels, static_cast<const uint8_t *>(surface->copy_buffer->mapped_data), pixel_stride, surface->original_height);
+        pack_rgba8_to_r4g4b4a4(pixels, static_cast<const uint8_t *>(surface->copy_buffer->mapped_data), surface->original_width, pixel_stride, surface->original_height);
         return;
     }
 

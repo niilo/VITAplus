@@ -185,8 +185,8 @@ EXPORT(int, ksceKernelGetThreadTLSAddr) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, ksceKernelGetThreadmgrUIDClass) {
-    return UNIMPLEMENTED();
+EXPORT(SceInt32, ksceKernelGetThreadmgrUIDClass, SceUID uid) {
+    return CALL_EXPORT(sceKernelGetThreadmgrUIDClass, uid);
 }
 
 EXPORT(int, ksceKernelGetTimerBaseWide) {

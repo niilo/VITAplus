@@ -31,17 +31,19 @@ public:
     // default value: unlimited
     unsigned int maxPendingCount_ = -1;
 
-    std::unique_ptr<T> top(const int ms = 0) {
+    // timeout_us is a microsecond budget, not milliseconds. A caller that reads
+    // a "3" here as three milliseconds gets three microseconds, which is a spin.
+    std::unique_ptr<T> top(const int timeout_us = 0) {
         T item{ T() };
         {
             std::unique_lock<std::mutex> mlock(mutex_);
-            if (ms == 0) {
+            if (timeout_us == 0) {
                 while (!aborted && queue_.empty()) {
                     condempty_.wait(mlock);
                 }
             } else {
                 if (queue_.empty()) {
-                    condempty_.wait_for(mlock, std::chrono::microseconds(ms));
+                    condempty_.wait_for(mlock, std::chrono::microseconds(timeout_us));
                 }
             }
             if (aborted || queue_.empty()) {

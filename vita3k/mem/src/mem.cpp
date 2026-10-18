@@ -757,8 +757,12 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
     unprotect_inner(mem, mapping.address, mapping.size);
     {
         const std::unique_lock<std::mutex> lock(mem.protect_mutex);
+        // lower_bound returns end() for an empty tree, and also when every key is
+        // above the range being removed. Only add_protect inserts entries, from
+        // kubridge and the renderer's caches, so the tree is empty for much of a
+        // run. add_protect checks for end() at mem.cpp:623; this is the same.
         auto prot_it = mem.protect_tree.lower_bound(mapping.address);
-        if (prot_it->first + prot_it->second.size <= mapping.address) {
+        if (prot_it == mem.protect_tree.end() || prot_it->first + prot_it->second.size <= mapping.address) {
             if (prot_it == mem.protect_tree.begin())
                 prot_it = mem.protect_tree.end();
             else

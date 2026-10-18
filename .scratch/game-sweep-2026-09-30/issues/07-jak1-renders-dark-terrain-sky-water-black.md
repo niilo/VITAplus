@@ -66,3 +66,28 @@ that are too dark).
    loading or at cutscenes), and add the moments here.
 
 ## Comments
+
+### 2026-10-12: the sync is too wide, not too narrow
+
+Step 3 asks whether the copy source may be a render target that was not synced,
+which would be a missing sync. The comparison with EmuCoreV found the opposite
+fault in the same code: a sync that covers more than was drawn.
+
+At `vita3k/renderer/src/vulkan/context.cpp:691` the partial write-back is gated
+on `render_target->has_macroblock_sync`. A small linear surface that was only
+partly drawn takes the full path, which copies the whole surface into guest
+memory and overwrites the part the CPU wrote in the untouched area. The exact
+drawn rectangle is not recorded: `note_scene_draw_rect`
+(`vita3k/renderer/src/vulkan/surface_cache.cpp:560`) returns early when the
+rectangle is empty and otherwise keeps only a 32-pixel rounded union.
+
+The log line recorded in this ticket, `transfer_copy: no surface sync for
+src=0x6312BB40 -> dst=0x630FDB40 fmt=0x60000 64x352`, is a write-back over a
+64 by 352 region of a larger surface, which is the shape this fault produces.
+
+Different sign, same mechanism, so it does not answer step 3. It does mean that
+fixing step 3 will not fix the picture on its own if the surface is also being
+over-written afterwards. Written up as
+`.scratch/emucorev-fixes/issues/14-partial-surface-writeback-and-sync-bounds.md`.
+That ticket records that whether to write back partially or skip the
+write-back is a policy decision this repository has not made yet.

@@ -542,16 +542,27 @@ EXPORT(SceInt32, sceAppUtilSystemParamGetInt, SceSystemParamId paramId, SceInt32
 
 EXPORT(int, sceAppUtilSystemParamGetString, unsigned int paramId, SceChar8 *buf, SceSize bufSize) {
     TRACY_FUNC(sceAppUtilSystemParamGetString, paramId, buf, bufSize);
+    if (!buf || bufSize == 0) {
+        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);
+    }
+
     constexpr auto devname_len = SCE_SYSTEM_PARAM_USERNAME_MAXSIZE;
     char devname[devname_len];
     switch (paramId) {
-    case SCE_SYSTEM_PARAM_ID_USER_NAME:
+    case SCE_SYSTEM_PARAM_ID_USER_NAME: {
         if (gethostname(devname, devname_len)) {
             // fallback to User Name
             std::strncpy(devname, emuenv.io.user_name.c_str(), sizeof(devname));
+            devname[sizeof(devname) - 1] = '\0';
         }
-        std::strncpy(reinterpret_cast<char *>(buf), devname, sizeof(devname));
+        // bufSize is the guest's buffer, which need not be as large as the
+        // emulated device name. Copying sizeof(devname) instead overwrote past
+        // the caller's buffer by as much as a long hostname is long.
+        const size_t copy_len = std::min(static_cast<size_t>(bufSize), static_cast<size_t>(devname_len - 1));
+        std::strncpy(reinterpret_cast<char *>(buf), devname, copy_len);
+        buf[copy_len - 1] = '\0';
         break;
+    }
     default:
         return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);
     }

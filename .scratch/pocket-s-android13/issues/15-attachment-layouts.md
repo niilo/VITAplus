@@ -106,3 +106,30 @@ attachment, and the mutable-format flag, keep the pass out of GMEM.
 ## Answer
 
 ## Comments
+
+### 2026-10-12: the same trade as ticket 06, from the other direction
+
+The problem statement ends on the question this ticket shares with
+`.scratch/pocket-s-android13/issues/06-framebuffer-fetch-path.md`: whether
+declaring the attachment as an input attachment keeps the pass out of GMEM.
+
+There is now a third option that was not on the table when this ticket was
+written. The subpass fetch reads the colour attachment as float
+(`vita3k/shader/src/spirv_recompiler.cpp:942`), while
+`preserve_f16_nan_as_u16` is on by default
+(`vita3k/renderer/src/vulkan/renderer.cpp:877`). Making the fetch read the raw
+16 bits per channel needs a second `SubpassData` image at input attachment 1,
+binding 2, as `eInputAttachment`.
+
+The three options:
+
+- one input attachment, float read: current, loses the low bits
+- two input attachments, raw read: correct, more attachments
+- drop the unused attachment entirely: this ticket and ticket 06
+
+Deciding between them needs a measurement, not a preference. The decision goes
+into `.scratch/emucorev-fixes/issues/15-raw-half-float-subpass-fetch.md` step
+1. Whichever is chosen, this ticket's step 1 covers the raw attachment too,
+because it is created in the same two places
+(`vita3k/renderer/src/vulkan/surface_cache.cpp:794` and
+`vita3k/renderer/src/vulkan/renderer.cpp:1009`).

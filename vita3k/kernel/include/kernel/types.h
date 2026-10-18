@@ -810,6 +810,21 @@ struct SceKernelSemaInfo {
     SceUInt32 numWaitThreads;
 };
 
+/** Guest-visible thread status, as SceKernelThreadInfo::status reports it. The
+ *  values are a bit set, so a thread can carry more than one at once.
+ */
+enum SceKernelThreadStatus {
+    SCE_KERNEL_THREAD_STATUS_RUNNING = 0x00000001,
+    SCE_KERNEL_THREAD_STATUS_READY = 0x00000002,
+    SCE_KERNEL_THREAD_STATUS_STANDBY = 0x00000004,
+    SCE_KERNEL_THREAD_STATUS_WAITING = 0x00000008,
+    SCE_KERNEL_THREAD_STATUS_DORMANT = 0x00000010,
+    SCE_KERNEL_THREAD_STATUS_DELETED = 0x00000020,
+    SCE_KERNEL_THREAD_STATUS_DEAD = 0x00000040,
+    SCE_KERNEL_THREAD_STATUS_STAGNANT = 0x00000080,
+    SCE_KERNEL_THREAD_STATUS_SUSPENDED = 0x00000100,
+};
+
 struct SceKernelThreadInfo {
     /** Size of the structure */
     SceSize size;

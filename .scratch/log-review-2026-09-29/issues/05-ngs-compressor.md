@@ -66,3 +66,31 @@ Done on branch `log-review/ngs-effects`, merged to `master`.
 Not checked by ear. Linux build, tests and format pass.
 
 ## Comments
+
+### 2026-10-12: plan step 3 is half done
+
+Step 3 is "attack and release smoothing of the gain". The detector envelope is
+smoothed, at `vita3k/ngs/src/modules/compressor.cpp:136` and `:140`, using the
+`attack_coef` and `release_coef` computed at `:93-94`. The gain is not.
+`:145-151`:
+
+```cpp
+float target_gain = db_to_linear(reduction_db_for(detector_level)) * makeup_linear;
+
+if (compressor_never_amplifies)
+    target_gain = std::min(target_gain, 1.0f);
+
+float &applied = logical->applied_gain[channel];
+applied = target_gain;
+```
+
+`applied` takes `target_gain` with no smoothing, so a change of ratio or
+threshold steps. `CompressorLogicalState`
+(`vita3k/ngs/include/ngs/modules/compressor.h:58-61`) holds `envelope` and
+`applied_gain` only, with no per-channel reduction state.
+
+EmuCoreV commit `3c0fbd61` adds a `reduction_db[2]` member and a seven-line
+smoothing step. The hunk drops in at `:145`, but `compressor.h` needs the new
+member and the rest of that file differs from here, so it is a small edit
+rather than a patch. Not yet written up as a ticket; recorded in
+`.scratch/emucorev-fixes/spec.md`.

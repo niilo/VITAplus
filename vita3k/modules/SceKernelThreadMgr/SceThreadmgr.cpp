@@ -22,6 +22,7 @@
 #include <kernel/state.h>
 #include <kernel/sync_primitives.h>
 #include <kernel/types.h>
+#include <kernel/uid_class.h>
 #include <packages/functions.h>
 
 #include <util/lock_and_find.h>
@@ -513,16 +514,54 @@ EXPORT(SceInt32, _sceKernelGetThreadInfo, SceUID threadId, Ptr<SceKernelThreadIn
 
     // TODO: SCE_KERNEL_ERROR_ILLEGAL_CONTEXT check
 
+    // Status and return value are the two fields another thread changes, so read
+    // them under the thread's lock rather than racing the thread itself.
+    ThreadStatus status;
+    uint32_t returned_value;
+    {
+        const std::lock_guard<std::mutex> lock(thread->mutex);
+        status = thread->status;
+        returned_value = thread->returned_value;
+    }
+
+    // The guest allocates this on its stack and passes it in with only size set,
+    // so every other field holds whatever the guest left there. A title that
+    // branches on status then reads stack data.
+    memset(info, 0, sizeof(*info));
+    info->size = sizeof(*info);
+    info->processId = 1;
+
     strncpy(info->name, thread->name.c_str(), KERNELOBJECT_MAX_NAME_LENGTH);
+    // name has KERNELOBJECT_MAX_NAME_LENGTH + 1 entries, so a name of exactly
+    // KERNELOBJECT_MAX_NAME_LENGTH characters leaves the last one unwritten.
+    info->name[KERNELOBJECT_MAX_NAME_LENGTH] = '\0';
     info->stack = Ptr<void>(thread->stack.get());
     info->stackSize = thread->stack_size;
     info->initPriority = thread->priority; // Todo Give only current priority
     info->currentPriority = thread->priority;
     info->initCpuAffinityMask = thread->affinity_mask; // Todo Give init affinity
     info->currentCpuAffinityMask = thread->affinity_mask;
+    // The user core is the lowest bit set in bits 16 to 18 of the mask.
+    const uint32_t user_cpus = (static_cast<uint32_t>(thread->affinity_mask) >> 16) & 0x7;
+    info->currentCpuId = (user_cpus & 1) ? 0 : (user_cpus & 2) ? 1
+        : (user_cpus & 4)                                      ? 2
+                                                               : 0;
+    info->lastExecutedCpuId = info->currentCpuId;
     info->entry = SceKernelThreadEntry(thread->entry_point);
-    if (thread->status == ThreadStatus::dormant) {
-        info->exitStatus = thread->returned_value;
+    switch (status) {
+    case ThreadStatus::run:
+        info->status = SCE_KERNEL_THREAD_STATUS_RUNNING;
+        break;
+    case ThreadStatus::wait:
+        info->status = SCE_KERNEL_THREAD_STATUS_WAITING;
+        break;
+    case ThreadStatus::suspend:
+        info->status = SCE_KERNEL_THREAD_STATUS_SUSPENDED;
+        break;
+    case ThreadStatus::dormant:
+        info->status = SCE_KERNEL_THREAD_STATUS_DORMANT;
+        info->exitStatus = returned_value;
+        break;
     }
     return SCE_KERNEL_OK;
 }
@@ -1255,9 +1294,9 @@ EXPORT(Ptr<void>, sceKernelGetThreadTLSAddr, SceUID thid, int key) {
     return emuenv.kernel.get_thread_tls_addr(emuenv.mem, thid, key);
 }
 
-EXPORT(int, sceKernelGetThreadmgrUIDClass) {
-    TRACY_FUNC(sceKernelGetThreadmgrUIDClass);
-    return UNIMPLEMENTED();
+EXPORT(SceInt32, sceKernelGetThreadmgrUIDClass, SceUID uid) {
+    TRACY_FUNC(sceKernelGetThreadmgrUIDClass, uid);
+    return get_threadmgr_uid_class(emuenv.kernel, export_name, uid);
 }
 
 EXPORT(uint64_t, sceKernelGetTimerBaseWide, SceUID timer_handle) {
@@ -1326,9 +1365,9 @@ EXPORT(SceUID, sceKernelOpenSema, const char *pName) {
     return semaphore_find(emuenv.kernel, export_name, pName);
 }
 
-EXPORT(int, sceKernelOpenSimpleEvent) {
-    TRACY_FUNC(sceKernelOpenSimpleEvent);
-    return UNIMPLEMENTED();
+EXPORT(SceUID, sceKernelOpenSimpleEvent, const char *pName) {
+    TRACY_FUNC(sceKernelOpenSimpleEvent, pName);
+    return simple_event_find(emuenv.kernel, export_name, pName);
 }
 
 EXPORT(SceUID, sceKernelOpenTimer, const char *pName) {
