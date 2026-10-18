@@ -853,23 +853,44 @@ EXPORT(int, _sceKernelWaitSignalCB, uint32_t unknown, uint32_t delay, uint32_t t
 }
 
 static int wait_thread_end(KernelState &kernel, ThreadStatePtr &waiter, ThreadStatePtr &target, int *stat) {
-    std::unique_lock<std::mutex> waiter_lock(waiter->mutex);
+    // target's lock guards the state being tested, so it is taken first. Taking
+    // waiter's first inverts the order against every other path that locks both,
+    // and two threads waiting on each other then deadlock.
     {
         const std::unique_lock<std::mutex> thread_lock(target->mutex);
         if (target->status == ThreadStatus::dormant) {
             if (stat != nullptr) {
                 *stat = target->returned_value;
             }
-            return 0;
+            return SCE_KERNEL_OK;
+        }
+    }
+
+    std::unique_lock<std::mutex> waiter_lock(waiter->mutex);
+    {
+        // The target may have finished between the two lock acquisitions.
+        const std::unique_lock<std::mutex> thread_lock(target->mutex);
+        if (target->status == ThreadStatus::dormant) {
+            if (stat != nullptr) {
+                *stat = target->returned_value;
+            }
+            return SCE_KERNEL_OK;
         }
 
         waiter->update_status(ThreadStatus::wait);
         target->waiting_threads.push_back(waiter);
     }
+
+    // The guest's timeout is deliberately not honoured here. Turning a finite
+    // wait into a bounded one makes the call return SCE_KERNEL_ERROR_WAIT_TIMEOUT
+    // where the guest expects to be resumed, and a guest thread that has given up
+    // on a wait is never runnable again, so anything waiting on it waits for
+    // good. Uncharted stalls at boot on the Pocket S with that in place: the main
+    // thread sits in this function with no framebuffer flip for 601 vblanks.
     waiter->status_cond.wait(waiter_lock, [&]() {
         return waiter->status == ThreadStatus::run;
     });
-    return 0;
+    return SCE_KERNEL_OK;
 }
 
 EXPORT(int, _sceKernelWaitThreadEnd, SceUID thid, int *stat, SceUInt *timeout) {
