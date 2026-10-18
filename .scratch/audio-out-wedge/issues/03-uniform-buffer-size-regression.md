@@ -84,6 +84,32 @@ boot stall and visual corruption move together. `651f8a23` is that build.
 5. If fixing the size removes the boot stall, close issue 01 with that as the
    cause rather than with the audio path.
 
+## The stall was not this, but the flicker is still open
+
+Step 5 is answered: no. The boot stall was `_sceKernelWaitThreadEnd` taking a
+deadline from the guest, found in issue 02 and fixed in `bb7086df`. This
+regression is a separate defect and it is still open.
+
+What changed since this ticket was written. `651f8a23` was reverted in v1.3.7,
+by `09f207d3`, which reset master's tree to `bb7086df`. So the corruption is not
+on the device any more, and steps 1 to 3 are the whole job.
+
+The revert removed both halves of `651f8a23`, which means the `gxp_parser.cpp`
+half is gone too. That half is the pa-register inference, and it is what fixes
+the Jak and Daxter black screen recorded in
+`.scratch/game-sweep-2026-09-30/issues/05`. So the correct end state is a size
+that satisfies both, and it has to be built rather than picked: revert or keep
+decides the flicker but also decides that black screen.
+
+One correction to the reasoning above. This ticket treated `651f8a23` as
+sufficient to explain the flicker on its own. It is not. Reverting it alone, in
+`1aea6648`, did not stop the flicker on the device. After that revert
+`SceGxm.cpp` still differed from `e6bc600c` by 24 lines, from `53d34c60`, and
+`vita3k/shader/` by 11 files, from `2927abba`. So if this ticket is picked up,
+the flicker may well be `53d34c60`, which touches `SceGxm.cpp` and both Vulkan
+caches, rather than the size disagreement here. Re-land `53d34c60` first, with a
+device run, before spending effort on this.
+
 ## Files
 
 - `tmp/deploy-651f8a23` the run that showed the corruption

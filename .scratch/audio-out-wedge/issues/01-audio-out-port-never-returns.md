@@ -1,8 +1,31 @@
 # 01: sceAudioOutOutput never returns and the game stops booting
 
-Status: open
+Status: open, cause found and it is not this
 Type: task
 Label: ready-for-agent
+
+## The stall in this ticket was not the audio port
+
+Closed as to cause. The boot stall recorded here was `_sceKernelWaitThreadEnd`
+taking a deadline from the guest, not `sceAudioOutOutput` failing to return. See
+issue 02. Fixed in `bb7086df`, released as v1.3.7.
+
+The dump above is consistent with that and was the evidence that pointed at it:
+
+```
+PCSA00029 main (8)        wait  sceKernelWaitThreadEnd   returns 0x80028005 WAIT_TIMEOUT
+```
+
+`audio_out_thread` is waiting because the guest thread it feeds has already given
+up, not because the host audio side is stuck. `SDLAudioAdapter::audio_output` was
+the wrong place to look, and the suspicion that `SDL_PutAudioStreamData` blocks
+because nothing drains the stream was wrong for this stall.
+
+The plan below is untouched and still unverified. Whether
+`sceAudioOutOutput` failing to return is a real defect in its own right is
+separately open; nothing here has tested it since the stall had a cause. It
+should not be reopened on the strength of the thread dumps alone, because those
+dumps are now explained.
 
 ## Context
 
