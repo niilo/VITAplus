@@ -1477,14 +1477,6 @@ int condvar_wait(KernelState &kernel, MemState &mem, const char *export_name, Sc
     if (!thread) // the thread is being torn down so fail its last import instead of crashing the process
         return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID);
 
-    // Waiting on a condvar requires holding its mutex. A caller that does not own
-    // it gets an error at once on hardware. Waiting anyway parks the thread with
-    // nobody able to signal it, because the owner does not know a waiter exists.
-    if (condvar->associated_mutex && condvar->associated_mutex->owner_id != thread_id) {
-        return RET_ERROR(condvar->associated_mutex->workarea ? SCE_KERNEL_ERROR_LW_MUTEX_NOT_OWNED
-                                                             : SCE_KERNEL_ERROR_MUTEX_NOT_OWNED);
-    }
-
     thread->set_wait_reason("cond", condvar->uid, condvar->associated_mutex ? condvar->associated_mutex->uid : 0);
     std::unique_lock<std::mutex> condition_variable_lock(condvar->mutex);
 
