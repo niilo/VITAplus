@@ -852,61 +852,24 @@ EXPORT(int, _sceKernelWaitSignalCB, uint32_t unknown, uint32_t delay, uint32_t t
     return CALL_EXPORT(_sceKernelWaitSignal, unknown, delay, timeout);
 }
 
-static int wait_thread_end(KernelState &kernel, ThreadStatePtr &waiter, ThreadStatePtr &target, int *stat, SceUInt *timeout) {
-    static const char *export_name = "_sceKernelWaitThreadEnd";
-    // target's lock guards the state being tested, so it is taken first. Taking
-    // waiter's first inverts the order against every other path that locks both,
-    // and two threads waiting on each other then deadlock.
-    {
-        const std::unique_lock<std::mutex> thread_lock(target->mutex);
-        if (target->status == ThreadStatus::dormant) {
-            if (stat != nullptr) {
-                *stat = target->returned_value;
-            }
-            return SCE_KERNEL_OK;
-        }
-    }
-
+static int wait_thread_end(KernelState &kernel, ThreadStatePtr &waiter, ThreadStatePtr &target, int *stat) {
     std::unique_lock<std::mutex> waiter_lock(waiter->mutex);
     {
         const std::unique_lock<std::mutex> thread_lock(target->mutex);
-
-        // The target may have finished between the two lock acquisitions.
         if (target->status == ThreadStatus::dormant) {
             if (stat != nullptr) {
                 *stat = target->returned_value;
             }
-            return SCE_KERNEL_OK;
+            return 0;
         }
 
         waiter->update_status(ThreadStatus::wait);
         target->waiting_threads.push_back(waiter);
     }
-
-    // The guest's timeout is a deadline in microseconds. Ignoring it turns a
-    // finite wait into an infinite one, which the guest cannot recover from.
-    // A null timeout means wait forever, which a negative budget expresses here.
-    const bool woken = waiter->wait_for_run_precise(waiter_lock, timeout ? static_cast<int64_t>(*timeout) : -1);
-
-    if (!woken) {
-        // A timed-out waiter must leave target's list, or the target's exit
-        // later writes through the stat pointer the guest has already reused.
-        const std::unique_lock<std::mutex> thread_lock(target->mutex);
-        const auto found = std::find(target->waiting_threads.begin(), target->waiting_threads.end(), waiter);
-        if (found != target->waiting_threads.end()) {
-            target->waiting_threads.erase(found);
-        }
-        // The wait reason has to be dropped on the error path too, or the thread
-        // reports a primitive it is no longer parked on.
-        waiter->set_wait_reason(nullptr, 0, 0);
-
-        if (timeout) {
-            *timeout = 0;
-        }
-        return RET_ERROR(SCE_KERNEL_ERROR_WAIT_TIMEOUT);
-    }
-
-    return SCE_KERNEL_OK;
+    waiter->status_cond.wait(waiter_lock, [&]() {
+        return waiter->status == ThreadStatus::run;
+    });
+    return 0;
 }
 
 EXPORT(int, _sceKernelWaitThreadEnd, SceUID thid, int *stat, SceUInt *timeout) {
@@ -916,7 +879,7 @@ EXPORT(int, _sceKernelWaitThreadEnd, SceUID thid, int *stat, SceUInt *timeout) {
     if (!target) {
         return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID);
     }
-    return wait_thread_end(emuenv.kernel, waiter, target, stat, timeout);
+    return wait_thread_end(emuenv.kernel, waiter, target, stat);
 }
 
 EXPORT(int, _sceKernelWaitThreadEndCB, SceUID thid, int *stat, SceUInt *timeout) {
@@ -927,7 +890,7 @@ EXPORT(int, _sceKernelWaitThreadEndCB, SceUID thid, int *stat, SceUInt *timeout)
         return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID);
     }
     process_callbacks(emuenv.kernel, thread_id);
-    return wait_thread_end(emuenv.kernel, waiter, target, stat, timeout);
+    return wait_thread_end(emuenv.kernel, waiter, target, stat);
 }
 
 EXPORT(SceInt32, sceKernelCancelCallback, SceUID callbackId) {
