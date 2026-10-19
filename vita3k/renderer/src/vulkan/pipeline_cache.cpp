@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <renderer/vulkan/pipeline_cache.h>
+#include <renderer/vulkan/pipeline_cache_file.h>
 
 #include <renderer/functions.h>
 #include <renderer/vulkan/gxm_to_vulkan.h>
@@ -314,61 +315,47 @@ void PipelineCache::set_async_compilation(bool enable) {
     }
 }
 
-// magic number put at the beginning of the pipeline cache file
-constexpr uint32_t pipeline_cache_magic = 0xBEEF4321;
-
 void PipelineCache::read_pipeline_cache() {
     const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
-    fs::ifstream pipeline_cache_file(path, std::ios::in | std::ios::binary);
-    if (!pipeline_cache_file.is_open())
+    fs::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
+    if (!file.is_open())
         return;
-
-    LOG_INFO("Found pipeline cache, reading...");
-
-    pipeline_cache_file.seekg(0, fs::ifstream::end);
-    size_t pipeline_size = pipeline_cache_file.tellg();
-    pipeline_cache_file.seekg(0);
-
-    if (pipeline_size < sizeof(uint32_t) + sizeof(size_t))
+    const auto size = file.tellg();
+    if (size <= 0)
         return;
-
-    // read the hashes
-    auto read_integer = [&]<typename T>(T &val) {
-        pipeline_cache_file.read(reinterpret_cast<char *>(&val), sizeof(T));
-    };
-    uint32_t magic_number;
-    read_integer(magic_number);
-    size_t nb_hashes;
-    read_integer(nb_hashes);
-    // safety check
-    size_t hashes_size = sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
-    if (magic_number != pipeline_cache_magic || pipeline_size < hashes_size) {
-        LOG_WARN("Pipeline cache is corrupted, ignoring it.");
-        pipeline_cache_file.close();
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0);
+    if (!file.read(reinterpret_cast<char *>(bytes.data()), bytes.size())) {
+        LOG_WARN("Could not read the complete pipeline cache, ignoring it");
         return;
     }
-    pipeline_size -= hashes_size;
 
-    // insert hashes with null pipeline
-    for (size_t i = 0; i < nb_hashes; i++) {
-        uint64_t hash;
-        read_integer(hash);
-        pipelines[hash] = nullptr;
+    const auto &props = state.physical_device_properties;
+    PipelineCacheIdentity identity{ props.vendorID, props.deviceID, {} };
+    std::copy(props.pipelineCacheUUID.begin(), props.pipelineCacheUUID.end(), identity.uuid.begin());
+    const auto contents = read_pipeline_cache_file(bytes, identity);
+    if (!contents) {
+        LOG_WARN("Pipeline cache is corrupt or belongs to another GPU or driver, ignoring it");
+        return;
     }
 
-    std::vector<char> pipeline_data(pipeline_size);
-    pipeline_cache_file.read(pipeline_data.data(), pipeline_size);
-    pipeline_cache_file.close();
+    try {
+        const vk::PipelineCacheCreateInfo info{
+            .initialDataSize = contents->data.size(),
+            .pInitialData = contents->data.data()
+        };
+        const vk::PipelineCache loaded = state.device.createPipelineCache(info);
+        state.device.destroyPipelineCache(pipeline_cache);
+        pipeline_cache = loaded;
+    } catch (const vk::SystemError &error) {
+        LOG_WARN("Driver rejected the saved pipeline cache, keeping the empty cache: {}", error.what());
+        return;
+    }
 
-    vk::PipelineCacheCreateInfo cache_info{
-        .initialDataSize = pipeline_size,
-        .pInitialData = pipeline_data.data()
-    };
-
-    state.device.destroyPipelineCache(pipeline_cache);
-    pipeline_cache = state.device.createPipelineCache(cache_info);
+    for (size_t i = 0; i < contents->hashes.size() / sizeof(uint64_t); i++)
+        pipelines[contents->hash(i)] = nullptr;
     LOG_INFO("Pipeline cache read and loaded");
 }
 
@@ -552,7 +539,7 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
 
     const std::string hash_text = hex_string(hash);
 
-    LOG_INFO("Generating vulkan spv shader {}", hash_text);
+    LOG_DEBUG("Generating vulkan spv shader {}", hash_text);
     const std::string shader_version = fmt::format("vk{}{}", shader::CURRENT_VERSION, version_suffix);
 
     shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);

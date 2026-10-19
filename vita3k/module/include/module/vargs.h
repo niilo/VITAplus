@@ -21,6 +21,10 @@
 #include "lay_out_args.h"
 #include "read_arg.h"
 
+#include <bit>
+#include <cstdint>
+#include <type_traits>
+
 namespace module {
 class vargs {
     Address currentVaList;
@@ -41,7 +45,10 @@ public:
 
     template <typename T>
     T next(CPUState &cpu, MemState &mem) {
-        if (!currentVaList) {
+        if constexpr (std::is_same_v<T, double>) {
+            // Variadic doubles use the base ARM ABI and carry their IEEE bits in GPRs.
+            return std::bit_cast<double>(next<uint64_t>(cpu, mem));
+        } else if (!currentVaList) {
             const auto state_tuple = add_arg_to_layout<T>(layoutState);
 
             layoutState = std::move(std::get<1>(state_tuple));

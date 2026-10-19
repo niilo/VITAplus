@@ -15,9 +15,10 @@ if(NOT ANDROID)
 	add_executable(
 		module-tests
 		tests/arg_layout_tests.cpp
+		tests/vargs_tests.cpp
 	)
 
 target_include_directories(module-tests PRIVATE include)
-target_link_libraries(module-tests PRIVATE googletest util)
+target_link_libraries(module-tests PRIVATE googletest util cpu mem)
 add_test(NAME module COMMAND module-tests)
 endif()
