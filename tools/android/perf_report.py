@@ -171,6 +171,17 @@ def build(folder, target, warmup):
     else:
         rows.append(("presents per second", f"{frames['presents_per_second']:.2f}"))
 
+    gpu_span = frames["gpu_frame_span_ms_p95"]
+    rows.append(("GPU render span p95", f"{gpu_span:.2f} ms" if gpu_span is not None else "not measured"))
+    rows.append(("GPU frames complete/incomplete",
+                 f"{frames['gpu_frames_measured']}/{frames['gpu_frames_incomplete']}"))
+    compile_ms = frames["pipeline_compile_ms_total"]
+    rows.append(("pipeline compile host total", f"{compile_ms:.2f} ms" if compile_ms is not None else "not measured"))
+    if frames["pipeline_compiles"] is not None:
+        rows.append(("pipeline compiles/failed", f"{frames['pipeline_compiles']}/{frames['pipeline_compile_failures']}"))
+    empty = frames["renderer_queue_empty_returns_per_second"]
+    rows.append(("empty queue returns per second", f"{empty:.1f}" if empty is not None else "not measured"))
+
     power = None
     power_csv = find_power_csv(folder)
     if power_csv:

@@ -77,6 +77,57 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("average_fps,29.3333", lines)
         self.assertIn("draws_per_scene,2.0000", lines)
 
+    def test_gpu_coverage_and_compile_window(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(os.path.join(HERE, "testdata", "perf_basic", "frames.csv"), tmp)
+            with open(os.path.join(tmp, "gpu_frames.csv"), "w") as f:
+                f.write("steady_us,frame,segments,measured,skipped,gpu_span_us\n"
+                        "1,1,1,1,0,999999\n"  # warm-up
+                        "1100000,2,2,2,0,8000\n"
+                        "1200000,3,2,2,0,14000\n"
+                        "1300000,4,2,1,0,\n"  # unavailable query
+                        "1400000,5,2,2,1,\n"  # overflow
+                        "1500000,6,0,0,0,\n"
+                        "9000000,7,1,1,0,999999\n")
+            with open(os.path.join(tmp, "pipeline_compiles.csv"), "w") as f:
+                f.write("steady_us,compile_us,success\n"
+                        "1,999999,1\n1100000,12000,1\n1200000,3000,0\n9000000,999999,1\n")
+            r = perf_summary.summarize(tmp, target=30, warmup=1)
+            self.assertEqual(r["gpu_frames_measured"], 2)
+            self.assertEqual(r["gpu_frames_incomplete"], 3)
+            self.assertEqual(r["gpu_frame_span_ms_p95"], 14)
+            self.assertEqual(r["pipeline_compiles"], 2)
+            self.assertEqual(r["pipeline_compile_failures"], 1)
+            self.assertEqual(r["pipeline_compile_ms_total"], 15)
+            self.assertEqual(r["pipeline_compile_ms_p99"], 12)
+
+    def test_missing_gpu_data_stays_unmeasured(self):
+        r = perf_summary.summarize(os.path.join(HERE, "testdata", "perf_basic"), target=30, warmup=1)
+        self.assertIsNone(r["gpu_frame_span_ms_p95"])
+        self.assertEqual(r["gpu_frames_measured"], 0)
+        self.assertIsNone(r["pipeline_compile_ms_total"])
+
+    def test_empty_compile_channel_means_zero_compiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(os.path.join(HERE, "testdata", "perf_basic", "frames.csv"), tmp)
+            with open(os.path.join(tmp, "pipeline_compiles.csv"), "w") as f:
+                f.write("steady_us,compile_us,success\n")
+            r = perf_summary.summarize(tmp, target=30, warmup=1)
+            self.assertEqual(r["pipeline_compiles"], 0)
+            self.assertEqual(r["pipeline_compile_ms_total"], 0)
+
+    def test_renderer_queue_window_and_units(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(os.path.join(HERE, "testdata", "perf_basic", "frames.csv"), tmp)
+            with open(os.path.join(tmp, "renderer_queue.csv"), "w") as f:
+                f.write("steady_us,event_wait,waits,empty_returns,wait_us\n"
+                        "1,0,9999,9999,9999\n1100000,0,60,30,6000\n"
+                        "1200000,0,30,0,3000\n9000000,0,9999,9999,9999\n")
+            r = perf_summary.summarize(tmp, target=30, warmup=1)
+            self.assertEqual(r["renderer_queue_waits_per_second"], 30)
+            self.assertEqual(r["renderer_queue_empty_returns_per_second"], 10)
+            self.assertEqual(r["renderer_queue_wait_ms_per_second"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -367,7 +367,7 @@ void request_in_process_launch(EmuEnvState &emuenv, AppLaunchRequest request) {
 
     emuenv.post_app_launch_request(std::move(request));
     if (emuenv.renderer)
-        emuenv.renderer->should_display = true;
+        emuenv.renderer->request_display();
 }
 
 } // namespace app

@@ -59,6 +59,7 @@ android {
 		targetSdk = 35
 		versionCode = (versionInfo['version_code'] ?: '1') as Integer
 		versionName = versionInfo['version'] ?: 'v0.0-dev.0'
+		manifestPlaceholders = [vitaAppLabel: '@string/app_name']
 
 		ndk {
 			// x86_64 is emulator-only and broken here: vcpkg OpenSSL cannot assemble its x86 SM3/SM4 code with the NDK.
@@ -114,6 +115,9 @@ android {
 			externalNativeBuild {
 				cmake {
 					arguments "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+					if (providers.gradleProperty('vitaBuildLabel').isPresent()) {
+						arguments "-DVITA3K_BUILD_LABEL=${providers.gradleProperty('vitaBuildLabel').get()}"
+					}
 				}
 			}
 			minifyEnabled = false
@@ -121,7 +125,14 @@ android {
 			// The development app ID, so a development build installs next to the release
 			// app instead of over it. Development builds share this one ID and replace
 			// each other, which is what makes a tester able to update one in place.
-			applicationIdSuffix = '.debug'
+			// An isolated test build can coexist with a dev APK signed elsewhere.
+			def devSuffix = providers.gradleProperty('vitaDevSuffix').getOrElse('.debug')
+			if (!(devSuffix ==~ /\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*/)) {
+				throw new GradleException('vitaDevSuffix must contain dot-separated lowercase package segments.')
+			}
+			applicationIdSuffix = devSuffix
+			versionNameSuffix = providers.gradleProperty('vitaDevVersionSuffix').getOrElse('')
+			manifestPlaceholders = [vitaAppLabel: providers.gradleProperty('vitaDevLabel').getOrElse('@string/app_name')]
 			// The launcher name is VITAdev, from src/reldebug/res/values/strings.xml.
 			signingConfig = signingConfigs.debug
 		}

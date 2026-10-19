@@ -25,6 +25,7 @@
 #include <gxm/functions.h>
 #include <renderer/functions.h>
 
+#include <util/gpu_timing.h>
 #include <util/log.h>
 #include <util/overloaded.h>
 #include <util/perf_log.h>
@@ -343,6 +344,11 @@ void VKContext::start_recording(bool first_in_scene) {
     // draw count and start time belong to this recording, not to the scene.
     scene_draw_calls = 0;
     scene_start_us = perf_log::enabled() ? perf_log::now_us() : 0;
+    if (scene_start_us != 0 && !pipeline_perf_channel_initialized) {
+        // A header-only channel distinguishes zero compiles from missing data.
+        perf_log::write("pipeline_compiles", "steady_us,compile_us,success", "");
+        pipeline_perf_channel_initialized = true;
+    }
 
     if (render_target == nullptr) {
         LOG_ERROR("Recording started without a set command buffer");
@@ -393,6 +399,33 @@ void VKContext::start_recording(bool first_in_scene) {
     };
     render_cmd.begin(begin_info);
     prerender_cmd.begin(begin_info);
+
+    gpu_query_index = -1;
+    if (perf_log::enabled() && state.gpu_timestamp_bits != 0) {
+        auto &frame = state.frame();
+        if (!frame.gpu_query_pool) {
+            try {
+                frame.gpu_query_pool = state.device.createQueryPool(vk::QueryPoolCreateInfo{
+                    .queryType = vk::QueryType::eTimestamp,
+                    .queryCount = FrameObject::GPU_QUERY_CAPACITY });
+            } catch (const vk::SystemError &err) {
+                LOG_WARN("GPU timing disabled: {}", err.what());
+                state.gpu_timestamp_bits = 0;
+            }
+        }
+        if (frame.gpu_query_pool && frame.gpu_segments.size() < FrameObject::GPU_QUERY_CAPACITY / 2) {
+            frame.gpu_frame_timestamp = frame_timestamp;
+            gpu_query_index = static_cast<int32_t>(frame.gpu_segments.size() * 2);
+            frame.gpu_segments.push_back({ scene_start_us, 0 });
+            // Use the render buffer: the prerender buffer can be reset while
+            // recording texture uploads. Intervals can include upload waits
+            // and gaps; uploads have no separate timestamp coverage here.
+            render_cmd.resetQueryPool(frame.gpu_query_pool, gpu_query_index, 2);
+            render_cmd.writeTimestamp(vk::PipelineStageFlagBits::eTopOfPipe, frame.gpu_query_pool, gpu_query_index);
+        } else {
+            frame.gpu_segments_skipped++;
+        }
+    }
 
     is_recording = true;
 
@@ -634,6 +667,13 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     if (state.features.enable_memory_mapping && !state.disable_surface_sync && submit)
         surface_info = state.surface_cache.perform_surface_sync();
 
+    if (gpu_query_index >= 0) {
+        auto &frame = state.frame();
+        frame.gpu_segments[gpu_query_index / 2].draws = scene_draw_calls;
+        render_cmd.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, frame.gpu_query_pool, gpu_query_index + 1);
+        gpu_query_index = -1;
+    }
+
     prerender_cmd.end();
     render_cmd.end();
 
@@ -661,6 +701,7 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     submit_info.setCommandBuffers(cmdbuffers_to_submit);
 
     state.general_queue.submit(submit_info, fence);
+    state.frame().gpu_segments_submitted = static_cast<uint32_t>(state.frame().gpu_segments.size());
     cmdbuffers_to_submit.clear();
     state.frame().rendered_fences.push_back(fence);
     state.submit_serial++; // seq-248
@@ -812,6 +853,53 @@ void new_frame(VKContext &context) {
         device.resetFences(frame.rendered_fences);
         frame.rendered_fences.clear();
     }
+
+    // The existing fence waits above completed this frame's submissions. Read
+    // only available timestamps, without a query wait or another GPU fence.
+    if (!frame.gpu_segments.empty()) {
+        struct Timestamp {
+            uint64_t ticks;
+            uint64_t available;
+        };
+        uint32_t measured = 0;
+        uint64_t first = 0, last = 0;
+        // A reset recorded in an unsubmitted buffer has not cleared the old
+        // availability bit. Never treat those previous results as new samples.
+        std::vector<Timestamp> results(frame.gpu_segments_submitted * 2);
+        const auto result = results.empty() ? vk::Result::eNotReady
+                                            : device.getQueryPoolResults(frame.gpu_query_pool, 0, static_cast<uint32_t>(results.size()),
+                                                  results.size() * sizeof(Timestamp), results.data(), sizeof(Timestamp),
+                                                  vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWithAvailability);
+        for (uint32_t i = 0; i < frame.gpu_segments_submitted; i++) {
+            const auto *timestamps = results.data() + i * 2;
+            if ((result != vk::Result::eSuccess && result != vk::Result::eNotReady)
+                || !timestamps[0].available || !timestamps[1].available)
+                continue;
+            const auto duration = gpu_timing::elapsed_us(timestamps[0].ticks, timestamps[1].ticks,
+                context.state.gpu_timestamp_bits, context.state.physical_device_properties.limits.timestampPeriod);
+            if (!duration)
+                continue;
+            if (measured == 0)
+                first = timestamps[0].ticks;
+            last = timestamps[1].ticks;
+            measured++;
+            const auto &segment = frame.gpu_segments[i];
+            perf_log::write("gpu_segments", "steady_us,frame,draws,gpu_us",
+                fmt::format("{},{},{},{:.3f}", segment.start_us, frame.gpu_frame_timestamp, segment.draws, *duration));
+        }
+        const bool complete = measured == frame.gpu_segments.size() && frame.gpu_segments_skipped == 0;
+        const auto span = gpu_timing::elapsed_us(first, last, context.state.gpu_timestamp_bits,
+            context.state.physical_device_properties.limits.timestampPeriod);
+        // A frame span includes gaps between recordings. It is elapsed time,
+        // not a sum of overlapping segment durations or GPU utilization.
+        perf_log::write("gpu_frames", "steady_us,frame,segments,measured,skipped,gpu_span_us",
+            fmt::format("{},{},{},{},{},{}", frame.gpu_segments.front().start_us, frame.gpu_frame_timestamp,
+                frame.gpu_segments.size(), measured, frame.gpu_segments_skipped,
+                complete && span ? fmt::format("{:.3f}", *span) : ""));
+    }
+    frame.gpu_segments.clear();
+    frame.gpu_segments_submitted = 0;
+    frame.gpu_segments_skipped = 0;
 
     device.resetCommandPool(frame.prerender_pool);
     device.resetCommandPool(frame.render_pool);

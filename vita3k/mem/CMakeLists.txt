@@ -26,11 +26,12 @@ if(NOT ANDROID)
 		tests/external_mapping_tests.cpp
 		tests/hotpath_tests.cpp
 		tests/perf_log_tests.cpp
+		tests/renderer_wait_tests.cpp
 		tests/sysmem_block_tests.cpp
 		tests/thread_priority_tests.cpp
 	)
 
-	target_include_directories(mem-tests PRIVATE include ../modules/include ../kernel/include ../rtc/include)
+	target_include_directories(mem-tests PRIVATE include ../modules/include ../kernel/include ../rtc/include ../threads/include)
 	target_link_libraries(mem-tests PRIVATE mem googletest util)
 	add_test(NAME mem COMMAND mem-tests)
 endif()

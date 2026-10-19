@@ -1725,6 +1725,17 @@ private fun EmulatorSettingsSection(
                 ),
                 onShowHelp = onShowHelp
             )
+            SettingsToggleRow(
+                title = stringResource(R.string.settings_emulator_renderer_event_wait),
+                checked = cfg.rendererEventWait,
+                onCheckedChange = { onUpdate { rendererEventWait = it } },
+                help = SettingsHelpEntry(
+                    title = stringResource(R.string.settings_emulator_renderer_event_wait),
+                    body = stringResource(R.string.settings_emulator_renderer_event_wait_desc),
+                    scope = SettingsScope.Global
+                ),
+                onShowHelp = onShowHelp
+            )
             val logOptions = listOf(
                 stringResource(R.string.settings_opt_trace),
                 stringResource(R.string.settings_opt_debug),

@@ -30,6 +30,7 @@
 #include <util/fs.h>
 #include <util/hash.h>
 #include <util/log.h>
+#include <util/perf_log.h>
 
 #include <array>
 #include <bit>
@@ -1215,8 +1216,16 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     // the whole emulator down before the check below could run. Some drivers (notably Mesa/Turnip)
     // also report an internal shader-compiler rejection as ErrorOutOfHostMemory rather than a
     // specific error.
+    const int64_t compile_start_us = perf_log::enabled() ? perf_log::now_us() : 0;
+    const auto log_compile = [&](bool success) {
+        if (compile_start_us != 0) {
+            perf_log::write("pipeline_compiles", "steady_us,compile_us,success",
+                fmt::format("{},{},{}", compile_start_us, perf_log::now_us() - compile_start_us, success ? 1 : 0));
+        }
+    };
     try {
         const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
+        log_compile(result.result == vk::Result::eSuccess);
         if (result.result != vk::Result::eSuccess) {
             LOG_CRITICAL("Failed to create pipeline: {}", vk::to_string(result.result));
             return nullptr;
@@ -1244,6 +1253,7 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
         }
         return result.value;
     } catch (const vk::SystemError &err) {
+        log_compile(false);
         const uint32_t failure_index = pipelines_failed++;
         LOG_CRITICAL("Failed to create pipeline #{} ({} succeeded so far): {}", failure_index,
             pipelines_created.load(), err.what());

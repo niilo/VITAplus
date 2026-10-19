@@ -1024,6 +1024,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         default_image.sampler = device.createSampler(sampler_info);
     }
 
+    gpu_timestamp_bits = physical_device.getQueueFamilyProperties()[general_family_index].timestampValidBits;
+    LOG_INFO("Vulkan GPU timing: timestampValidBits={} timestampPeriod={} ns", gpu_timestamp_bits,
+        physical_device_properties.limits.timestampPeriod);
+
     // create the frame objects
     for (int i = 0; i < MAX_FRAMES_RENDERING; i++) {
         FrameObject &frame = frames[i];
@@ -1305,6 +1309,13 @@ void VKState::cleanup() {
     frame_descriptor_pools.clear();
 
     for (int i = 0; i < MAX_FRAMES_RENDERING; i++) {
+        if (frames[i].gpu_query_pool) {
+            device.destroyQueryPool(frames[i].gpu_query_pool);
+            frames[i].gpu_query_pool = nullptr;
+        }
+        frames[i].gpu_segments.clear();
+        frames[i].gpu_segments_submitted = 0;
+        frames[i].gpu_segments_skipped = 0;
         device.destroy(frames[i].render_pool);
         frames[i].render_pool = nullptr;
         device.destroy(frames[i].prerender_pool);
