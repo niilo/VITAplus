@@ -1,12 +1,13 @@
 # 21: Every compiled shader writes a file, on the shader path, on Android
 
-Status: open
+Status: claimed
 Type: task
-Label: ready-for-agent
+Label: needs-info
+Claimed: 2026-10-20 Codex
 
 ## Context
 
-`vita3k/renderer/src/shaders.cpp:188-194`:
+Before the port below, `vita3k/renderer/src/shaders.cpp` contained:
 
 ```cpp
 fs::create_directories(shaderlog_path);
@@ -21,10 +22,9 @@ fs_utils::dump_data(shader_log_path, &program, program.size);
 every non-cache extension. This runs for every shader, every time a shader is
 compiled.
 
-On Android `shaderlog_path` is under the application's own storage. A cold start
-compiles thousands of shaders and writes a file per shader, on the thread doing
-the compiling. On a device with slow storage that is the dominant cost of a cold
-launch.
+On Android `shaderlog_path` is under the application's own storage. A cold
+start writes diagnostic files on the thread compiling the shaders. Its share
+of loading time has not been measured here.
 
 Two things must be preserved when this is gated:
 
@@ -51,5 +51,16 @@ same change.
 4. Measure with `tools/android/gameplay_scene.sh` and
    `tools/android/device_power_sample.sh` from a cleared cache, and record time
    to first frame.
+
+## Code result
+
+Implemented in `c2f81a34` using Plus 3576a576 and 6c568f82. Android debug
+logging now controls diagnostic directory creation and dumps. The reusable
+shader cache is still written. Desktop diagnostic dumps keep their existing
+behaviour. Shader-generation messages use debug logging.
+
+Linux and Android ARM64 compilation pass, as do all 103 C++ tests and the
+APK packaging checks. The cold-start device comparison is still pending.
+No startup or FPS improvement has been measured.
 
 ## Comments

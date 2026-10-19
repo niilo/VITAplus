@@ -81,7 +81,17 @@ same focused suites pass with the fixes. Cache parser tests also pass.
 The Linux x86-64 RelWithDebInfo build passed. All 103 C++ tests across eight
 CTest entries passed, including real JPEG round trips and YVU conversion.
 clang-format 22 checks passed on all 20 changed C++ files, and git diff --check
-passed. Android ARM64 verification is pending.
+passed. Android ARM64 assembleReldebug also passed with native
+RelWithDebInfo optimization. The APK signature and 16 KiB zip alignment pass.
+All 57 source assets match the packaged contents, and the unstripped native
+library matches the APK build ID.
+
+The local verification APK is build/plus-fixes-apk/VITAdev-plus-fixes-arm64.apk,
+package org.vita3k.emulator.debug.plusfixes, label VITAdev Plus fixes.
+Its application source is c2f81a34d054b57ee95d33ac8f1c727e4a8e7193.
+Native build ID: 3ad29af16c7bd42d13a9633de4b2334ab2070cbe.
+APK SHA-256: 88448e0e68bfc5f3da20f7f29173bab48b70956ff3c049e63714bf466043537a.
+The local verification manifest records the matching profiling library.
 Physical Pocket S and Steam Deck gameplay, GPU timing, power and thermals
 remain unmeasured. This review does not establish 60 FPS at true 3x.
 
