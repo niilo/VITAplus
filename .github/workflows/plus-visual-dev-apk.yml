@@ -119,7 +119,7 @@ jobs:
           set -euo pipefail
           cd artifacts
           sha256sum -c SHA256SUMS
-          gh api repos/niilo/VITAplus/releases/tags/dev-plus-visuals-20261020 > "$RUNNER_TEMP/release-before.json"
+          gh api repos/niilo/VITAplus/releases/418747004 > "$RUNNER_TEMP/release-before.json"
           python3 - <<'PY'
           import json, os, pathlib
           r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'release-before.json').read_text())
