@@ -22,6 +22,13 @@ target_include_directories(shader PUBLIC include)
 target_link_libraries(shader PUBLIC features gxm util)
 target_link_libraries(shader PRIVATE SPIRV spirv-cross-glsl)
 
+if(NOT ANDROID)
+	add_executable(shader-tests tests/framebuffer_fetch_tests.cpp)
+	target_link_libraries(shader-tests PRIVATE shader googletest SPIRV)
+	target_compile_definitions(shader-tests PRIVATE VITA_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+	add_test(NAME shader COMMAND shader-tests)
+endif()
+
 # Marshmallow Tracy linking
 if(TRACY_ENABLE_ON_CORE_COMPONENTS)
 	target_link_libraries(shader PRIVATE tracy)

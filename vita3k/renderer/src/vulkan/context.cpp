@@ -17,6 +17,7 @@
 
 #include <renderer/vulkan/types.h>
 
+#include <renderer/surface_sync.h>
 #include <renderer/vulkan/functions.h>
 #include <renderer/vulkan/gxm_to_vulkan.h>
 #include <renderer/vulkan/state.h>
@@ -136,7 +137,11 @@ void VKContext::wait_thread_function(const MemState &mem) {
                            wait_for_fences();
                            const std::shared_lock<std::shared_mutex> transition_lock(mem.external_transition_mutex);
                            auto mem_it = state.mapped_memories.lower_bound(request.location);
-                           if (mem_it == state.mapped_memories.end() || mem_it->first + mem_it->second.size < request.location + request.size) {
+                           const uint64_t range_end = static_cast<uint64_t>(request.location) + request.size;
+                           const auto row_span = request.row_stride ? surface_sync_rows_span(request.row_stride, request.row_bytes, request.row_count) : std::optional<uint64_t>(request.size);
+                           if (range_end > (uint64_t{ 1 } << 32) || !row_span || *row_span > request.size
+                               || (!request.row_stride && (request.row_count || request.row_bytes))
+                               || mem_it == state.mapped_memories.end() || static_cast<uint64_t>(mem_it->first) + mem_it->second.size < range_end) {
                                LOG_ERROR("Buffer Sync request for {}-{} is not fully mapped", log_hex(request.location), log_hex(request.location + request.size));
                                return;
                            }
@@ -145,11 +150,7 @@ void VKContext::wait_thread_function(const MemState &mem) {
                            renderer::vulkan::surface_sync_internal_write = true;
                            if (request.row_stride != 0) {
                                uint8_t *dst = reinterpret_cast<uint8_t *>(Ptr<void>(request.location).get(mem));
-                               for (uint32_t row = 0; row < request.row_count; row++) {
-                                   memcpy(dst, src, request.row_bytes);
-                                   src += request.row_stride;
-                                   dst += request.row_stride;
-                               }
+                               copy_surface_sync_rows(dst, src, request.size, request.row_stride, request.row_bytes, request.row_count);
                            } else {
                                memcpy(Ptr<void>(request.location).get(mem), src, request.size);
                            }
@@ -318,6 +319,7 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
     context.current_fb_width = framebuffer.width;
     context.current_fb_height = framebuffer.height;
     context.current_color_raw_view = framebuffer.raw_image ? framebuffer.raw_image->view : state.default_raw_image.view;
+    context.current_color_raw_image = framebuffer.raw_image;
 
     // make sure we are not keeping any texture from the previous pass
     // (textures can be still bound even though they are not used)
@@ -449,15 +451,14 @@ static vk::DescriptorSet retrieve_color_descriptor(VKState &state, FrameDescript
 
     // we have no more frame descriptor available, create a bunch of new one for this specific layout
     // the type depends on the way we read it; each set holds the color attachment (binding 0)
-    uint32_t storage_images_per_set = state.features.support_shader_interlock ? 1 : 0;
+    const uint32_t attachment_images_per_set = state.features.preserve_f16_nan_as_u16 ? 2 : 1;
+    uint32_t storage_images_per_set = state.features.support_shader_interlock ? attachment_images_per_set : 0;
     if (state.features.use_mask_bit)
-        storage_images_per_set++;
-    if (state.features.preserve_f16_nan_as_u16)
         storage_images_per_set++;
 
     std::vector<vk::DescriptorPoolSize> pool_sizes;
     if (!state.features.support_shader_interlock)
-        pool_sizes.push_back({ vk::DescriptorType::eInputAttachment, DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
+        pool_sizes.push_back({ vk::DescriptorType::eInputAttachment, attachment_images_per_set * DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
     if (storage_images_per_set > 0)
         pool_sizes.push_back({ vk::DescriptorType::eStorageImage, storage_images_per_set * DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
 
@@ -586,7 +587,7 @@ void VKContext::start_render_pass(bool create_descriptor_set) {
             .dstSet = rendertarget_set,
             .dstBinding = 2,
             .dstArrayElement = 0,
-            .descriptorType = vk::DescriptorType::eStorageImage,
+            .descriptorType = input_type,
         };
         write_raw_descr.setImageInfo(descr_raw_info);
         std::array<vk::WriteDescriptorSet, 2> writes = { write_descr, write_raw_descr };
@@ -730,23 +731,22 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
 
             // we must sync the two buffers
             if (surface_info && surface_info->need_buffer_sync) {
-                if (render_target->has_macroblock_sync && state.res_multiplier != 1.0f
-                    && rendered_rect_x1 > rendered_rect_x0 && rendered_rect_y1 > rendered_rect_y0) {
+                if (surface_info->sync_partial) {
                     const uint32_t bpp = gxm::bits_per_pixel(surface_info->format) / 8;
                     const uint32_t row_stride_bytes = surface_info->stride_bytes;
-                    const int32_t nx0 = static_cast<int32_t>(rendered_rect_x0 / state.res_multiplier);
-                    const int32_t ny0 = static_cast<int32_t>(rendered_rect_y0 / state.res_multiplier);
-                    const int32_t nx1 = static_cast<int32_t>(rendered_rect_x1 / state.res_multiplier);
-                    const int32_t ny1 = static_cast<int32_t>(rendered_rect_y1 / state.res_multiplier);
-                    const Address rect_start = surface_info->data.address() + ny0 * row_stride_bytes + nx0 * bpp;
-                    const uint32_t rect_row_bytes = static_cast<uint32_t>(nx1 - nx0) * bpp;
-                    const uint32_t rect_row_count = static_cast<uint32_t>(ny1 - ny0);
-                    state.request_queue.push(BufferSyncRequest{
-                        rect_start,
-                        static_cast<uint32_t>(surface_info->total_bytes),
-                        row_stride_bytes,
-                        rect_row_bytes,
-                        rect_row_count });
+                    const uint64_t rect_start = static_cast<uint64_t>(surface_info->data.address()) + surface_info->sync_y0 * static_cast<uint64_t>(row_stride_bytes) + surface_info->sync_x0 * bpp;
+                    const uint32_t rect_row_bytes = surface_info->sync_width * bpp;
+                    const auto span = surface_sync_rows_span(row_stride_bytes, rect_row_bytes, surface_info->sync_height);
+                    if (span && rect_start + *span <= (uint64_t{ 1 } << 32) && *span <= UINT32_MAX) {
+                        state.request_queue.push(BufferSyncRequest{
+                            static_cast<Address>(rect_start),
+                            static_cast<uint32_t>(*span),
+                            row_stride_bytes,
+                            rect_row_bytes,
+                            surface_info->sync_height });
+                    } else {
+                        LOG_ERROR("Invalid partial surface write-back");
+                    }
                 } else {
                     state.request_queue.push(BufferSyncRequest{ surface_info->data.address(), static_cast<uint32_t>(surface_info->total_bytes) });
                 }

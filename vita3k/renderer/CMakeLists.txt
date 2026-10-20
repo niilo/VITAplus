@@ -52,7 +52,7 @@ target_link_libraries(renderer PUBLIC display mem stb shader glutil threads conf
 target_link_libraries(renderer PRIVATE dialog ddspp SDL3::SDL3 stb ffmpeg xxHash::xxhash concurrentqueue)
 
 if(NOT ANDROID)
-	add_executable(renderer-cache-tests tests/pipeline_cache_file_tests.cpp)
+	add_executable(renderer-cache-tests tests/pipeline_cache_file_tests.cpp tests/surface_sync_tests.cpp)
 	target_include_directories(renderer-cache-tests PRIVATE include)
 	target_link_libraries(renderer-cache-tests PRIVATE googletest)
 	add_test(NAME renderer-cache COMMAND renderer-cache-tests)

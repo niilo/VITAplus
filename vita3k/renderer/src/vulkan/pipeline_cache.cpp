@@ -165,7 +165,7 @@ void PipelineCache::init(bool support_rasterized_order_access) {
             // raw u16x4 alias of the color attachment (set 1, binding 2 in the shaders)
             layout_binding[binding_count++] = vk::DescriptorSetLayoutBinding{
                 .binding = 2,
-                .descriptorType = vk::DescriptorType::eStorageImage,
+                .descriptorType = intput_image_descriptor,
                 .descriptorCount = 1,
                 .stageFlags = vk::ShaderStageFlagBits::eFragment
             };
@@ -494,6 +494,10 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
         hash[0] ^= static_cast<uint8_t>(0xC0 + one_channel_source);
         version_suffix = fmt::format("c{}", one_channel_source);
     }
+    if (!is_vertex && hints.raw_color_attachment_input) {
+        hash[6] ^= 0x75;
+        version_suffix += "u";
+    }
 
     const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
 
@@ -607,7 +611,7 @@ vk::RenderPass PipelineCache::retrieve_render_pass(vk::Format format, bool depth
 
         subpass.colorAttachmentCount = with_raw_attachment ? 2 : 1;
         subpass.pColorAttachments = color_refs;
-        subpass.inputAttachmentCount = 1;
+        subpass.inputAttachmentCount = (with_raw_attachment && state.features.direct_fragcolor) ? 2 : 1;
         subpass.pInputAttachments = color_refs;
     }
 
@@ -1090,8 +1094,13 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     // the vertex input state must be computed before shader are retrieved in case symbols are stripped
     const vk::PipelineVertexInputStateCreateInfo vertex_input = get_vertex_input_state(vertex_program_binding);
 
+    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
+    const bool with_raw_attachment = state.features.preserve_f16_nan_as_u16 && !use_shader_interlock && record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16 && has_color_surface_data;
+    shader::Hints fragment_hints = hints;
+    fragment_hints.raw_color_attachment_input = with_raw_attachment && state.features.direct_fragcolor && gxm_fragment_shader->is_frag_color_used();
+
     const vk::PipelineShaderStageCreateInfo vertex_shader = retrieve_shader(vertex_program_binding.program(), vertex_program.hash, true, fragment_program_binding.is_maskupdate, mem, hints);
-    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_binding.is_maskupdate, mem, hints, record.is_gamma_corrected);
+    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_binding.is_maskupdate, mem, fragment_hints, record.is_gamma_corrected);
     const vk::PipelineShaderStageCreateInfo shader_stages[] = { vertex_shader, fragment_shader };
     // disable the fragment shader if gxm asks us to
     const bool is_fragment_disabled = record.front_side_fragment_program_mode == SCE_GXM_FRAGMENT_PROGRAM_DISABLED || gxm_fragment_shader->has_no_effect();
@@ -1102,8 +1111,6 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     };
 
     const bool two_sided = (record.two_sided == SCE_GXM_TWO_SIDED_ENABLED);
-
-    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
 
     const vk::PipelineRasterizationStateCreateInfo rasterizer{
         .depthClampEnable = (enable_depth_clamp && state.physical_device_features.depthClamp) ? VK_TRUE : VK_FALSE,
@@ -1149,7 +1156,6 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     } else {
         blend_attachments[0] = fragment_program.blending;
     }
-    const bool with_raw_attachment = state.features.preserve_f16_nan_as_u16 && !use_shader_interlock && record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16 && has_color_surface_data;
     color_blending.attachmentCount = with_raw_attachment ? 2 : 1;
     color_blending.pAttachments = blend_attachments.data();
 

@@ -106,8 +106,15 @@ struct ColorSurfaceCacheInfo : public SurfaceCacheInfo {
     uint32_t stride_bytes;
     uint64_t last_frame_rendered;
     uint64_t last_scene_rendered = 0;
+    uint64_t last_frame_cpu_written = 0;
     uint16_t rendered_w = 0;
     uint16_t rendered_h = 0;
+    uint16_t bound_width = 0;
+    uint16_t bound_height = 0;
+    int32_t scene_x0 = 0, scene_y0 = 0, scene_x1 = 0, scene_y1 = 0;
+    // Exact guest rows copied by the last GPU write-back, used by Double Buffer.
+    uint32_t sync_x0 = 0, sync_y0 = 0, sync_width = 0, sync_height = 0;
+    bool sync_partial = false;
     int32_t written_x0 = INT32_MAX;
     int32_t written_y0 = INT32_MAX;
     int32_t written_x1 = 0;
@@ -366,6 +373,7 @@ public:
     // synchronize the surface back to the RAM then only call the callback
     // if this call is used for a copy or similar operation set the changed address to the destination
     // so that subsequent calls to check_for_surface with the target destination also get delayed
+    void note_cpu_write(Address address);
     bool check_for_surface(MemState &mem, Address source_address, CallbackRequestFunction &callback, Address target_address, uint32_t source_size = 0);
     std::map<Address, ColorSurfaceCacheInfo *>::iterator find_color_surface_containing(Address address, uint32_t size);
     // Called when a guest address is about to be read by the GPU through raw buffer
