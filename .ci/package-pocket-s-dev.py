@@ -26,16 +26,20 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--package", default="org.vita3k.emulator.debug.pockets3xci")
     parser.add_argument("--label", default="VITAdev 3x CI")
+    parser.add_argument("--name", default="VITAdev-3x-p1")
+    parser.add_argument("--application-source", default="aad783f02ad94780f1165d8da8af4c3b1a904a69")
+    parser.add_argument("--testing", type=Path, default=Path(".scratch/pocket-s-60fps-3x/testing.md"))
+    parser.add_argument("--notes", type=Path)
+    parser.add_argument("--build-label")
     args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", args.name):
+        parser.error("Artifact name must contain only letters, digits, underscores and hyphens")
     root = Path.cwd()
     sdk = Path(os.environ["ANDROID_HOME"]) / "build-tools/36.0.0"
     ndk = Path(os.environ["ANDROID_NDK_HOME"])
     readelf = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
     apk = root / "android/app/build/outputs/apk/reldebug/app-reldebug.apk"
     natives = list((root / "android/app/build/intermediates/cxx/RelWithDebInfo").glob("*/obj/arm64-v8a/libVita3K.so"))
-    if len(natives) != 1:
-        raise RuntimeError(f"Expected one unstripped ARM64 library; found {len(natives)}")
-    native = natives[0]
     run(sdk / "apksigner", "verify", "--verbose", apk)
     run(sdk / "zipalign", "-c", "-P", "16", "4", apk)
     badging = run(sdk / "aapt2", "dump", "badging", apk)
@@ -59,32 +63,36 @@ def main():
             for path in (root / source).rglob("*"):
                 if path.is_file():
                     name = "assets/" + destination + "/" + path.relative_to(root / source).as_posix()
-                    if name not in names:
-                        raise RuntimeError(f"Required APK asset is missing: {name}")
+                    if name not in names or archive.read(name) != path.read_bytes():
+                        raise RuntimeError(f"Required APK asset is missing or changed: {name}")
                     assets_checked += 1
         with tempfile.TemporaryDirectory(prefix="vita-ci-verify-") as tmp:
             packaged = Path(tmp) / "libVita3K.so"
             packaged.write_bytes(archive.read("lib/arm64-v8a/libVita3K.so"))
-            native_id = build_id(native)
-            if build_id(packaged) != native_id:
-                raise RuntimeError("Packaged and profiling libraries have different build IDs")
+            native_id = build_id(packaged)
+            matching = [path for path in natives if build_id(path) == native_id]
+            if not matching:
+                raise RuntimeError("No profiling library matches the APK build ID")
+            native = matching[0]
+            if args.build_label and args.build_label.encode() not in packaged.read_bytes():
+                raise RuntimeError("Packaged library does not contain the expected build label")
 
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    shutil.copyfile(apk, out / "VITAdev-3x-p1-arm64.apk")
-    with zipfile.ZipFile(out / "VITAdev-3x-p1-symbols.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+    shutil.copyfile(apk, out / f"{args.name}-arm64.apk")
+    with zipfile.ZipFile(out / f"{args.name}-symbols.zip", "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(native, "lib/arm64-v8a/libVita3K.so")
     revision = run("git", "rev-parse", "HEAD").strip()
     patch = run("git", "diff", "--binary", "09f207d31196c20c238183a01420207ea1c640a2", "HEAD")
-    (out / "VITAdev-3x-p1-source.patch").write_text(patch)
-    testing = (root / ".scratch/pocket-s-60fps-3x/testing.md").read_text()
+    (out / f"{args.name}-source.patch").write_text(patch)
+    testing = (root / args.testing).read_text()
     testing = testing.replace("org.vita3k.emulator.debug.pockets3x", args.package).replace("VITAdev 3x", args.label)
     testing = testing.replace("cloud-generated", "CI-generated")
     testing += "\nThis APK was rebuilt in GitHub Actions. Use its adjacent build manifest and matching CI symbols. The original cloud APK has a different signing key and native build ID.\n"
     (out / "TESTING.md").write_text(testing)
     manifest = {
         "source_commit": revision,
-        "application_code_reference_commit": "aad783f02ad94780f1165d8da8af4c3b1a904a69",
+        "application_code_reference_commit": args.application_source,
         "package_id": args.package,
         "launcher_label": args.label,
         "variant": "reldebug",
@@ -110,8 +118,17 @@ The application code is unchanged from tested source `aad783f02ad94780f1165d8da8
 
 Files: the APK, matching profiling symbols, source patch, build manifest, testing guide and SHA256SUMS. This freshly built CI APK replaces the unavailable cloud download; use its own checksums and symbols.
 
-APK SHA-256: `{manifest['artifacts']['VITAdev-3x-p1-arm64.apk']['sha256']}`.
+APK SHA-256: `{manifest['artifacts'][f'{args.name}-arm64.apk']['sha256']}`.
 """
+    if args.notes:
+        notes = (root / args.notes).read_text()
+        for placeholder, value in {
+            "@LABEL@": args.label, "@PACKAGE@": args.package,
+            "@SOURCE@": revision, "@APPLICATION_SOURCE@": args.application_source,
+            "@APK@": f"{args.name}-arm64.apk", "@NATIVE_ID@": native_id,
+            "@APK_SHA256@": manifest["artifacts"][f"{args.name}-arm64.apk"]["sha256"],
+        }.items():
+            notes = notes.replace(placeholder, value)
     (out / "RELEASE_NOTES.md").write_text(notes)
     print(f"Verified APK and matching symbols; checked {assets_checked} assets. Source: {revision}")
 

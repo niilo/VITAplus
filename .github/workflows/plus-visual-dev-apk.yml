@@ -1,0 +1,143 @@
+name: Plus visual fixes development APK
+
+on:
+  push:
+    branches: [feat/plus-targeted-fixes-20261020]
+    paths:
+      - .github/workflows/plus-visual-dev-apk.yml
+      - .ci/package-pocket-s-dev.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plus-visual-dev-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VCPKG_MAX_CONCURRENCY: '4'
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+      - name: Install pinned build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config autoconf automake libtool perl zip unzip
+          python3 -m venv "$RUNNER_TEMP/vita-tools"
+          "$RUNNER_TEMP/vita-tools/bin/pip" install cmake==3.31.10 ninja==1.13.0
+          echo "$RUNNER_TEMP/vita-tools/bin" >> "$GITHUB_PATH"
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vita-vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vita-vcpkg-cache" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/vita-android-user" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/vita-vcpkg-cache" "$RUNNER_TEMP/vita-android-user/cache"
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(['sdkmanager', '--install', 'platforms;android-35', 'build-tools;36.0.0', 'ndk;29.0.14206865'], input='y\n' * 100, text=True, check=True)
+          PY
+          baseline=$(python3 -c 'import json; print(json.load(open("vcpkg.json"))["builtin-baseline"])')
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vita-vcpkg"
+          git -C "$RUNNER_TEMP/vita-vcpkg" checkout "$baseline"
+          "$RUNNER_TEMP/vita-vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+      - name: Check application source and Python tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code 6ba65c0076190919f5c71b335b90e102aeff1541 HEAD -- android vita3k tools cmake external data CMakeLists.txt vcpkg.json
+          bash tools/release/check-no-signing-keys.sh
+          python3 tools/android/test_perf_summary.py
+          python3 tools/android/test_perf_report.py
+          python3 tools/android/test_fps_sample.py
+      - name: Build isolated ARM64 development APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import cmake, os, pathlib, shutil
+          root = pathlib.Path.cwd()
+          for source, destination in [('data', 'data'), ('vita3k/shaders-builtin', 'shaders-builtin'), ('vita3k/icons', 'icons')]:
+              shutil.copytree(root / source, root / 'android/app/assets' / destination, dirs_exist_ok=True)
+          cmake_root = pathlib.Path(cmake.CMAKE_BIN_DIR).parent
+          (root / 'android/local.properties').write_text(f'sdk.dir={os.environ["ANDROID_HOME"]}\ncmake.dir={cmake_root}\n')
+          PY
+          cd android
+          ./gradlew --stacktrace --build-cache --max-workers=4 \
+            -PvitaDevSuffix=.debug.visualfixes \
+            '-PvitaDevLabel=VITAdev Visual 20' \
+            "-PvitaDevVersionSuffix=-visual-fixes.$GITHUB_RUN_NUMBER" \
+            "-PvitaBuildLabel=visual-fixes-$GITHUB_RUN_ID" \
+            :app:assembleReldebug
+      - name: Verify and package the APK and symbols
+        run: |
+          python3 .ci/package-pocket-s-dev.py --output build/plus-visual-dev-ci \
+            --name VITAdev-visual-fixes --package org.vita3k.emulator.debug.visualfixes \
+            --label 'VITAdev Visual 20' --application-source 6ba65c0076190919f5c71b335b90e102aeff1541 \
+            --build-label "visual-fixes-$GITHUB_RUN_ID" \
+            --testing .scratch/plus-visual-fixes-2026-10-20/testing.md \
+            --notes .scratch/plus-visual-fixes-2026-10-20/release-notes.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plus-visual-dev
+          path: build/plus-visual-dev-ci/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plus-visual-dev
+          path: artifacts
+      - name: Verify files and publish the prepared prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: niilo/VITAplus
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum -c SHA256SUMS
+          gh api repos/niilo/VITAplus/releases/tags/dev-plus-visuals-20261020 > "$RUNNER_TEMP/release-before.json"
+          python3 - <<'PY'
+          import json, os, pathlib
+          r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'release-before.json').read_text())
+          assert r['draft'] and r['prerelease'] and r['tag_name'] == 'dev-plus-visuals-20261020', 'Expected the prepared draft prerelease'
+          assert not r['assets'], 'Refusing to replace existing release assets'
+          PY
+          gh release upload dev-plus-visuals-20261020 \
+            VITAdev-visual-fixes-arm64.apk VITAdev-visual-fixes-symbols.zip VITAdev-visual-fixes-source.patch \
+            build-manifest.json TESTING.md SHA256SUMS
+          gh release edit dev-plus-visuals-20261020 \
+            --target "$GITHUB_SHA" --title 'VITAdev Visual 20: Plus visual fixes test build' \
+            --notes-file RELEASE_NOTES.md --draft=false --prerelease --latest=false
+          curl --fail --location --retry 3 \
+            https://github.com/niilo/VITAplus/releases/download/dev-plus-visuals-20261020/VITAdev-visual-fixes-arm64.apk \
+            --output "$RUNNER_TEMP/download-check.apk"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib
+          m = json.loads(pathlib.Path('build-manifest.json').read_text())
+          p = pathlib.Path(os.environ['RUNNER_TEMP']) / 'download-check.apk'
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == m['artifacts']['VITAdev-visual-fixes-arm64.apk']['sha256']
+          PY
