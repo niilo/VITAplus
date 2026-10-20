@@ -1,8 +1,8 @@
 # 14: A partly drawn surface is written back in full, and the row sync is unbounded
 
-Status: open
+Status: claimed
 Type: task
-Label: ready-for-agent
+Label: needs-info
 
 ## Context
 
@@ -123,3 +123,23 @@ U2F10F10F10 or SE5F9M9M9 surface down the partial path and skip the repack.
 
 Steps 4, 5 and 6 are not in that commit. `.scratch/plus-fixes/spec.md` has the
 detail and the commit each came from.
+
+### 2026-10-20: partial linear write-back and bounded row copies implemented
+
+Commit 6ba65c00 adapts Plus e530c4e8 and 7c52fc78. Record the unscaled scene
+bounds. Permit partial updates for eligible small linear surfaces. Keep the
+render-target clamp, the wider packed-format guard and the tiled path. The
+new partial path excludes CPU-swizzled surfaces. Smaller rebinds skip whole
+CPU conversion paths instead of writing beyond the bound allocation.
+
+Double Buffer now copies the exact rows copied by the GPU, with the actual
+row span rather than the old total surface size. The wait handler validates
+row layout and uses 64-bit address bounds before any copy. Five surface tests
+cover retained CPU bytes, invalid layouts, spans, bounds and CPU presentation.
+The Linux build and all 110 C++ tests pass. See the
+[follow-up review](../../plus-visual-fixes-2026-10-20/review.md).
+
+The mapped range is validated as a whole. Invalid requests are rejected;
+rows are not silently shortened. Packed conversion and CPU swizzle loops
+still need separate bounded partial support. Device rendering, FPS and power
+have not been measured, so the ticket remains needs-info.

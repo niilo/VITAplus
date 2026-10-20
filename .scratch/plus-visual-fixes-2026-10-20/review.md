@@ -80,3 +80,34 @@ APK. Signature, 16 KiB ZIP alignment, all 57 assets compared byte for byte,
 expected native build label and matching unstripped symbols passed. This
 checks the helper; it does not build or validate the new Android application.
 The fresh GitHub Actions build supplies the new APK and its own manifest.
+
+The raw-fetch regression was also run with the old translator from 35a41200.
+It failed because the raw input decoration and unsigned image read were absent.
+The ordinary float-fetch test still passed. The fixed source was restored.
+The full Linux build and all nine CTest entries then passed again in 5.60
+seconds. clang-format 22 checked all 13 changed C++ files successfully.
+
+## Published Android test build
+
+[GitHub Actions run 39478233888](https://github.com/niilo/VITAplus/actions/runs/39478233888)
+built and published the new prerelease successfully. Application source:
+6ba65c0076190919f5c71b335b90e102aeff1541. CI source and release target:
+94aad706f2bdff44ab52be47399abf8990bd3008. The workflow's application-source
+comparison passed. The two later commits only change CI packaging.
+
+Release: [dev-plus-visuals-20261020](https://github.com/niilo/VITAplus/releases/tag/dev-plus-visuals-20261020).
+APK: VITAdev-visual-fixes-arm64.apk, 86,454,328 bytes.
+Package: org.vita3k.emulator.debug.visualfixes. Label: VITAdev Visual 20.
+Native build ID: 6b559770623b2f8f7575adc51007e1838a5e00ab.
+APK SHA-256: f6d8b65a845ff4dfdac0c288049921eaee54018b700964f8e172ff9e4c11dccb.
+
+The runner verified APK signing, 16 KiB ZIP alignment, all 57 source asset
+contents, the expected build label and matching profiling symbols. It then
+published six assets and verified a public download against the manifest.
+The cloud independently downloaded the public APK and verified its digest,
+signature, alignment, package/label, native ID, build label and all 57 assets.
+The local record is build/plus-visuals-public/public-verification.json.
+
+The release is a prerelease. The original phase 1 release remains available.
+Physical Pocket S and Steam Deck visuals, frame timing, power and thermals
+remain unmeasured. Use the new build for the matched comparisons in testing.md.

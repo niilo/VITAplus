@@ -1,5 +1,9 @@
 # Selected Vita3K-Plus fixes
 
+Follow-up: [Jak and Uncharted rendering ports](../plus-visual-fixes-2026-10-20/review.md)
+adds raw framebuffer input, partial write-back and CPU-written presentation.
+The adoption table below records the earlier c2f81a34 port.
+
 Reviewed on 2026-10-20 for the Pocket S 3x/60 FPS work and continued Linux
 x86-64 support. This is a selective port, with device testing still required.
 
