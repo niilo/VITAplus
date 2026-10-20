@@ -31,6 +31,7 @@
 #include <overlay/display_manager.h>
 #include <overlay/shader_precompile_progress.h>
 #include <util/log.h>
+#include <util/perf_log.h>
 #include <util/thread_priority.h>
 #ifdef __ANDROID__
 #include <unistd.h>
@@ -185,7 +186,27 @@ static void process_batch(renderer::State &state, const FeatureState &features, 
 }
 
 void process_batches(renderer::State &state, const FeatureState &features, MemState &mem, Config &config, int64_t max_wait_ms) {
-    auto max_time = duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() + max_wait_ms;
+    const bool event_wait = config.renderer_event_wait && state.current_backend == Backend::Vulkan;
+    const auto legacy_deadline_ms = event_wait ? 0 : duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() + max_wait_ms;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(max_wait_ms);
+    struct QueueSample {
+        int64_t start_us;
+        bool event_wait;
+        uint32_t waits = 0;
+        uint32_t empty_returns = 0;
+        int64_t wait_us = 0;
+        ~QueueSample() {
+            if (start_us != 0) {
+                perf_log::write("renderer_queue", "steady_us,event_wait,waits,empty_returns,wait_us",
+                    fmt::format("{},{},{},{},{}", start_us, event_wait ? 1 : 0, waits, empty_returns, wait_us));
+            }
+        }
+    } sample{ perf_log::enabled() ? perf_log::now_us() : 0, event_wait };
+    const auto interrupted = [&] {
+        return state.should_display.load(std::memory_order_relaxed)
+            || state.render_abort.load(std::memory_order_relaxed)
+            || state.async_flip_requested.load(std::memory_order_relaxed);
+    };
 
     while (!state.should_display) {
         if (state.render_abort.load(std::memory_order_relaxed))
@@ -195,8 +216,18 @@ void process_batches(renderer::State &state, const FeatureState &features, MemSt
         if (state.async_flip_requested.load(std::memory_order_relaxed))
             return;
 
-        // Try to wait for a batch (about 2 or 3ms, game should be fast for this)
-        auto cmd_list = state.command_buffer_queue.top(3);
+        // The legacy queue timeout is in microseconds. The experiment waits
+        // for a command, display request, shutdown, or the display deadline.
+        const int64_t wait_start_us = sample.start_us ? perf_log::now_us() : 0;
+        auto cmd_list = event_wait ? state.command_buffer_queue.top_until(deadline, interrupted)
+                                   : state.command_buffer_queue.top(3);
+        if (sample.start_us != 0) {
+            sample.waits++;
+            sample.empty_returns += !cmd_list;
+            sample.wait_us += perf_log::now_us() - wait_start_us;
+        }
+        if (event_wait && interrupted())
+            return;
 
         if (!cmd_list || !is_cmd_ready(mem, *cmd_list)) {
             // beginning of the game or homebrew not using gxm
@@ -217,8 +248,9 @@ void process_batches(renderer::State &state, const FeatureState &features, MemSt
                 if (state.async_flip_requested.load(std::memory_order_relaxed))
                     return;
 
-                auto curr_time = duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                if (curr_time >= max_time)
+                const bool deadline_reached = event_wait ? std::chrono::steady_clock::now() >= deadline
+                                                         : duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() >= legacy_deadline_ms;
+                if (deadline_reached)
                     // display a frame even though the game is not diplaying anything
                     return;
 

@@ -763,4 +763,6 @@
     <string name="settings_emulator_browse_files_unavailable">No document browser found on this device. Vita3K+ still appears as a storage location in the sidebar of the system file picker, and in file managers that support document providers.</string>
     <string name="documents_root_summary">Games, saves, config and logs</string>
     <string name="documents_storage_root_summary">Games and saves (custom storage folder)</string>
+    <string name="settings_emulator_renderer_event_wait">Renderer event wait (experimental)</string>
+    <string name="settings_emulator_renderer_event_wait_desc">Wait for Vulkan commands or display events instead of repeatedly polling an empty queue. Compare frame pacing and CPU use with this disabled. Restart the game after changing this setting.</string>
 </resources>

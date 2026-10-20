@@ -105,6 +105,17 @@ struct FrameDescriptor {
 };
 
 struct FrameObject {
+    static constexpr uint32_t GPU_QUERY_CAPACITY = 2048;
+    struct GpuSegment {
+        int64_t start_us;
+        uint32_t draws;
+    };
+    vk::QueryPool gpu_query_pool;
+    std::vector<GpuSegment> gpu_segments;
+    uint64_t gpu_frame_timestamp = 0;
+    uint32_t gpu_segments_submitted = 0;
+    uint32_t gpu_segments_skipped = 0;
+
     vk::CommandPool render_pool;
     // we need to have a specific prerender pool because prerender command buffer
     // can be reset if we use too many new textures at once
@@ -261,6 +272,8 @@ struct VKContext : public renderer::Context {
     // call, also when the setting is off.
     uint32_t scene_draw_calls = 0;
     int64_t scene_start_us = 0;
+    int32_t gpu_query_index = -1;
+    bool pipeline_perf_channel_initialized = false;
     bool gxmscene_viewport_logged = false;
     float surface_downscale = 1.0f;
     bool scene_macroblock_flushed = false;
@@ -269,6 +282,7 @@ struct VKContext : public renderer::Context {
     uint32_t current_fb_height = 0;
 
     vk::ImageView current_color_raw_view = nullptr;
+    vkutil::Image *current_color_raw_image = nullptr;
 
     vkutil::HostRingBuffer vertex_stream_ring_buffer;
     vkutil::HostRingBuffer index_stream_ring_buffer;

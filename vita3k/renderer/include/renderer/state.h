@@ -129,7 +129,12 @@ struct State {
     std::atomic<int64_t> wait_last_epoch_ms{ 0 };
     std::atomic<uint32_t> wait_fences_pending{ 0 };
 
-    bool should_display;
+    std::atomic<bool> should_display{ false };
+
+    void request_display() {
+        should_display.store(true, std::memory_order_relaxed);
+        command_buffer_queue.wake();
+    }
 
     std::atomic<bool> async_flip_requested{ false };
     std::atomic<int> pending_vsync{ -1 };

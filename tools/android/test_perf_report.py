@@ -50,6 +50,23 @@ class BasicTest(unittest.TestCase):
         # One interval of 100 ms against a 50 ms limit for a 30 FPS title.
         self.assertIn("late frames (over 50.0 ms)", table)
         self.assertTrue(table["late frames (over 50.0 ms)"].startswith("1 of "))
+        self.assertEqual(table["GPU render span p95"], "not measured")
+        self.assertEqual(table["empty queue returns per second"], "not measured")
+
+    def test_gpu_compile_and_queue_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(os.path.join(BASIC, "frames.csv"), tmp)
+            with open(os.path.join(tmp, "gpu_frames.csv"), "w") as f:
+                f.write("steady_us,frame,segments,measured,skipped,gpu_span_us\n1100000,1,2,2,0,14000\n")
+            with open(os.path.join(tmp, "pipeline_compiles.csv"), "w") as f:
+                f.write("steady_us,compile_us,success\n1100000,12000,1\n")
+            with open(os.path.join(tmp, "renderer_queue.csv"), "w") as f:
+                f.write("steady_us,event_wait,waits,empty_returns,wait_us\n1100000,1,60,3,3000\n")
+            table = dict(perf_report.build(tmp, 30, 1))
+            self.assertEqual(table["GPU render span p95"], "14.00 ms")
+            self.assertEqual(table["GPU frames complete/incomplete"], "1/0")
+            self.assertEqual(table["pipeline compile host total"], "12.00 ms")
+            self.assertEqual(table["empty queue returns per second"], "1.0")
 
 
 class PowerTest(unittest.TestCase):

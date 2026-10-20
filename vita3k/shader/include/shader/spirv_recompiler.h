@@ -34,10 +34,8 @@ static constexpr int COLOR_ATTACHMENT_RAW_TEXTURE_SLOT_IMAGE = 3;
 // Bump this whenever the translator changes the SPIR-V it emits. It keys the
 // shader cache (vk<version>-<hash>.spv) and the pipeline cache, and
 // get_shaders_cache_hashs() deletes both when the version in the file does not
-// match, so a bump is what forces a recompile. 16: the INDEX bank store
-// narrows a vector source before the bitcast, so cached modules built by 15
-// are invalid and must not be reused.
-static constexpr uint32_t CURRENT_VERSION = 16;
+// match. Version 20 adds raw half-float framebuffer fetch variants.
+static constexpr uint32_t CURRENT_VERSION = 20;
 // fragment shader using the rendering surface as a storage image (because of shader interlock) have a line
 // layout (constant_id = GAMMA_CORRECTION_SPECIALIZATIO_ID) const bool is_srgb = false;
 // Setting this constant to true performs gamma correction in the shader
@@ -67,6 +65,8 @@ struct Hints {
     SceGxmTextureFormat fragment_textures[SCE_GXM_MAX_TEXTURE_UNITS];
 
     SceGxmOutputRegisterFormat output_register_format = SCE_GXM_OUTPUT_REGISTER_FORMAT_DECLARED;
+
+    bool raw_color_attachment_input = false;
 };
 
 struct GeneratedShader {

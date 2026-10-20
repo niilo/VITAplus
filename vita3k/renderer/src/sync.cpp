@@ -101,7 +101,7 @@ COMMAND(new_frame) {
         display->next_rendered_frame = *next_frame;
         delete next_frame;
 
-        renderer.should_display = true;
+        renderer.request_display();
     }
 
     if (renderer.current_backend == Backend::Vulkan) {

@@ -142,6 +142,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "log-uniforms", false, log_uniforms)                                                     \
     code(bool, "log-compat-warn", false, log_compat_warn)                                               \
     code(bool, "perf-log", false, perf_log)                                                             \
+    code(bool, "renderer-event-wait", false, renderer_event_wait)                                       \
     code(bool, "hle-counters", false, hle_counters)                                                     \
     code(bool, "hle-counters-time", false, hle_counters_time)                                           \
     code(bool, "validation-layer", false, validation_layer)                                              \

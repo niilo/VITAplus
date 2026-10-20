@@ -77,6 +77,17 @@ public:
         return std::make_unique<T>(item);
     }
 
+    // The predicate must read synchronized state. Its publisher calls wake()
+    // after changing that state, including when no item is queued.
+    template <typename Clock, typename Duration, typename Interrupted>
+    std::unique_ptr<T> top_until(const std::chrono::time_point<Clock, Duration> &deadline, Interrupted interrupted) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condempty_.wait_until(lock, deadline, [&] { return aborted || !queue_.empty() || interrupted(); });
+        if (aborted || interrupted() || queue_.empty())
+            return {};
+        return std::make_unique<T>(queue_.front());
+    }
+
     // Returns false when the item was dropped because the queue is aborted, so a
     // caller whose item owns a resource can release it instead of leaking it.
     bool push(const T &item) {
@@ -99,11 +110,17 @@ public:
     }
 
     void wake() {
+        // Pair with the predicate check before wait releases the mutex.
+        // A notification alone could be lost between the check and the wait.
+        const std::lock_guard<std::mutex> lock(mutex_);
         condempty_.notify_all();
     }
 
     void abort() {
-        aborted = true;
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            aborted = true;
+        }
         condempty_.notify_all();
         cond_.notify_all();
     }

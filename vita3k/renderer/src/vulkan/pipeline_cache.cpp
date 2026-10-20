@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <renderer/vulkan/pipeline_cache.h>
+#include <renderer/vulkan/pipeline_cache_file.h>
 
 #include <renderer/functions.h>
 #include <renderer/vulkan/gxm_to_vulkan.h>
@@ -30,6 +31,7 @@
 #include <util/fs.h>
 #include <util/hash.h>
 #include <util/log.h>
+#include <util/perf_log.h>
 
 #include <array>
 #include <bit>
@@ -163,7 +165,7 @@ void PipelineCache::init(bool support_rasterized_order_access) {
             // raw u16x4 alias of the color attachment (set 1, binding 2 in the shaders)
             layout_binding[binding_count++] = vk::DescriptorSetLayoutBinding{
                 .binding = 2,
-                .descriptorType = vk::DescriptorType::eStorageImage,
+                .descriptorType = intput_image_descriptor,
                 .descriptorCount = 1,
                 .stageFlags = vk::ShaderStageFlagBits::eFragment
             };
@@ -313,61 +315,47 @@ void PipelineCache::set_async_compilation(bool enable) {
     }
 }
 
-// magic number put at the beginning of the pipeline cache file
-constexpr uint32_t pipeline_cache_magic = 0xBEEF4321;
-
 void PipelineCache::read_pipeline_cache() {
     const std::string pipeline_cache_name = fmt::format("pipeline-cache-vk{}.dat", shader::CURRENT_VERSION);
     const fs::path path = state.shaders_path / pipeline_cache_name;
 
-    fs::ifstream pipeline_cache_file(path, std::ios::in | std::ios::binary);
-    if (!pipeline_cache_file.is_open())
+    fs::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
+    if (!file.is_open())
         return;
-
-    LOG_INFO("Found pipeline cache, reading...");
-
-    pipeline_cache_file.seekg(0, fs::ifstream::end);
-    size_t pipeline_size = pipeline_cache_file.tellg();
-    pipeline_cache_file.seekg(0);
-
-    if (pipeline_size < sizeof(uint32_t) + sizeof(size_t))
+    const auto size = file.tellg();
+    if (size <= 0)
         return;
-
-    // read the hashes
-    auto read_integer = [&]<typename T>(T &val) {
-        pipeline_cache_file.read(reinterpret_cast<char *>(&val), sizeof(T));
-    };
-    uint32_t magic_number;
-    read_integer(magic_number);
-    size_t nb_hashes;
-    read_integer(nb_hashes);
-    // safety check
-    size_t hashes_size = sizeof(magic_number) + sizeof(nb_hashes) + nb_hashes * sizeof(uint64_t);
-    if (magic_number != pipeline_cache_magic || pipeline_size < hashes_size) {
-        LOG_WARN("Pipeline cache is corrupted, ignoring it.");
-        pipeline_cache_file.close();
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    file.seekg(0);
+    if (!file.read(reinterpret_cast<char *>(bytes.data()), bytes.size())) {
+        LOG_WARN("Could not read the complete pipeline cache, ignoring it");
         return;
     }
-    pipeline_size -= hashes_size;
 
-    // insert hashes with null pipeline
-    for (size_t i = 0; i < nb_hashes; i++) {
-        uint64_t hash;
-        read_integer(hash);
-        pipelines[hash] = nullptr;
+    const auto &props = state.physical_device_properties;
+    PipelineCacheIdentity identity{ props.vendorID, props.deviceID, {} };
+    std::copy(props.pipelineCacheUUID.begin(), props.pipelineCacheUUID.end(), identity.uuid.begin());
+    const auto contents = read_pipeline_cache_file(bytes, identity);
+    if (!contents) {
+        LOG_WARN("Pipeline cache is corrupt or belongs to another GPU or driver, ignoring it");
+        return;
     }
 
-    std::vector<char> pipeline_data(pipeline_size);
-    pipeline_cache_file.read(pipeline_data.data(), pipeline_size);
-    pipeline_cache_file.close();
+    try {
+        const vk::PipelineCacheCreateInfo info{
+            .initialDataSize = contents->data.size(),
+            .pInitialData = contents->data.data()
+        };
+        const vk::PipelineCache loaded = state.device.createPipelineCache(info);
+        state.device.destroyPipelineCache(pipeline_cache);
+        pipeline_cache = loaded;
+    } catch (const vk::SystemError &error) {
+        LOG_WARN("Driver rejected the saved pipeline cache, keeping the empty cache: {}", error.what());
+        return;
+    }
 
-    vk::PipelineCacheCreateInfo cache_info{
-        .initialDataSize = pipeline_size,
-        .pInitialData = pipeline_data.data()
-    };
-
-    state.device.destroyPipelineCache(pipeline_cache);
-    pipeline_cache = state.device.createPipelineCache(cache_info);
+    for (size_t i = 0; i < contents->hashes.size() / sizeof(uint64_t); i++)
+        pipelines[contents->hash(i)] = nullptr;
     LOG_INFO("Pipeline cache read and loaded");
 }
 
@@ -506,6 +494,10 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
         hash[0] ^= static_cast<uint8_t>(0xC0 + one_channel_source);
         version_suffix = fmt::format("c{}", one_channel_source);
     }
+    if (!is_vertex && hints.raw_color_attachment_input) {
+        hash[6] ^= 0x75;
+        version_suffix += "u";
+    }
 
     const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
 
@@ -551,7 +543,7 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
 
     const std::string hash_text = hex_string(hash);
 
-    LOG_INFO("Generating vulkan spv shader {}", hash_text);
+    LOG_DEBUG("Generating vulkan spv shader {}", hash_text);
     const std::string shader_version = fmt::format("vk{}{}", shader::CURRENT_VERSION, version_suffix);
 
     shader::usse::SpirvCode source = load_spirv_shader(*program, state.features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, shader_version, true);
@@ -619,7 +611,7 @@ vk::RenderPass PipelineCache::retrieve_render_pass(vk::Format format, bool depth
 
         subpass.colorAttachmentCount = with_raw_attachment ? 2 : 1;
         subpass.pColorAttachments = color_refs;
-        subpass.inputAttachmentCount = 1;
+        subpass.inputAttachmentCount = (with_raw_attachment && state.features.direct_fragcolor) ? 2 : 1;
         subpass.pInputAttachments = color_refs;
     }
 
@@ -1102,8 +1094,13 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     // the vertex input state must be computed before shader are retrieved in case symbols are stripped
     const vk::PipelineVertexInputStateCreateInfo vertex_input = get_vertex_input_state(vertex_program_binding);
 
+    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
+    const bool with_raw_attachment = state.features.preserve_f16_nan_as_u16 && !use_shader_interlock && record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16 && has_color_surface_data;
+    shader::Hints fragment_hints = hints;
+    fragment_hints.raw_color_attachment_input = with_raw_attachment && state.features.direct_fragcolor && gxm_fragment_shader->is_frag_color_used();
+
     const vk::PipelineShaderStageCreateInfo vertex_shader = retrieve_shader(vertex_program_binding.program(), vertex_program.hash, true, fragment_program_binding.is_maskupdate, mem, hints);
-    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_binding.is_maskupdate, mem, hints, record.is_gamma_corrected);
+    const vk::PipelineShaderStageCreateInfo fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, fragment_program_binding.is_maskupdate, mem, fragment_hints, record.is_gamma_corrected);
     const vk::PipelineShaderStageCreateInfo shader_stages[] = { vertex_shader, fragment_shader };
     // disable the fragment shader if gxm asks us to
     const bool is_fragment_disabled = record.front_side_fragment_program_mode == SCE_GXM_FRAGMENT_PROGRAM_DISABLED || gxm_fragment_shader->has_no_effect();
@@ -1114,8 +1111,6 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     };
 
     const bool two_sided = (record.two_sided == SCE_GXM_TWO_SIDED_ENABLED);
-
-    const bool use_shader_interlock = state.features.support_shader_interlock && gxm_fragment_shader->is_frag_color_used();
 
     const vk::PipelineRasterizationStateCreateInfo rasterizer{
         .depthClampEnable = (enable_depth_clamp && state.physical_device_features.depthClamp) ? VK_TRUE : VK_FALSE,
@@ -1161,7 +1156,6 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     } else {
         blend_attachments[0] = fragment_program.blending;
     }
-    const bool with_raw_attachment = state.features.preserve_f16_nan_as_u16 && !use_shader_interlock && record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16 && has_color_surface_data;
     color_blending.attachmentCount = with_raw_attachment ? 2 : 1;
     color_blending.pAttachments = blend_attachments.data();
 
@@ -1215,8 +1209,16 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
     // the whole emulator down before the check below could run. Some drivers (notably Mesa/Turnip)
     // also report an internal shader-compiler rejection as ErrorOutOfHostMemory rather than a
     // specific error.
+    const int64_t compile_start_us = perf_log::enabled() ? perf_log::now_us() : 0;
+    const auto log_compile = [&](bool success) {
+        if (compile_start_us != 0) {
+            perf_log::write("pipeline_compiles", "steady_us,compile_us,success",
+                fmt::format("{},{},{}", compile_start_us, perf_log::now_us() - compile_start_us, success ? 1 : 0));
+        }
+    };
     try {
         const auto result = state.device.createGraphicsPipeline(pipeline_cache, pipeline_info);
+        log_compile(result.result == vk::Result::eSuccess);
         if (result.result != vk::Result::eSuccess) {
             LOG_CRITICAL("Failed to create pipeline: {}", vk::to_string(result.result));
             return nullptr;
@@ -1244,6 +1246,7 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
         }
         return result.value;
     } catch (const vk::SystemError &err) {
+        log_compile(false);
         const uint32_t failure_index = pipelines_failed++;
         LOG_CRITICAL("Failed to create pipeline #{} ({} succeeded so far): {}", failure_index,
             pipelines_created.load(), err.what());

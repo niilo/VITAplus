@@ -18,3 +18,9 @@ add_library(
 
 target_include_directories(io PUBLIC include)
 target_link_libraries(io PUBLIC dirent rtc util)
+
+if(NOT ANDROID)
+	add_executable(io-tests tests/file_read_tests.cpp)
+	target_link_libraries(io-tests PRIVATE io googletest)
+	add_test(NAME io COMMAND io-tests)
+endif()

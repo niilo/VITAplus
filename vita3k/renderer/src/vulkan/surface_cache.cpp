@@ -18,6 +18,7 @@
 #include <renderer/vulkan/surface_cache.h>
 
 #include <gxm/functions.h>
+#include <renderer/surface_sync.h>
 #include <renderer/vulkan/gxm_to_vulkan.h>
 #include <renderer/vulkan/state.h>
 #include <renderer/vulkan/types.h>
@@ -558,11 +559,19 @@ bool VKSurfaceCache::try_upload_guest_content(ColorSurfaceCacheInfo &info, MemSt
 }
 
 void VKSurfaceCache::note_scene_draw_rect(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
-    if (!last_written_surface || x1 <= x0 || y1 <= y0)
+    if (!last_written_surface)
         return;
     ColorSurfaceCacheInfo &info = *last_written_surface;
-    // scaled -> unscaled, rounded outward to the 32px tile the hardware writes back as a whole
+    info.scene_x0 = info.scene_y0 = info.scene_x1 = info.scene_y1 = 0;
+    if (x1 <= x0 || y1 <= y0)
+        return;
     const float inv = 1.0f / state.res_multiplier;
+    info.scene_x0 = std::clamp<int32_t>(static_cast<int32_t>(std::floor(x0 * inv)), 0, info.bound_width);
+    info.scene_y0 = std::clamp<int32_t>(static_cast<int32_t>(std::floor(y0 * inv)), 0, info.bound_height);
+    info.scene_x1 = std::clamp<int32_t>(static_cast<int32_t>(std::ceil(x1 * inv)), 0, info.bound_width);
+    info.scene_y1 = std::clamp<int32_t>(static_cast<int32_t>(std::ceil(y1 * inv)), 0, info.bound_height);
+    // Keep the tile-rounded union for the existing render-target clamp.
+
     int32_t ux0 = static_cast<int32_t>(std::floor(x0 * inv / 32.0f)) * 32;
     int32_t uy0 = static_cast<int32_t>(std::floor(y0 * inv / 32.0f)) * 32;
     int32_t ux1 = static_cast<int32_t>(std::ceil(x1 * inv / 32.0f)) * 32;
@@ -657,6 +666,8 @@ SurfaceRetrieveResult VKSurfaceCache::retrieve_color_surface_for_framebuffer(Mem
             color_surface_queue.set_as_lru(&info);
         } else {
             color_surface_queue.set_as_mru(&info);
+            info.bound_width = static_cast<uint16_t>(std::min<uint32_t>(original_width, info.original_width));
+            info.bound_height = static_cast<uint16_t>(std::min<uint32_t>(original_height, info.original_height));
             if (context->render_target) {
                 const uint32_t rt_w = static_cast<uint32_t>(std::lround(context->render_target->width / state.res_multiplier));
                 const uint32_t rt_h = static_cast<uint32_t>(std::lround(context->render_target->height / state.res_multiplier));
@@ -714,8 +725,12 @@ SurfaceRetrieveResult VKSurfaceCache::retrieve_color_surface_for_framebuffer(Mem
     color_surface_queue.set_as_mru(&info_added);
     info_added.last_frame_rendered = context->frame_timestamp;
     info_added.last_scene_rendered = context->scene_timestamp;
+    info_added.last_frame_cpu_written = 0;
     info_added.rendered_w = 0;
     info_added.rendered_h = 0;
+    info_added.bound_width = static_cast<uint16_t>(original_width);
+    info_added.bound_height = static_cast<uint16_t>(original_height);
+    info_added.scene_x0 = info_added.scene_y0 = info_added.scene_x1 = info_added.scene_y1 = 0;
     info_added.written_x0 = INT32_MAX;
     info_added.written_y0 = INT32_MAX;
     info_added.written_x1 = 0;
@@ -792,7 +807,7 @@ SurfaceRetrieveResult VKSurfaceCache::retrieve_color_surface_for_framebuffer(Mem
         vkutil::Image &raw = *info_added.raw_image;
         raw.layout = vkutil::ImageLayout::Undefined;
         raw.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment
-                | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc,
+                | vk::ImageUsageFlagBits::eInputAttachment | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eTransferSrc,
             vkutil::default_comp_mapping, vk::ImageCreateFlagBits::eMutableFormat);
         raw.transition_to(cmd_buffer, vkutil::ImageLayout::TransferDst);
         vk::ClearColorValue clear_zero{};
@@ -2127,6 +2142,8 @@ void push_cleanup_request(VKState &state, CallbackRequestFunction callback) {
 bool VKSurfaceCache::check_for_surface(MemState &mem, Address source_address, CallbackRequestFunction &callback, Address target_address, uint32_t source_size) {
     if (!state.features.enable_memory_mapping || state.disable_surface_sync)
         return false;
+    if (target_address)
+        note_cpu_write(target_address);
 
     if (vector_utils::find_index(cpu_surfaces_changed, source_address) != -1) {
         // there is a transfer operation pending on this surface, just add the callback after and we are done
@@ -2439,13 +2456,40 @@ ColorSurfaceCacheInfo *VKSurfaceCache::perform_surface_sync() {
             rt_clamped = true;
         }
     }
+    const ColorSurfaceCacheInfo &bound = *last_written_surface;
+    if (bound.bound_width < bound.original_width || bound.bound_height < bound.original_height) {
+        // The CPU conversion paths still process a whole cached surface. Do not
+        // let a smaller rebind send them past the bound guest allocation.
+        if (tiled_layout || needs_copy_buffer || !is_swizzle_identity)
+            return nullptr;
+        const auto rect = intersect_surface_rects({ sync_x0, sync_y0, sync_x0 + static_cast<int32_t>(sync_w), sync_y0 + static_cast<int32_t>(sync_h) },
+            { 0, 0, bound.bound_width, bound.bound_height });
+        if (rect.empty())
+            return nullptr;
+        sync_x0 = rect.x0;
+        sync_y0 = rect.y0;
+        sync_w = rect.x1 - rect.x0;
+        sync_h = rect.y1 - rect.y0;
+        clamp_sync = true;
+    }
     if (is_small_writeback_surface(last_written_surface->tiling, last_written_surface->original_width, last_written_surface->original_height)) {
         const ColorSurfaceCacheInfo &ws = *last_written_surface;
         const bool covers_all = ws.written_x0 <= 0 && ws.written_y0 <= 0
             && ws.written_x1 >= static_cast<int32_t>(ws.original_width)
             && ws.written_y1 >= static_cast<int32_t>(ws.original_height);
-        if (!covers_all)
-            return nullptr;
+        if (!covers_all) {
+            // Only these pixels are current on the GPU. Keep the CPU's other
+            // bytes, and keep packed, tiled and CPU-swizzled formats out.
+            const auto rect = intersect_surface_rects({ sync_x0, sync_y0, sync_x0 + static_cast<int32_t>(sync_w), sync_y0 + static_cast<int32_t>(sync_h) },
+                { ws.scene_x0, ws.scene_y0, ws.scene_x1, ws.scene_y1 });
+            if (tiled_layout || needs_copy_buffer || !is_swizzle_identity || rect.empty())
+                return nullptr;
+            sync_x0 = rect.x0;
+            sync_y0 = rect.y0;
+            sync_w = rect.x1 - rect.x0;
+            sync_h = rect.y1 - rect.y0;
+            clamp_sync = true;
+        }
     }
 
     bool skip_writeback = false;
@@ -2623,6 +2667,11 @@ ColorSurfaceCacheInfo *VKSurfaceCache::perform_surface_sync() {
         cmd_buffer.copyImageToBuffer(image_to_copy, image_layout, buffer, copy);
     }
 
+    last_written_surface->sync_x0 = static_cast<uint32_t>(sync_x0);
+    last_written_surface->sync_y0 = static_cast<uint32_t>(sync_y0);
+    last_written_surface->sync_width = sync_w;
+    last_written_surface->sync_height = sync_h;
+    last_written_surface->sync_partial = clamp_sync && !tiled_layout;
     ColorSurfaceCacheInfo *return_value = last_written_surface;
     last_written_surface = nullptr;
 
@@ -2747,6 +2796,17 @@ void VKSurfaceCache::destroy_associated_framebuffers(const VKRenderTarget *rende
     destroy_framebuffers(render_target->depthstencil.view);
 }
 
+void VKSurfaceCache::note_cpu_write(Address address) {
+    if (!state.context)
+        return;
+    auto it = color_address_lookup.upper_bound(address);
+    if (it == color_address_lookup.begin())
+        return;
+    auto &info = *std::prev(it)->second;
+    if (static_cast<uint64_t>(info.data.address()) + info.total_bytes > address)
+        info.last_frame_cpu_written = static_cast<VKContext *>(state.context)->frame_timestamp;
+}
+
 vk::ImageView VKSurfaceCache::sourcing_color_surface_for_presentation(Ptr<const void> address, uint32_t pitch, Viewport &viewport, PresentSurfaceInfo *present_info) {
     // get closest surface with an address below address
     auto ite = color_address_lookup.upper_bound(address.address());
@@ -2758,6 +2818,11 @@ vk::ImageView VKSurfaceCache::sourcing_color_surface_for_presentation(Ptr<const 
     ColorSurfaceCacheInfo &info = *ite->second;
     if (info.data.address() + info.total_bytes <= address.address())
         // they do not overlap
+        return nullptr;
+
+    // Plus's two-frame guard avoids presenting an old cached render after the
+    // CPU replaced the display buffer, while retaining recently rendered images.
+    if (state.context && present_guest_surface(info.dirty && *info.dirty, info.last_frame_cpu_written, info.last_frame_rendered, static_cast<VKContext *>(state.context)->frame_timestamp))
         return nullptr;
 
     if (info.stride_bytes == pitch * 4) {

@@ -2891,9 +2891,9 @@ EXPORT(int, sceGxmFinish, SceGxmContext *context) {
     if (!context)
         return RET_ERROR(SCE_GXM_ERROR_INVALID_THREAD);
 
-    // Wait on this context's rendering finish code.
+    // The wait command must not use the context's guest-owned command allocator.
     guest_sched_release_for_block();
-    renderer::finish(*emuenv.renderer, context->renderer.get());
+    renderer::finish(*emuenv.renderer, nullptr);
 
     return 0;
 }

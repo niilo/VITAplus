@@ -165,7 +165,7 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                     // this is necessary so that the command buffer processing doesn't get starved
                     // with vsync enabled and a screen with a refresh rate of 60Hz or less
                     if (display.vblank_count % 2 == 0)
-                        emuenv.renderer->should_display = true;
+                        emuenv.renderer->request_display();
             }
 
             // maybe we should also use a mutex for this part, but it shouldn't be an issue
@@ -572,7 +572,7 @@ void update_prediction(EmuEnvState &emuenv, DisplayFrameInfo &frame) {
 
     if (!display.predicting) {
         display.next_rendered_frame = frame;
-        emuenv.renderer->should_display = true;
+        emuenv.renderer->request_display();
     }
 
     for (auto &pred_frame : display.predicted_frames) {
@@ -590,7 +590,7 @@ void update_prediction(EmuEnvState &emuenv, DisplayFrameInfo &frame) {
     if (display.predicting) {
         LOG_TRACE("Mispredicted the next swapchain image");
         display.next_rendered_frame = frame;
-        emuenv.renderer->should_display = true;
+        emuenv.renderer->request_display();
     }
 
     // let predict_next_image reset the cycle if necessary

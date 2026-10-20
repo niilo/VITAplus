@@ -1,8 +1,8 @@
 # 15: The subpass fetch reads float, so f16 blending loses the low bits
 
-Status: open
+Status: claimed
 Type: task
-Label: needs-triage
+Label: needs-info
 
 ## Context
 
@@ -113,3 +113,21 @@ resolve it either.
 `renderer/src/vulkan/sync_state.cpp`. Take that as separate work, not with this
 ticket: it is keyed on `vk::DriverId` and needs a measurement on both drivers,
 per the rule in `CLAUDE.md`. `.scratch/plus-fixes/spec.md` has the detail.
+
+### 2026-10-20: raw input port implemented; device comparison pending
+
+Commit 6ba65c00 ports the raw input, matching descriptors, pool sizing, image
+usage, subpass and barriers from Plus 24702197. It retains local precision and
+sRGB behavior and uses cache version 20 plus a separate raw variant key. The
+Turnip stencil/LRZ workaround is excluded. See the
+[follow-up review](../../plus-visual-fixes-2026-10-20/review.md).
+
+For the user's current visual comparison, retain the attachment required for
+raw framebuffer input. Input-removal performance proposals must not discard
+it. This resolves the implementation choice in step 1 for this test build.
+It is not a device measurement of GMEM behavior.
+
+The new SPIR-V regression fails on the old translator and passes with the fix.
+The Linux build and all 110 C++ tests pass. Raw GPU values, actual game visuals
+and the cost on Pocket S and Deck still need device testing. The ticket stays
+needs-info until those comparisons are supplied.

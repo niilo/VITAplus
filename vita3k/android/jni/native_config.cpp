@@ -110,6 +110,7 @@ struct EmulatorConfigFields {
     jfieldID archiveLog = nullptr;
     jfieldID logCompatWarn = nullptr;
     jfieldID perfLog = nullptr;
+    jfieldID rendererEventWait = nullptr;
     jfieldID logLevel = nullptr;
     jfieldID performanceOverlay = nullptr;
     jfieldID performanceOverlayDetail = nullptr;
@@ -197,6 +198,7 @@ EmulatorConfigFields resolve_config_fields(JNIEnv *env) {
     fields.archiveLog = env->GetFieldID(fields.cls, "archiveLog", "Z");
     fields.logCompatWarn = env->GetFieldID(fields.cls, "logCompatWarn", "Z");
     fields.perfLog = env->GetFieldID(fields.cls, "perfLog", "Z");
+    fields.rendererEventWait = env->GetFieldID(fields.cls, "rendererEventWait", "Z");
     fields.logLevel = env->GetFieldID(fields.cls, "logLevel", "I");
     fields.performanceOverlay = env->GetFieldID(fields.cls, "performanceOverlay", "Z");
     fields.performanceOverlayDetail = env->GetFieldID(fields.cls, "performanceOverlayDetail", "I");
@@ -412,6 +414,7 @@ void fill_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     env->SetBooleanField(obj, fields.archiveLog, config.archive_log);
     env->SetBooleanField(obj, fields.logCompatWarn, config.log_compat_warn);
     env->SetBooleanField(obj, fields.perfLog, config.perf_log);
+    env->SetBooleanField(obj, fields.rendererEventWait, config.renderer_event_wait);
     env->SetIntField(obj, fields.logLevel, static_cast<jint>(config.log_level));
     env->SetBooleanField(obj, fields.performanceOverlay, config.performance_overlay);
     env->SetIntField(obj, fields.performanceOverlayDetail, static_cast<jint>(config.performance_overlay_detail));
@@ -564,6 +567,7 @@ void read_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     config.archive_log = env->GetBooleanField(obj, fields.archiveLog) != JNI_FALSE;
     config.log_compat_warn = env->GetBooleanField(obj, fields.logCompatWarn) != JNI_FALSE;
     config.perf_log = env->GetBooleanField(obj, fields.perfLog) != JNI_FALSE;
+    config.renderer_event_wait = env->GetBooleanField(obj, fields.rendererEventWait) != JNI_FALSE;
     config.log_level = static_cast<int>(env->GetIntField(obj, fields.logLevel));
     config.performance_overlay = env->GetBooleanField(obj, fields.performanceOverlay) != JNI_FALSE;
     config.performance_overlay_detail = static_cast<int>(env->GetIntField(obj, fields.performanceOverlayDetail));

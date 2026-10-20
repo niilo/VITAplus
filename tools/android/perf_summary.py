@@ -5,7 +5,11 @@ Usage: tools/android/perf_summary.py <folder> [--target 30|60] [--warmup 30]
 
 <folder> holds frames.csv (one line per emulated frame: steady_us,title_id)
 and, optionally, presents.csv (one line per host present: steady_us,result)
-and scenes.csv (one line per scene: steady_us,draws,record_us).
+and scenes.csv (host recording), gpu_frames.csv (Vulkan render-buffer spans),
+gpu_segments.csv (individual recordings), pipeline_compiles.csv (driver call
+elapsed time). GPU spans run between render-buffer timestamps. They can include
+waits, gaps and intervening uploads; they are not GPU active time. Presentation
+and overlays have no separate timestamp coverage.
 The first --warmup seconds after the first frame are skipped. Only whole
 seconds count for the per-second values.
 """
@@ -100,6 +104,40 @@ def summarize(folder, target, warmup):
             result["record_ms_p99"] = percentile(durations, 99)
         else:
             result["scenes_note"] = "scenes.csv has no rows in the measured window"
+    result.update(gpu_frames_measured=0, gpu_frames_incomplete=0,
+                  gpu_frame_span_ms_p95=None, gpu_frame_span_ms_p99=None,
+                  pipeline_compiles=None, pipeline_compile_failures=None,
+                  pipeline_compile_ms_total=None, pipeline_compile_ms_p99=None)
+    result.update(renderer_queue_waits_per_second=None, renderer_queue_empty_returns_per_second=None,
+                  renderer_queue_wait_ms_per_second=None)
+    queue_path = os.path.join(folder, "renderer_queue.csv")
+    if os.path.exists(queue_path):
+        rows = [r for r in read_rows(queue_path) if len(r) >= 5 and start <= int(r[0]) < end]
+        if rows:
+            result["renderer_queue_waits_per_second"] = sum(int(r[2]) for r in rows) / seconds
+            result["renderer_queue_empty_returns_per_second"] = sum(int(r[3]) for r in rows) / seconds
+            result["renderer_queue_wait_ms_per_second"] = sum(int(r[4]) for r in rows) / (1000 * seconds)
+    gpu_path = os.path.join(folder, "gpu_frames.csv")
+    if os.path.exists(gpu_path):
+        rows = [r for r in read_rows(gpu_path) if len(r) >= 6 and start <= int(r[0]) < end]
+        complete = [r for r in rows if r[5] and int(r[2]) > 0
+                    and int(r[2]) == int(r[3]) and int(r[4]) == 0]
+        result["gpu_frames_measured"] = len(complete)
+        result["gpu_frames_incomplete"] = len(rows) - len(complete)
+        if complete:
+            spans = [float(r[5]) / 1000 for r in complete]
+            result["gpu_frame_span_ms_p95"] = percentile(spans, 95)
+            result["gpu_frame_span_ms_p99"] = percentile(spans, 99)
+    compile_path = os.path.join(folder, "pipeline_compiles.csv")
+    if os.path.exists(compile_path):
+        result.update(pipeline_compiles=0, pipeline_compile_failures=0, pipeline_compile_ms_total=0.0)
+        rows = [r for r in read_rows(compile_path) if len(r) >= 3 and start <= int(r[0]) < end]
+        if rows:
+            durations = [int(r[1]) / 1000 for r in rows]
+            result["pipeline_compiles"] = len(rows)
+            result["pipeline_compile_failures"] = sum(int(r[2]) == 0 for r in rows)
+            result["pipeline_compile_ms_total"] = sum(durations)
+            result["pipeline_compile_ms_p99"] = percentile(durations, 99)
     return result
 
 
@@ -151,6 +189,20 @@ def main(argv=None):
         print(f"scenes per second:       {r['scenes_per_second']:.2f}")
         print(f"draws per scene:         {r['draws_per_scene']:.2f} (max {r['max_draws_per_scene']})")
         print(f"scene record p99:        {r['record_ms_p99']:.2f} ms (host time)")
+    if r["gpu_frame_span_ms_p95"] is None:
+        print("GPU render frame span:   not measured")
+    else:
+        print(f"GPU render span p95/p99: {r['gpu_frame_span_ms_p95']:.2f}/{r['gpu_frame_span_ms_p99']:.2f} ms")
+    print(f"GPU frames complete:     {r['gpu_frames_measured']} (incomplete {r['gpu_frames_incomplete']})")
+    if r["pipeline_compiles"] is None:
+        print("pipeline compile host:    not measured")
+    else:
+        print(f"pipeline compiles:       {r['pipeline_compiles']} (failed {r['pipeline_compile_failures']})")
+        print(f"pipeline compile host:    {r['pipeline_compile_ms_total']:.2f} ms total")
+    if r["renderer_queue_waits_per_second"] is not None:
+        print(f"renderer queue waits/s:  {r['renderer_queue_waits_per_second']:.1f}")
+        print(f"empty queue returns/s:   {r['renderer_queue_empty_returns_per_second']:.1f}")
+        print(f"queue wait wall ms/s:    {r['renderer_queue_wait_ms_per_second']:.2f}")
     return 0
 
 

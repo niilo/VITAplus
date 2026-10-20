@@ -1,12 +1,13 @@
 # 10: i16mad decodes src2_neg and then ignores it
 
-Status: open
+Status: claimed
 Type: task
-Label: ready-for-agent
+Label: needs-info
+Claimed: 2026-10-20 Codex
 
 ## Context
 
-`src2_neg` appears exactly once in
+Before the port below, `src2_neg` appeared exactly once in
 `vita3k/shader/src/translator/ialu.cpp`: on line 362, as the parameter
 declaration.
 
@@ -38,11 +39,24 @@ Vita3K-Plus commit `42edce31`.
 3. The disassembler path builds the instruction text for the CPU debugger. If
    it prints the operand with a hardcoded `+`, make it follow the flag too, so
    a shader dump shows what the emulator actually did.
-4. `CURRENT_VERSION` in `vita3k/shader/include/shader/spirv_recompiler.h` does
-   not need a bump for this one alone, because the generated code changes only
-   for programs that use the flag and those are already cached with the wrong
-   result. It does need one. Take the next unused number.
+4. Bump `CURRENT_VERSION` in
+   `vita3k/shader/include/shader/spirv_recompiler.h` to the next unused number.
+   Cached programs using the flag contain the old result and must be rebuilt.
 5. Test with a shader that uses `IMAD16` with a negated source, and compare the
    picture before and after.
+
+## Code result
+
+Implemented in `c2f81a34` as part of the
+[selected Plus port](../../plus-review-2026-10-20/review.md). The translation
+now subtracts when src2_neg is set and handles both packed lanes, based on
+Plus 97c8e91f. The disassembly follows the flag. Cache version 19 prevents
+reuse of the old generated code.
+
+The Linux build, all 103 C++ tests, and the Android ARM64 build pass. The
+APK signature, alignment, assets and native build ID checks pass. The tests
+do not execute a
+negated IMAD16 on a GPU. Compare shader results and Full Frontal Assault
+geometry on Pocket S and Steam Deck before closing the device check.
 
 ## Comments

@@ -1006,7 +1006,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         // dummy raw u16 storage image, bound at the raw-color slot when the current surface has no raw alias
         default_raw_image = vkutil::Image(1, 1, vk::Format::eR16G16B16A16Uint);
-        default_raw_image.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst);
+        default_raw_image.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eInputAttachment | vk::ImageUsageFlagBits::eTransferDst);
         default_raw_image.transition_to(cmd_buffer, vkutil::ImageLayout::StorageImage);
         vkutil::end_single_time_command(device, general_queue, general_command_pool, cmd_buffer);
 
@@ -1023,6 +1023,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         };
         default_image.sampler = device.createSampler(sampler_info);
     }
+
+    gpu_timestamp_bits = physical_device.getQueueFamilyProperties()[general_family_index].timestampValidBits;
+    LOG_INFO("Vulkan GPU timing: timestampValidBits={} timestampPeriod={} ns", gpu_timestamp_bits,
+        physical_device_properties.limits.timestampPeriod);
 
     // create the frame objects
     for (int i = 0; i < MAX_FRAMES_RENDERING; i++) {
@@ -1305,6 +1309,13 @@ void VKState::cleanup() {
     frame_descriptor_pools.clear();
 
     for (int i = 0; i < MAX_FRAMES_RENDERING; i++) {
+        if (frames[i].gpu_query_pool) {
+            device.destroyQueryPool(frames[i].gpu_query_pool);
+            frames[i].gpu_query_pool = nullptr;
+        }
+        frames[i].gpu_segments.clear();
+        frames[i].gpu_segments_submitted = 0;
+        frames[i].gpu_segments_skipped = 0;
         device.destroy(frames[i].render_pool);
         frames[i].render_pool = nullptr;
         device.destroy(frames[i].prerender_pool);
