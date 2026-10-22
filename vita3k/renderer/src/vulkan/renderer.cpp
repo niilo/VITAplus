@@ -668,6 +668,13 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     }
 #endif
 
+    if (physical_device_properties.apiVersion >= VK_API_VERSION_1_2
+        && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2KHR) {
+        const auto driver_chain = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+        is_mesa_turnip = driver_chain.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaTurnip;
+    }
+    LOG_INFO("Turnip framebuffer-read depth workaround: {}", is_mesa_turnip);
+
     bool support_dedicated_allocations = false;
     // Create Device
     {

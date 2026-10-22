@@ -1,17 +1,32 @@
-name: Plus visual fixes development APK
+name: VITAdev APK
 
 on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      DEV_KEYSTORE:
+        required: true
+      DEV_SIGNING_STORE_PASSWORD:
+        required: true
+      DEV_SIGNING_KEY_ALIAS:
+        required: true
+      DEV_SIGNING_KEY_PASSWORD:
+        required: true
   push:
-    branches: [feat/plus-targeted-fixes-20261020]
+    branches: ['dev/**', 'feat/**', 'fix/**']
     paths:
       - .github/workflows/plus-visual-dev-apk.yml
       - .ci/package-pocket-s-dev.py
+      - .ci/dev_apk.py
+      - .ci/test_dev_apk.py
+      - android/**
+      - vita3k/**
 
 permissions:
   contents: read
 
 concurrency:
-  group: plus-visual-dev-apk
+  group: vitadev-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +37,20 @@ jobs:
       VCPKG_MAX_CONCURRENCY: '4'
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
     steps:
+      - name: Require the existing VITAdev signing key
+        env:
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in DEV_KEYSTORE DEV_SIGNING_STORE_PASSWORD DEV_SIGNING_KEY_ALIAS DEV_SIGNING_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing $name. Restore the existing VITAdev key. A new key cannot update installed apps."
+              exit 1
+            fi
+          done
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
@@ -59,13 +88,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code 6ba65c0076190919f5c71b335b90e102aeff1541 HEAD -- android vita3k tools cmake external data CMakeLists.txt vcpkg.json
+          git diff --exit-code
+          python3 .ci/test_dev_apk.py
           bash tools/release/check-no-signing-keys.sh
           python3 tools/android/test_perf_summary.py
           python3 tools/android/test_perf_report.py
           python3 tools/android/test_fps_sample.py
-      - name: Build isolated ARM64 development APK
+      - name: Restore the existing VITAdev signing key
+        env:
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+        run: |
+          umask 077
+          printf '%s' "$DEV_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/vitadev.keystore"
+      - name: Build ARM64 development APK
         shell: bash
+        env:
+          DEV_SIGNING_STORE_PATH: ${{ runner.temp }}/vitadev.keystore
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -78,19 +119,20 @@ jobs:
           PY
           cd android
           ./gradlew --stacktrace --build-cache --max-workers=4 \
-            -PvitaDevSuffix=.debug.visualfixes \
-            '-PvitaDevLabel=VITAdev Visual 20' \
             "-PvitaDevVersionSuffix=-visual-fixes.$GITHUB_RUN_NUMBER" \
             "-PvitaBuildLabel=visual-fixes-$GITHUB_RUN_ID" \
             :app:assembleReldebug
       - name: Verify and package the APK and symbols
         run: |
           python3 .ci/package-pocket-s-dev.py --output build/plus-visual-dev-ci \
-            --name VITAdev-visual-fixes --package org.vita3k.emulator.debug.visualfixes \
-            --label 'VITAdev Visual 20' --application-source 6ba65c0076190919f5c71b335b90e102aeff1541 \
+            --name VITAdev --package org.vita3k.emulator.debug \
+            --label VITAdev --application-source "$GITHUB_SHA" \
             --build-label "visual-fixes-$GITHUB_RUN_ID" \
-            --testing .scratch/plus-visual-fixes-2026-10-20/testing.md \
-            --notes .scratch/plus-visual-fixes-2026-10-20/release-notes.md
+            --testing .scratch/visual-followup-2026-10-22/testing.md \
+            --notes .scratch/visual-followup-2026-10-22/release-notes.md
+      - name: Delete the temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/vitadev.keystore"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: plus-visual-dev
@@ -98,46 +140,3 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
-
-  publish:
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: plus-visual-dev
-          path: artifacts
-      - name: Verify files and publish the prepared prerelease
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: niilo/VITAplus
-        run: |
-          set -euo pipefail
-          cd artifacts
-          sha256sum -c SHA256SUMS
-          gh api repos/niilo/VITAplus/releases/418747004 > "$RUNNER_TEMP/release-before.json"
-          python3 - <<'PY'
-          import json, os, pathlib
-          r = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'release-before.json').read_text())
-          assert r['draft'] and r['prerelease'] and r['tag_name'] == 'dev-plus-visuals-20261020', 'Expected the prepared draft prerelease'
-          assert not r['assets'], 'Refusing to replace existing release assets'
-          PY
-          gh release upload dev-plus-visuals-20261020 \
-            VITAdev-visual-fixes-arm64.apk VITAdev-visual-fixes-symbols.zip VITAdev-visual-fixes-source.patch \
-            build-manifest.json TESTING.md SHA256SUMS
-          gh release edit dev-plus-visuals-20261020 \
-            --target "$GITHUB_SHA" --title 'VITAdev Visual 20: Plus visual fixes test build' \
-            --notes-file RELEASE_NOTES.md --draft=false --prerelease --latest=false
-          curl --fail --location --retry 3 \
-            https://github.com/niilo/VITAplus/releases/download/dev-plus-visuals-20261020/VITAdev-visual-fixes-arm64.apk \
-            --output "$RUNNER_TEMP/download-check.apk"
-          python3 - <<'PY'
-          import hashlib, json, os, pathlib
-          m = json.loads(pathlib.Path('build-manifest.json').read_text())
-          p = pathlib.Path(os.environ['RUNNER_TEMP']) / 'download-check.apk'
-          assert hashlib.sha256(p.read_bytes()).hexdigest() == m['artifacts']['VITAdev-visual-fixes-arm64.apk']['sha256']
-          PY

@@ -292,10 +292,9 @@ app are untouched by an update.
 Across rows nothing is shared. The IDs differ, so the two install side by side,
 and the keys differ, so neither can replace the other even if the IDs matched.
 
-A release build fails when no release key is passed in, rather than falling back
-to the debug key. A debug-key release APK cannot be installed over a CI release
-app, so it appears as a second app and can never become the release app on that
-device. Failing at build time is clearer than that.
+A release build fails when no release key is passed in. Android rejects an
+update signed with a different key. A different application ID creates a
+separate app. The build must preserve both the ID and the signing key.
 
 To build a release APK locally, put the release key in `.signing/release/` (see
 [Where the key is](#where-the-key-is)) and run:
@@ -310,6 +309,31 @@ on a device in the same way a CI APK does.
 The development app name is in `android/app/src/reldebug/res/values/strings.xml`,
 and `android/app/src/debug/res/values/strings.xml` for the `debug` build type.
 Both override `app_name` from `src/main`, which a release build keeps as `VITA+`.
+
+### Development pre-releases must update VITAdev
+
+Development pre-releases use `org.vita3k.emulator.debug`, the launcher name
+`VITAdev`, and the existing development certificate listed above. GitHub's
+pre-release flag does not change Android's package or signing requirements.
+
+The October 19 and 20 test builds used `.debug.pockets3xci` and
+`.debug.visualfixes` and runner-generated keys. They are separate apps. Changing
+the next APK's package ID alone cannot make a new key update VITAdev.
+
+The development workflow requires `DEV_KEYSTORE` (base64) and
+`DEV_SIGNING_STORE_PASSWORD`, `DEV_SIGNING_KEY_ALIAS` and
+`DEV_SIGNING_KEY_PASSWORD` as repository secrets. Restore the existing VITAdev
+key. Do not generate a replacement. Gradle receives the decoded key path as
+`DEV_SIGNING_STORE_PATH` and the other three settings through the environment.
+A local development build can still use its persistent Android debug key.
+
+`.ci/package-pocket-s-dev.py` checks the actual APK package, launcher name and
+certificate before staging artifacts. Its `--previous-apk <path>` option also
+checks that the version code is not older than the previous VITAdev APK. A
+mismatch stops packaging. Do not uninstall VITAdev to bypass that failure.
+
+The workflow uploads verified artifacts. Publishing a pre-release is a separate
+step after the checks and device comparison.
 
 ### One app ID changed once
 

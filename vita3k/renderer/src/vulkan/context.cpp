@@ -436,6 +436,7 @@ void VKContext::start_recording(bool first_in_scene) {
     render_cmd.setScissor(0, scissor);
     sync_depth_bias(*this);
     sync_point_line_width(*this, true);
+    stencil_compare_mask_zeroed = false;
     sync_stencil_func(*this, false);
     if (record.two_sided == SCE_GXM_TWO_SIDED_ENABLED) {
         sync_stencil_func(*this, true);

@@ -353,6 +353,8 @@ struct VKContext : public renderer::Context {
     bool is_recording = false;
     bool in_renderpass = false;
     bool refresh_pipeline = false;
+    bool pipeline_stops_lrz_write = false;
+    bool stencil_compare_mask_zeroed = false;
     bool is_first_scene_draw = false;
     // command buffer used to record the current scene
     vk::CommandBuffer render_cmd{};

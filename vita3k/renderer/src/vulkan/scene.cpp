@@ -16,6 +16,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <renderer/vulkan/functions.h>
+#include <renderer/vulkan/turnip.h>
 
 #include <algorithm>
 #include <cmath>
@@ -124,23 +125,6 @@ void mid_scene_flush(VKContext &context, const SceGxmNotification notification) 
         context.scene_has_drawn = false;
     }
 }
-
-#ifdef __APPLE__
-// restride vertex attribute binding strides to multiple of 4
-// needed for metal because it only allows multiples of 4.
-void restride_stream(const uint8_t *&stream, uint32_t &size, uint32_t stride) {
-    const uint32_t new_stride = align(stride, 4);
-    const uint32_t nb_vertex_input = ((size + stride - 1) / stride);
-
-    uint8_t *new_data = new uint8_t[nb_vertex_input * new_stride];
-    for (uint32_t i = 0; i < nb_vertex_input; i++) {
-        memcpy(new_data + new_stride * i, stream + stride * i, stride);
-    }
-
-    stream = new_data;
-    size = nb_vertex_input * new_stride;
-}
-#endif
 
 // when needed, how many descriptor of the given size we allocate for each frame at once
 static constexpr uint32_t DESCRIPTOR_PACK_SIZE = 64;
@@ -275,7 +259,7 @@ static void draw_bind_descriptors(VKContext &context, MemState &mem) {
 }
 
 // vertex count is only used with double buffer mapping
-static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t instance_count, uint32_t max_index) {
+static bool bind_vertex_streams(VKContext &context, MemState &mem, uint32_t instance_count, uint32_t max_index) {
     GxmRecordState &state = context.record;
     const ProgramBinding &vertex_program = *state.vertex_program_binding;
     VertexProgram *vkvert = vertex_program.vertex_program.get();
@@ -312,11 +296,15 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
     }
 
     if (max_stream_idx == 0)
-        return;
+        return true;
+
+    std::array<VertexStreamLayout, SCE_GXM_MAX_VERTEX_STREAMS> layouts;
+    for (int i = 0; i < max_stream_idx; i++)
+        layouts[i] = context.state.pipeline_cache.vertex_stream_layout(vertex_program, i);
 
     for (int i = 0; i < max_stream_idx; i++) {
         if (state.vertex_streams[i].data) {
-            if (context.state.features.enable_memory_mapping) {
+            if (context.state.features.enable_memory_mapping && !layouts[i].repack) {
                 auto [buffer, offset] = context.state.get_matching_mapping(state.vertex_streams[i].data.cast<void>());
 
                 context.vertex_stream_offsets[i] = offset;
@@ -324,21 +312,38 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
             } else {
                 const uint8_t *stream = state.vertex_streams[i].data.get(mem);
                 uint32_t stream_size = state.vertex_streams[i].size;
-#ifdef __APPLE__
-                // Vulkan allows any stride, but Metal only allows multiples of 4.
-                const bool restride = vertex_program.streams[i].stride % 4 != 0;
-                if (restride) {
-                    restride_stream(stream, stream_size, vertex_program.streams[i].stride);
+                std::vector<uint8_t> repacked;
+                if (layouts[i].repack) {
+                    // Sizes are needed for mapped streams too when they require repacking.
+                    const auto &vertex_stream = vertex_program.streams[i];
+                    const size_t last = gxm::is_stream_instancing(static_cast<SceGxmIndexSource>(vertex_stream.indexSource))
+                        ? (instance_count ? instance_count - 1 : 0)
+                        : max_index;
+                    size_t required_size = stream_size;
+                    for (uint32_t copy = 0; copy < layouts[i].copy_count; copy++) {
+                        const auto &range = layouts[i].copies[copy];
+                        required_size = std::max(required_size, last * vertex_stream.stride + range.src + range.size);
+                    }
+                    if (required_size > std::numeric_limits<uint32_t>::max()) {
+                        LOG_ERROR("Vertex stream exceeds the buffer size limit");
+                        return false;
+                    }
+                    stream_size = static_cast<uint32_t>(required_size);
+                    const size_t size = repacked_vertex_stream_size(stream_size, vertex_program.streams[i].stride, layouts[i]);
+                    if (size > std::numeric_limits<uint32_t>::max()) {
+                        LOG_ERROR("Repacked vertex stream exceeds the buffer size limit");
+                        return false;
+                    }
+                    repacked.resize(size);
+                    repack_vertex_stream(repacked, std::span<const uint8_t>(stream, stream_size), vertex_program.streams[i].stride, layouts[i]);
+                    stream = repacked.data();
+                    stream_size = static_cast<uint32_t>(repacked.size());
                 }
-#endif
+                if (!context.vertex_stream_ring_buffer.handle())
+                    context.vertex_stream_ring_buffer.create();
                 context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, stream_size, stream);
                 context.vertex_stream_offsets[i] = context.vertex_stream_ring_buffer.data_offset;
-
-#ifdef __APPLE__
-                if (restride) {
-                    delete[] stream;
-                }
-#endif
+                context.vertex_stream_buffers[i] = context.vertex_stream_ring_buffer.handle();
             }
 
             state.vertex_streams[i].data = nullptr;
@@ -346,7 +351,22 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
         }
     }
 
-    context.render_cmd.bindVertexBuffers(0, max_stream_idx, context.vertex_stream_buffers, context.vertex_stream_offsets);
+    if (!context.state.pipeline_cache.needs_attribute_bindings(vertex_program)) {
+        context.render_cmd.bindVertexBuffers(0, max_stream_idx, context.vertex_stream_buffers, context.vertex_stream_offsets);
+        return true;
+    }
+    std::vector<vk::Buffer> buffers;
+    std::vector<vk::DeviceSize> offsets;
+    for (size_t a = 0; a < vertex_program.attributes.size(); a++) {
+        const auto &attribute = vertex_program.attributes[a];
+        if (!vkvert->attribute_infos.contains(attribute.regIndex))
+            continue;
+        buffers.push_back(context.vertex_stream_buffers[attribute.streamIndex]);
+        offsets.push_back(context.vertex_stream_offsets[attribute.streamIndex]
+            + (a < VertexStreamLayout::MAX_ATTRIBUTES ? layouts[attribute.streamIndex].offsets[a] : attribute.offset));
+    }
+    context.render_cmd.bindVertexBuffers(0, buffers, offsets);
+    return true;
 }
 
 void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format,
@@ -502,6 +522,9 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         bool can_be_whole_quad = instance_count == 1 && count <= 6;
         vk::Pipeline new_pipeline = context.state.pipeline_cache.retrieve_pipeline(context, type, !can_be_whole_quad, mem);
 
+        context.pipeline_stops_lrz_write = fetch_draw_stops_lrz_write(context.state.is_mesa_turnip,
+            context.state.features.direct_fragcolor, context.record, fragment_program_gxp);
+
         if (new_pipeline != context.current_pipeline) {
             context.current_pipeline = new_pipeline;
 
@@ -513,6 +536,11 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     // can happen with asynchronous pipeline compilation
     if (context.current_pipeline == nullptr)
         return;
+
+    if (context.pipeline_stops_lrz_write != context.stencil_compare_mask_zeroed) {
+        context.stencil_compare_mask_zeroed = context.pipeline_stops_lrz_write;
+        sync_stencil_func(context, false);
+    }
 
     if (config.log_active_shaders) {
         const std::string hash_text_f = hex_string(context.record.fragment_program_binding->fragment_program->hash);
@@ -637,7 +665,8 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     }
 
     // bind the vertex streams
-    bind_vertex_streams(context, mem, instance_count, max_index);
+    if (!bind_vertex_streams(context, mem, instance_count, max_index))
+        return;
 
     context.render_cmd.drawIndexed(count, instance_count, 0, 0, 0);
     context.scene_draw_calls++;

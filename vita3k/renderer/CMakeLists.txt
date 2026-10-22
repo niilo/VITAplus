@@ -60,6 +60,10 @@ if(NOT ANDROID)
 	add_executable(renderer-texture-tests tests/yuv_texture_tests.cpp)
 	target_link_libraries(renderer-texture-tests PRIVATE renderer googletest ffmpeg)
 	add_test(NAME renderer-texture COMMAND renderer-texture-tests)
+
+	add_executable(renderer-state-tests tests/vertex_stream_tests.cpp tests/turnip_depth_tests.cpp)
+	target_link_libraries(renderer-state-tests PRIVATE renderer googletest)
+	add_test(NAME renderer-state COMMAND renderer-state-tests)
 endif()
 
 if(ANDROID)

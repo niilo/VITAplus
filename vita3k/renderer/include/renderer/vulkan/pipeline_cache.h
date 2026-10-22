@@ -18,6 +18,7 @@
 #pragma once
 
 #include <blockingconcurrentqueue.h>
+#include <renderer/vertex_stream.h>
 #include <util/containers.h>
 #include <vkutil/vkutil.h>
 
@@ -164,6 +165,9 @@ public:
     vk::Pipeline retrieve_pipeline(VKContext &context, SceGxmPrimitiveType &type, bool consider_for_async, MemState &mem);
 
     vk::ShaderModule precompile_shader(const Sha256Hash &hash, bool search_first = true);
+
+    bool needs_attribute_bindings(const ProgramBinding &vertex_program) const;
+    VertexStreamLayout vertex_stream_layout(const ProgramBinding &vertex_program, uint32_t stream_index) const;
 
     void set_async_compilation(bool enable);
 };

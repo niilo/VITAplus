@@ -9,6 +9,17 @@ def signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
 def signingKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
 def hasCiSigning = signingStorePath && signingStorePassword && signingKeyAlias && signingKeyPassword
 
+// CI uses the existing VITAdev key. A runner-generated key cannot update it.
+def devSigningStorePath = System.getenv("DEV_SIGNING_STORE_PATH")
+def devSigningStorePassword = System.getenv("DEV_SIGNING_STORE_PASSWORD")
+def devSigningKeyAlias = System.getenv("DEV_SIGNING_KEY_ALIAS")
+def devSigningKeyPassword = System.getenv("DEV_SIGNING_KEY_PASSWORD")
+def devSigningValues = [devSigningStorePath, devSigningStorePassword, devSigningKeyAlias, devSigningKeyPassword]
+def hasDevSigning = devSigningValues.every { it }
+if (devSigningValues.any { it } && !hasDevSigning) {
+	throw new GradleException('Pass all four DEV_SIGNING_* settings to use the existing VITAdev key.')
+}
+
 // versionName and versionCode come from tools/release/version-info.sh, the one
 // place that decides what this build is called. CMake runs the same script for
 // the native library, so the package version and the version inside the app
@@ -68,6 +79,14 @@ android {
 	}
 
 	signingConfigs {
+		if (hasDevSigning) {
+			debug {
+				storeFile = file(devSigningStorePath)
+				storePassword = devSigningStorePassword
+				keyAlias = devSigningKeyAlias
+				keyPassword = devSigningKeyPassword
+			}
+		}
 		ci {
 			if (hasCiSigning) {
 				storeFile = file(signingStorePath)
@@ -95,10 +114,24 @@ android {
 				"A release build needs the release signing key, and none was passed in. " +
 				"Set SIGNING_STORE_PATH, SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS and " +
 				"SIGNING_KEY_PASSWORD, which the container scripts do when the key is in " +
-				".signing/release/ (see docs/release.md). Without the key the APK " +
-				"cannot be installed over the release app already on a device, so it " +
-				"would show up as a second app instead of replacing it. " +
+				".signing/release/ (see docs/release.md). Without the key Android " +
+				"refuses to update the installed release app. " +
 				"To build a development build instead, use `android reldebug`.")
+		}
+	}
+
+	def verifyDevSigning = tasks.register('verifyDevSigning') {
+		inputs.property('ci', providers.environmentVariable('CI').getOrElse('false'))
+		inputs.property('configuredSigning', hasDevSigning)
+		doLast { task ->
+			if (task.inputs.properties.ci == 'true' && !task.inputs.properties.configuredSigning) {
+				throw new GradleException('CI development APKs require the existing VITAdev key in DEV_SIGNING_*.')
+			}
+		}
+	}
+	tasks.configureEach { task ->
+		if (task.name ==~ /package.*(Reldebug|Debug)/) {
+			task.dependsOn(verifyDevSigning)
 		}
 	}
 
@@ -125,14 +158,13 @@ android {
 			// The development app ID, so a development build installs next to the release
 			// app instead of over it. Development builds share this one ID and replace
 			// each other, which is what makes a tester able to update one in place.
-			// An isolated test build can coexist with a dev APK signed elsewhere.
 			def devSuffix = providers.gradleProperty('vitaDevSuffix').getOrElse('.debug')
-			if (!(devSuffix ==~ /\.[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*/)) {
-				throw new GradleException('vitaDevSuffix must contain dot-separated lowercase package segments.')
+			if (devSuffix != '.debug') {
+				throw new GradleException('VITAdev uses .debug. A different suffix installs a separate app.')
 			}
-			applicationIdSuffix = devSuffix
+			applicationIdSuffix = '.debug'
 			versionNameSuffix = providers.gradleProperty('vitaDevVersionSuffix').getOrElse('')
-			manifestPlaceholders = [vitaAppLabel: providers.gradleProperty('vitaDevLabel').getOrElse('@string/app_name')]
+			manifestPlaceholders = [vitaAppLabel: '@string/app_name']
 			// The launcher name is VITAdev, from src/reldebug/res/values/strings.xml.
 			signingConfig = signingConfigs.debug
 		}
