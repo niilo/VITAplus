@@ -84,7 +84,8 @@ public fingerprint if you need to name the key; see below.
 
 ## Plus experiment
 
-Work on `experiment/plus-safe-improvements` in this checkout. The initial source
+Use this checkout for the unchanged `experiment/plus-baseline` build.
+Candidate changes belong on `experiment/plus-safe-improvements`. The initial source
 is `nckstwrt/Vita3K-Plus/all-enhancements` at
 `a86b5f93db43e4c4640ad1527e2a4695aad0f35b`.
 

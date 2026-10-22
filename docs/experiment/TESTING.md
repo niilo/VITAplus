@@ -9,7 +9,11 @@ version code so either can replace the other without uninstalling.
 The baseline uses the unchanged emulator, Android frontend, shaders, assets,
 dependencies and native build configuration from Plus `all-enhancements` at
 `a86b5f93db43e4c4640ad1527e2a4695aad0f35b`. App identity, version metadata,
-signing and release tooling are adapted for this project. Native About-sheet
+signing and release tooling are adapted for this project.
+
+Plus requires an untracked `fork_build.h`; the build supplies its logging
+identity constants, as our previous project setup did. No emulator source is
+edited to provide that header. Native About-sheet
 version information remains Plus's original version; identify each APK with
 its Android version name, source commit and build manifest.
 

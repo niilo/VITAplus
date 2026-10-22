@@ -115,6 +115,7 @@ def main():
     (out / "TESTING.md").write_text(testing)
     manifest = {
         "experiment": experiment,
+        "generated_logging_header_sha256": digest(root / "vita3k/util/include/util/fork_build.h"),
         "source_commit": revision,
         "application_code_reference_commit": args.application_source or revision,
         "package_id": args.package,

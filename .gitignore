@@ -98,3 +98,4 @@ __pycache__/
 /android/app/assets/data/
 /android/app/assets/shaders-builtin/
 /android/app/assets/icons/
+/vita3k/util/include/util/fork_build.h
