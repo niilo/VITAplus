@@ -6,10 +6,18 @@ and its data. This experiment's version code is 1030800, above the previous
 build's 1030711. The baseline and first candidate deliberately share the same
 version code so either can replace the other without uninstalling.
 
-The baseline uses the unchanged emulator, Android frontend, shaders, assets,
-dependencies and native build configuration from Plus `all-enhancements` at
-`a86b5f93db43e4c4640ad1527e2a4695aad0f35b`. App identity, version metadata,
-signing and release tooling are adapted for this project.
+The baseline starts from Plus `all-enhancements` at
+`a86b5f93db43e4c4640ad1527e2a4695aad0f35b`. Its renderer, Android frontend,
+shaders, assets, dependencies and native build configuration are unchanged.
+App identity, version metadata, signing and release tooling are adapted for
+this project.
+
+Both builds share one native build correction. Upstream calls
+`Atrac9DecodeBounded`, which its pinned LibAtrac9 dependency does not provide.
+The baseline restores the preceding `Atrac9Decode` call. The workflow checks
+that this is the entire ATRAC9 diff. This uses the existing decoder API and
+does not implement bounded decoding. Compare audio as well as graphics.
+The NGS candidate adds only the pool allocation fix and its regression tests.
 
 Plus requires an untracked `fork_build.h`; the build supplies its logging
 identity constants, as our previous project setup did. No emulator source is

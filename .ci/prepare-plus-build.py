@@ -10,4 +10,4 @@ if header.exists():
         raise SystemExit("A different local fork_build.h exists; preserve it before preparing this build")
 else:
     header.write_text(content)
-print("Prepared the Plus logging identity header; emulator sources are unchanged")
+print("Prepared the Plus logging identity header")

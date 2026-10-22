@@ -1,12 +1,26 @@
 # Plus experiment review
 
 Upstream baseline: `a86b5f93db43e4c4640ad1527e2a4695aad0f35b`.
-Baseline packaging source: `9197e56160c32ad7610df870c55bbd89a5bb4fa0`.
+Baseline packaging source: `a48c94153af8f13da106d8f9d1e5a41466232f0a`.
 The build generates the logging identity header required but not tracked by
 Plus. Its constants are recorded by hash in each manifest.
-The baseline keeps native code, Android frontend behavior, dependencies,
+The baseline keeps the renderer, Android frontend behavior, dependencies,
 shaders and data files unchanged. Its first device question is whether the
 Jak and Uncharted defects match the reference Plus build.
+
+## Shared build correction
+
+The pinned LibAtrac9 revision is `82767fe38823c32536726ea798f392b0b49e66b9`.
+Plus commit `ca3ad408` changed one call to `Atrac9DecodeBounded`, but neither
+its header nor implementation provides that function. The first full builds
+failed at this call. Both experiment APKs restore the preceding `Atrac9Decode`
+call. This preserves the pinned dependency and avoids inventing a bounded
+decoder or discarding later Plus rendering fixes. It does not add bounded
+decoding. The provenance check requires the ATRAC9 file to match upstream
+exactly except for that one call.
+
+The baseline declares this one native file. The NGS candidate declares the
+same correction plus the three pool fix and test files below.
 
 ## First candidate: NGS pool block splitting
 

@@ -93,9 +93,12 @@ Use the existing VITAdev key in `DEV_KEYSTORE` and the verified signing helper.
 The certificate is `c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8`.
 The package is `org.vita3k.emulator.debug` and its launcher name is `VITAdev`.
 
-Keep an unchanged emulator baseline available. Each candidate must list its
-runtime changes in `.ci/experiment.json`, with focused tests and a device test
-question. Do not transfer a complete patch set from our earlier branch.
+Keep the Plus baseline available with only the documented ATRAC9 build
+correction. Its renderer, shaders, frontend and dependencies stay unchanged.
+Each candidate must list its runtime changes in `.ci/experiment.json`, with
+focused tests and a device test question. The provenance check permits only
+the shared decoder call correction in ATRAC9. Do not transfer a complete patch
+set from our earlier branch.
 
 The baseline and the first candidates use Android version code 1030800. Equal
 codes allow a tester to reinstall either APK over the other while keeping app

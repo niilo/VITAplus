@@ -6,11 +6,12 @@
   "version_code": 1030800,
   "version_name": "1.3.2-plus-exp.ngs-mempool.1",
   "expected_runtime_paths": [
+    "vita3k/codec/src/atrac9.cpp",
     "vita3k/mem/CMakeLists.txt",
     "vita3k/mem/include/mem/mempool.h",
     "vita3k/mem/tests/mempool_tests.cpp"
   ],
-  "purpose": "Remove an extra vector resize that creates phantom pool blocks and can make valid NGS allocations impossible to free. This is the only emulator behavior change from the Plus baseline.",
+  "purpose": "Remove an extra vector resize that creates phantom pool blocks and can make valid NGS allocations impossible to free. This is the only additional behavior change above the Plus baseline. Both builds share the Atrac9Decode call correction required by the pinned dependency.",
   "device_checks": [
     "Install over VITAdev and confirm that settings, saves and the imported Vulkan driver remain available.",
     "Compare first with exp-plus-baseline-20261023 using the same driver, save, resolution, mapping and camera.",
