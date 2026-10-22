@@ -25,6 +25,7 @@ done
 store_path="${signing_prefix}_STORE_PATH"
 [[ -s "${!store_path}" ]] || { echo "::error::Android signing keystore is missing" >&2; exit 1; }
 
+python3 .ci/prepare-plus-build.py
 mkdir -p android/app/assets
 for asset in data shaders-builtin icons; do
     if [[ "$asset" == data ]]; then source=data; else source="vita3k/$asset"; fi
