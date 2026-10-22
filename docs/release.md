@@ -178,7 +178,7 @@ So that local work needs no input, the project folder holds a copy of the keys i
 
 | File | What |
 | --- | --- |
-| `.signing/dev/debug.keystore` | the dev key. It is the debug key of the Android container cache volume (`vita3k-android-cache`), which signs the app that is installed on the Pocket S. A copy here survives `container/vita3k.sh clean-cache`. |
+| `.signing/dev/debug.keystore` | the persistent local dev key. It must match the `DEV_KEYSTORE` certificate below to update the installed VITAdev app. A copy here survives `container/vita3k.sh clean-cache`. |
 | `.signing/release/vita-plus-release.p12` and `signing.env` | the release key and its passwords. The same key as in the GitHub secrets. |
 
 `container/vita3k.sh android release` signs with the dev key. It copies
@@ -198,8 +198,13 @@ APK with `apksigner verify --print-certs <apk>` (it is in the Android container,
 
 | Key | SHA-256 of the certificate |
 | --- | --- |
-| dev | `85028da2c7e4321de4bd4215a45773bddcc8f90629bafd6e19ea07cc6d91cac0` |
+| dev | `c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8` |
 | release | `04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a` |
+
+On 2026-10-22, Actions read this development certificate from `DEV_KEYSTORE`.
+The user confirmed that it is the key of the installed VITAdev app. The
+previously documented digest (`85028da2…d91cac0`) belongs to a different key
+and is rejected by the development signing and APK checks.
 
 The repository is public, so these files must never be committed.
 `.gitignore` blocks them, and `tools/release/check-no-signing-keys.sh` fails if a

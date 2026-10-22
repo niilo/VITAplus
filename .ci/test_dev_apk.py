@@ -20,9 +20,14 @@ class DevApkTests(unittest.TestCase):
             with self.subTest(suffix=suffix), self.assertRaisesRegex(ValueError, "separate app"):
                 verify_dev_identity(self.identity(package=PACKAGE + suffix))
 
-    def test_runner_generated_key_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "signing key"):
-            verify_dev_identity(self.identity(certificate="ab" * 32))
+    def test_other_dev_keys_are_rejected(self):
+        for certificate in (
+            "ab" * 32,
+            "85028da2c7e4321de4bd4215a45773bddcc8f90629bafd6e19ea07cc6d91cac0",
+            ISOLATED_CERTIFICATE_SHA256,
+        ):
+            with self.subTest(certificate=certificate), self.assertRaisesRegex(ValueError, "signing key"):
+                verify_dev_identity(self.identity(certificate=certificate))
 
     def test_version_downgrade_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "older"):
