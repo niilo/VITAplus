@@ -4,6 +4,7 @@ import re
 
 PACKAGE = "org.vita3k.emulator.debug"
 CERTIFICATE_SHA256 = "85028da2c7e4321de4bd4215a45773bddcc8f90629bafd6e19ea07cc6d91cac0"
+RELEASE_CERTIFICATE_SHA256 = "04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a"
 
 
 def apk_identity(badging, certificates):
@@ -33,7 +34,7 @@ def verify_dev_identity(identity, previous=None):
 
 
 ISOLATED_PACKAGE = "org.vita3k.emulator.debug.visualtest"
-ISOLATED_CERTIFICATE_SHA256 = "04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a"
+ISOLATED_CERTIFICATE_SHA256 = RELEASE_CERTIFICATE_SHA256
 
 
 def verify_isolated_identity(identity, previous=None):
@@ -48,3 +49,25 @@ def verify_isolated_identity(identity, previous=None):
             raise ValueError("The previous APK belongs to a different test app or signing key")
         if identity["version_code"] < previous["version_code"]:
             raise ValueError("APK version code is older than the previous test APK")
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+    from pathlib import Path
+    import subprocess
+
+    parser = argparse.ArgumentParser(description="Verify a development or stable Android artifact")
+    parser.add_argument("apk", type=Path)
+    parser.add_argument("channel", choices=("dev", "release"))
+    arguments = parser.parse_args()
+    sdk = Path(os.environ.get("ANDROID_HOME") or os.environ["ANDROID_SDK_ROOT"])
+    tools = sdk / "build-tools" / "36.0.0"
+    badging = subprocess.check_output([str(tools / "aapt"), "dump", "badging", str(arguments.apk)], text=True)
+    certificates = subprocess.check_output([str(tools / "apksigner"), "verify", "--print-certs", str(arguments.apk)], text=True)
+    identity = apk_identity(badging, certificates)
+    if arguments.channel == "dev":
+        verify_dev_identity(identity)
+    elif identity["package_id"] != "org.vita3k.emulator" or identity["certificate_sha256"] != RELEASE_CERTIFICATE_SHA256 or identity["version_code"] < 1:
+        raise SystemExit("Release APK must use the existing VITA+ package and signing key")
+    print(f"Verified {identity['package_id']}, version code {identity['version_code']}, certificate SHA-256 {identity['certificate_sha256']}")

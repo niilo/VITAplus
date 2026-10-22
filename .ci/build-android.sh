@@ -7,36 +7,32 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     exit 1
 fi
 
-mkdir -p android/app/assets
-rm -rf android/app/assets/data android/app/assets/shaders-builtin
-cp -r data android/app/assets/data
-cp -r vita3k/shaders-builtin android/app/assets/shaders-builtin
+# Select the app explicitly. Missing production credentials must never select
+# a development app. Pre-release workflows pass ANDROID_BUILD_CHANNEL=dev.
+channel="${ANDROID_BUILD_CHANNEL:-release}"
+case "$channel" in
+    release) BUILD_TYPE=Release; signing_prefix=SIGNING ;;
+    dev) BUILD_TYPE=Reldebug; signing_prefix=DEV_SIGNING ;;
+    *) echo "::error::ANDROID_BUILD_CHANNEL must be dev or release" >&2; exit 1 ;;
+esac
+for setting in STORE_PATH STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+    name="${signing_prefix}_${setting}"
+    if [[ -z "${!name:-}" ]]; then
+        echo "::error::Missing $name for the $channel Android build" >&2
+        exit 1
+    fi
+done
+store_path="${signing_prefix}_STORE_PATH"
+[[ -s "${!store_path}" ]] || { echo "::error::Android signing keystore is missing" >&2; exit 1; }
 
+mkdir -p android/app/assets
+for asset in data shaders-builtin icons; do
+    if [[ "$asset" == data ]]; then source=data; else source="vita3k/$asset"; fi
+    rm -rf "android/app/assets/$asset"
+    cp -r "$source" "android/app/assets/$asset"
+done
 chmod +x android/gradlew
 
-# A release build is signed with the release key, which only CI has. Without the
-# secrets the script builds reldebug instead, which carries the .debug
-# application ID and so is a separate app from the release one.
-#
-# The build type is decided here and named in the log. It used to be taken from
-# whether SIGNING_STORE_PATH was set, with no message, so a missing secret or a
-# changed variable name silently produced a development APK and published it as
-# the release. Fail instead, because a release APK that cannot replace the
-# release app is worse than no APK at all.
-if [[ -n "${SIGNING_STORE_PATH:-}" && -e "${SIGNING_STORE_PATH}" ]]; then
-    BUILD_TYPE="Release"
-elif [[ "${ALLOW_DEV_RELEASE_BUILD:-0}" == "1" ]]; then
-    BUILD_TYPE="Reldebug"
-    echo "build-android.sh: no signing key, so this is a reldebug build."
-    echo "build-android.sh: it has the .debug application ID and cannot replace the release app."
-else
-    echo "::error::SIGNING_STORE_PATH is not set, so no release key is available" >&2
-    echo "build-android.sh: a release APK must use the release key, or Android" >&2
-    echo "refuses to install it over the release app already on a device." >&2
-    echo "build-android.sh: set the signing secrets, or set ALLOW_DEV_RELEASE_BUILD=1" >&2
-    echo "to build reldebug on purpose. See docs/release.md." >&2
-    exit 1
-fi
 echo "build-android.sh: building ${BUILD_TYPE}"
 
 pushd android > /dev/null
@@ -44,5 +40,6 @@ pushd android > /dev/null
 popd > /dev/null
 
 APK_PATH="android/app/build/outputs/apk/${BUILD_TYPE,,}/app-${BUILD_TYPE,,}.apk"
+python3 .ci/dev_apk.py "$APK_PATH" "$channel"
 mkdir -p "$OUTPUT_DIR"
 cp "$APK_PATH" "$OUTPUT_DIR/app.apk"

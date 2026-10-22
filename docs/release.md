@@ -1,8 +1,8 @@
 # Release
 
-CI builds only when a release tag is pushed. A normal push or a pull request does
-not start a build. (The format check in `.github/workflows/format.yml` still runs
-on every push, because it is not a build.)
+The release workflow builds when a `v*` tag is pushed. The `VITAdev APK`
+workflow also builds development branches (`dev/**`, `feat/**`, `fix/**`) when
+application or build files change. It can be started manually.
 
 ## Make a release
 
@@ -14,6 +14,10 @@ git push origin v1.2.0
 A tag with a dash, such as `v1.2.0-rc1`, makes a pre-release. The tag must start
 with `v` and must be a version, so `v1.2` and `v1.2.0` are both tags and
 `v0.0.1-test` and `continuous` are not.
+
+Stable tags build `VITA+` with the production signing key. Tags with a dash
+build `VITAdev` with `DEV_KEYSTORE`. The Android package is
+`org.vita3k.emulator.debug`, so these pre-releases update the development app.
 
 ## How a build names itself
 
@@ -53,7 +57,8 @@ A checkout with no git history, such as a source tarball, reports base version
 The workflow `Release build` runs three jobs:
 
 1. `linux-build`: the x86_64 AppImage for the Steam Deck.
-2. `android-build`: the signed arm64 release APK for the Ayaneo Pocket S.
+2. `android-build`: the signed arm64 APK for the Ayaneo Pocket S. Stable tags
+   use `Release`; pre-release tags use `Reldebug` and the VITAdev identity.
 3. `create-release`: a GitHub release for the tag in this repository, with these
    files:
    - `VITA-Plus-<tag>-android-arm64.apk`
@@ -320,20 +325,38 @@ The October 19 and 20 test builds used `.debug.pockets3xci` and
 `.debug.visualfixes` and runner-generated keys. They are separate apps. Changing
 the next APK's package ID alone cannot make a new key update VITAdev.
 
-The development workflow requires `DEV_KEYSTORE` (base64) and
-`DEV_SIGNING_STORE_PASSWORD`, `DEV_SIGNING_KEY_ALIAS` and
-`DEV_SIGNING_KEY_PASSWORD` as repository secrets. Restore the existing VITAdev
-key. Do not generate a replacement. Gradle receives the decoded key path as
-`DEV_SIGNING_STORE_PATH` and the other three settings through the environment.
+Development builds and tagged pre-releases require the `DEV_KEYSTORE`
+repository secret (base64). Restore the existing VITAdev key. Do not generate a
+replacement. Android's standard debug-key defaults are store password
+`android`, alias `androiddebugkey`, and key password `android`. If the existing
+key uses different credentials, set `DEV_SIGNING_STORE_PASSWORD`,
+`DEV_SIGNING_KEY_ALIAS` and `DEV_SIGNING_KEY_PASSWORD` as repository secrets.
+Each secret overrides its corresponding default. Production credentials are
+never used as development defaults.
+
+`.ci/prepare-android-signing.py dev` restores the key in the runner's temporary
+directory. It checks its public certificate against the existing VITAdev
+fingerprint and verifies private-key access before the native build starts.
+It passes `DEV_SIGNING_STORE_PATH` and the other settings to Gradle through the
+Actions environment file. Logs contain only the public fingerprint. The
+workflow deletes the restored key after the build, including failed builds.
 A local development build can still use its persistent Android debug key.
+
+`.ci/build-android.sh <output-dir>` builds a stable release by default.
+`ANDROID_BUILD_CHANNEL=dev` explicitly selects `Reldebug`. Both modes require
+their corresponding signing settings and verify the final APK's package and
+certificate before copying it to the artifact directory.
 
 `.ci/package-pocket-s-dev.py` checks the actual APK package, launcher name and
 certificate before staging artifacts. Its `--previous-apk <path>` option also
 checks that the version code is not older than the previous VITAdev APK. A
 mismatch stops packaging. Do not uninstall VITAdev to bypass that failure.
 
-The workflow uploads verified artifacts. Publishing a pre-release is a separate
-step after the checks and device comparison.
+The development workflow uploads verified Actions artifacts. The tag workflow
+publishes pre-releases for dashed `v*` tags. The October 22 separate visual test
+was published under `.debug.visualtest` with its own certificate. Its one-off
+workflow is disabled. The published APK remains a separate app; future
+development builds update VITAdev.
 
 ### One app ID changed once
 

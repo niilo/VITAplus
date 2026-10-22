@@ -7,11 +7,11 @@ on:
       DEV_KEYSTORE:
         required: true
       DEV_SIGNING_STORE_PASSWORD:
-        required: true
+        required: false
       DEV_SIGNING_KEY_ALIAS:
-        required: true
+        required: false
       DEV_SIGNING_KEY_PASSWORD:
-        required: true
+        required: false
   push:
     branches: ['dev/**', 'feat/**', 'fix/**']
     paths:
@@ -19,6 +19,9 @@ on:
       - .ci/package-pocket-s-dev.py
       - .ci/dev_apk.py
       - .ci/test_dev_apk.py
+      - .ci/prepare-android-signing.py
+      - .ci/test_android_signing.py
+      - .ci/build-android.sh
       - android/**
       - vita3k/**
 
@@ -37,20 +40,6 @@ jobs:
       VCPKG_MAX_CONCURRENCY: '4'
       CMAKE_BUILD_PARALLEL_LEVEL: '4'
     steps:
-      - name: Require the existing VITAdev signing key
-        env:
-          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
-          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
-          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
-          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for name in DEV_KEYSTORE DEV_SIGNING_STORE_PASSWORD DEV_SIGNING_KEY_ALIAS DEV_SIGNING_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then
-              echo "::error::Missing $name. Restore the existing VITAdev key. A new key cannot update installed apps."
-              exit 1
-            fi
-          done
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
@@ -61,6 +50,13 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: gradle
+      - name: Restore and verify DEV_KEYSTORE
+        env:
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
+        run: python3 .ci/prepare-android-signing.py dev
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
       - name: Install pinned build tools
         shell: bash
@@ -90,23 +86,13 @@ jobs:
           set -euo pipefail
           git diff --exit-code
           python3 .ci/test_dev_apk.py
+          python3 .ci/test_android_signing.py
           bash tools/release/check-no-signing-keys.sh
           python3 tools/android/test_perf_summary.py
           python3 tools/android/test_perf_report.py
           python3 tools/android/test_fps_sample.py
-      - name: Restore the existing VITAdev signing key
-        env:
-          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
-        run: |
-          umask 077
-          printf '%s' "$DEV_KEYSTORE" | base64 --decode > "$RUNNER_TEMP/vitadev.keystore"
       - name: Build ARM64 development APK
         shell: bash
-        env:
-          DEV_SIGNING_STORE_PATH: ${{ runner.temp }}/vitadev.keystore
-          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
-          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
-          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -132,7 +118,7 @@ jobs:
             --notes .scratch/visual-followup-2026-10-22/release-notes.md
       - name: Delete the temporary signing key
         if: always()
-        run: rm -f "$RUNNER_TEMP/vitadev.keystore"
+        run: rm -f -- "${DEV_SIGNING_STORE_PATH:-}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: plus-visual-dev

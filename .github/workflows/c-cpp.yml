@@ -81,24 +81,6 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      # A release APK must be signed with the same key every time. Android refuses to update an
-      # app that was signed with another key. See docs/release.md for the key and the secrets.
-      - name: Check the signing secrets
-        env:
-          KEYSTORE: ${{ secrets.KEYSTORE }}
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: |
-          missing=""
-          for name in KEYSTORE SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing. Add them (see docs/release.md) and push the tag again."
-            exit 1
-          fi
-
       - name: Restore native dependency cache
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
@@ -113,7 +95,19 @@ jobs:
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
+
+      - name: Restore and verify the Android signing key
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
+        run: python3 .ci/prepare-android-signing.py ${{ contains(github.ref_name, '-') && 'dev' || 'release' }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
@@ -132,13 +126,6 @@ jobs:
 
       - uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
 
-      - name: Decode Android keystore
-        env:
-          KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
-        run: |
-          umask 077
-          echo "$KEYSTORE_ENCODED" | base64 --decode > /home/runner/keystore.jks
-
       - name: Compute artifact paths
         shell: bash
         run: |
@@ -148,17 +135,14 @@ jobs:
 
       - name: Build Android target
         env:
-          SIGNING_STORE_PATH: /home/runner/keystore.jks
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          ANDROID_BUILD_CHANNEL: ${{ contains(github.ref_name, '-') && 'dev' || 'release' }}
           VCPKG_ROOT: /usr/local/share/vcpkg
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash ./.ci/build-android.sh "${{ env.ARTIFACT_DIR }}"
 
       - name: Delete the keystore
         if: always()
-        run: rm -f /home/runner/keystore.jks
+        run: rm -f -- "${DEV_SIGNING_STORE_PATH:-}" "${SIGNING_STORE_PATH:-}"
 
       - name: Print Android ccache statistics
         run: ccache -s
