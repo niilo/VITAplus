@@ -1,0 +1,181 @@
+name: Plus experiment pre-release
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      DEV_KEYSTORE:
+        required: true
+      DEV_SIGNING_STORE_PASSWORD:
+        required: false
+      DEV_SIGNING_KEY_ALIAS:
+        required: false
+      DEV_SIGNING_KEY_PASSWORD:
+        required: false
+  push:
+    branches: ['experiment/plus-safe-improvements']
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plus-experiment-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VCPKG_MAX_CONCURRENCY: '4'
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Verify experiment source and release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .ci/experiment.py
+          tag=$(python3 -c 'import json; print(json.load(open(".ci/experiment.json"))["tag"])')
+          if gh release view "$tag" --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-draft" 2>/dev/null; then
+            if [ "$(cat "$RUNNER_TEMP/release-draft")" != true ]; then
+              echo "::error::This experiment tag is already published. Declare a new experiment tag."
+              exit 1
+            fi
+          fi
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Restore and verify DEV_KEYSTORE
+        env:
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
+        run: python3 .ci/prepare-android-signing.py dev
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+      - name: Install pinned build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config autoconf automake libtool perl zip unzip
+          python3 -m venv "$RUNNER_TEMP/vita-tools"
+          "$RUNNER_TEMP/vita-tools/bin/pip" install cmake==3.31.10 ninja==1.13.0
+          echo "$RUNNER_TEMP/vita-tools/bin" >> "$GITHUB_PATH"
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vita-vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vita-vcpkg-cache" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/vita-android-user" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/vita-vcpkg-cache" "$RUNNER_TEMP/vita-android-user/cache"
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(['sdkmanager', '--install', 'platforms;android-35', 'build-tools;36.0.0', 'ndk;29.0.14206865'], input='y\n' * 100, text=True, check=True)
+          PY
+          baseline=$(python3 -c 'import json; print(json.load(open("vcpkg.json"))["builtin-baseline"])')
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vita-vcpkg"
+          git -C "$RUNNER_TEMP/vita-vcpkg" checkout "$baseline"
+          "$RUNNER_TEMP/vita-vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+      - uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: plus-experiment-android
+      - name: Check application source and Python tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          python3 .ci/test_dev_apk.py
+          python3 .ci/test_android_signing.py
+          bash tools/release/check-no-signing-keys.sh
+          python3 .ci/test_experiment.py
+          python3 tools/android/test_fps_sample.py
+      - name: Build ARM64 development APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import cmake, os, pathlib, shutil
+          root = pathlib.Path.cwd()
+          for source, destination in [('data', 'data'), ('vita3k/shaders-builtin', 'shaders-builtin'), ('vita3k/icons', 'icons')]:
+              shutil.copytree(root / source, root / 'android/app/assets' / destination, dirs_exist_ok=True)
+          cmake_root = pathlib.Path(cmake.CMAKE_BIN_DIR).parent
+          (root / 'android/local.properties').write_text(f'sdk.dir={os.environ["ANDROID_HOME"]}\ncmake.dir={cmake_root}\n')
+          PY
+          cd android
+          bash ./gradlew --stacktrace --build-cache --max-workers=4 :app:assembleReldebug
+      - name: Verify and package the APK and symbols
+        run: |
+          python3 .ci/package-pocket-s-dev.py --output build/plus-experiment \
+            --name VITAdev-plus-experiment --package org.vita3k.emulator.debug \
+            --label VITAdev --application-source "$GITHUB_SHA" \
+            --testing docs/experiment/TESTING.md \
+            --notes docs/experiment/release-notes.md
+      - name: Delete the temporary signing key
+        if: always()
+        run: rm -f -- "${DEV_SIGNING_STORE_PATH:-}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plus-experiment
+          path: build/plus-experiment/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: plus-experiment
+          path: artifacts
+      - name: Publish the verified experimental pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: niilo/VITAplus
+        run: |
+          set -euo pipefail
+          python3 .ci/experiment.py
+          python3 - <<'PYCODE'
+          import json, os, pathlib
+          manifest = json.loads(pathlib.Path('artifacts/build-manifest.json').read_text())
+          declared = json.loads(pathlib.Path('.ci/experiment.json').read_text())
+          assert manifest['source_commit'] == os.environ['GITHUB_SHA']
+          assert manifest['experiment'] == declared
+          assert manifest['updates_vitadev']
+          PYCODE
+          cd artifacts
+          sha256sum -c SHA256SUMS
+          tag=$(python3 -c 'import json; print(json.load(open("build-manifest.json"))["experiment"]["tag"])')
+          title=$(python3 -c 'import json; print(json.load(open("build-manifest.json"))["experiment"]["title"])')
+          if gh release view "$tag" --json isDraft,targetCommitish > "$RUNNER_TEMP/existing-release.json" 2>/dev/null; then
+            python3 - <<'PYCODE'
+          import json, os, pathlib
+          release = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'existing-release.json').read_text())
+          assert release['isDraft'], 'Published experiment releases are immutable'
+          assert release['targetCommitish'] == os.environ['GITHUB_SHA'], 'Draft targets another source commit'
+          PYCODE
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$title" \
+              --notes-file RELEASE_NOTES.md --draft --prerelease --latest=false
+          fi
+          gh release upload "$tag" VITAdev-plus-experiment-arm64.apk \
+            VITAdev-plus-experiment-symbols.zip VITAdev-plus-experiment-source.patch \
+            build-manifest.json TESTING.md SHA256SUMS --clobber
+          gh release edit "$tag" --draft=false --prerelease --latest=false

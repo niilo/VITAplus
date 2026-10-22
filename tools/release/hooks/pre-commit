@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Stop a commit that would record a signing key or a secret.
+#
+# Enabled with `git config core.hooksPath tools/release/hooks`, which
+# tools/release/install-hooks.sh does. It checks the index, not the working tree,
+# because the index is what the commit would record.
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+bash "$repo_root/tools/release/check-no-signing-keys.sh" --staged

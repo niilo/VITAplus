@@ -9,6 +9,18 @@ def signingKeyAlias = System.getenv("SIGNING_KEY_ALIAS")
 def signingKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")
 def hasCiSigning = signingStorePath && signingStorePassword && signingKeyAlias && signingKeyPassword
 
+def devSigningStorePath = System.getenv("DEV_SIGNING_STORE_PATH")
+def devSigningStorePassword = System.getenv("DEV_SIGNING_STORE_PASSWORD")
+def devSigningKeyAlias = System.getenv("DEV_SIGNING_KEY_ALIAS")
+def devSigningKeyPassword = System.getenv("DEV_SIGNING_KEY_PASSWORD")
+def devSigningValues = [devSigningStorePath, devSigningStorePassword, devSigningKeyAlias, devSigningKeyPassword]
+def hasDevSigning = devSigningValues.every { it }
+if (devSigningValues.any { it } && !hasDevSigning) {
+	throw new GradleException('Pass all four DEV_SIGNING_* settings to use the existing VITAdev key.')
+}
+
+def experiment = new groovy.json.JsonSlurper().parse(file('../../.ci/experiment.json'))
+
 def appVersionSource = providers.fileContents(layout.projectDirectory.file('../../vita3k/CMakeLists.txt')).asText.get()
 def appVersionPart = { String part ->
 	def match = appVersionSource =~ /set\(VITA3K_APP_VER_${part} (\d+)\)/
@@ -41,11 +53,11 @@ android {
 
 	defaultConfig {
 		// namespace stays org.vita3k.emulator: it is the Java package the JNI symbols are bound to
-		applicationId = "org.vita3kplus.emulator"
+		applicationId = "org.vita3k.emulator"
 		minSdk = 28
 		targetSdk = 35
-		versionCode = appVerHi * 100 + appVerMid * 10 + appVerLo
-		versionName = appVersionName
+		versionCode = experiment.version_code as int
+		versionName = experiment.version_name
 
 		ndk {
 			// x86_64 is emulator-only and broken here: vcpkg OpenSSL cannot assemble its x86 SM3/SM4 code with the NDK.
@@ -54,6 +66,14 @@ android {
 	}
 
 	signingConfigs {
+        if (hasDevSigning) {
+            debug {
+                storeFile = file(devSigningStorePath)
+                storePassword = devSigningStorePassword
+                keyAlias = devSigningKeyAlias
+                keyPassword = devSigningKeyPassword
+            }
+        }
 		ci {
 			if (hasCiSigning) {
 				storeFile = file(signingStorePath)
@@ -63,6 +83,27 @@ android {
 			}
 		}
 	}
+
+	def verifyDevSigning = tasks.register('verifyDevSigning') {
+		inputs.property('ci', providers.environmentVariable('CI').getOrElse('false'))
+		inputs.property('configuredSigning', hasDevSigning)
+		doLast { task ->
+			if (task.inputs.properties.ci == 'true' && !task.inputs.properties.configuredSigning) {
+				throw new GradleException('CI development APKs require the existing VITAdev key in DEV_SIGNING_*.')
+			}
+		}
+	}
+	tasks.configureEach { task ->
+		if (task.name ==~ /package.*(Reldebug|Debug)/) {
+			task.dependsOn(verifyDevSigning)
+		}
+	}
+
+    gradle.taskGraph.whenReady { graph ->
+        if (graph.allTasks.any { it.name ==~ /package.*Release/ } && !hasCiSigning) {
+            throw new GradleException('Release APKs require the production signing credentials.')
+        }
+    }
 
 	buildTypes {
 		debug {
@@ -96,7 +137,7 @@ android {
 			minifyEnabled = true
 			shrinkResources = true
 			proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-			signingConfig = hasCiSigning ? signingConfigs.ci : signingConfigs.debug
+			signingConfig = signingConfigs.ci
 		}
 	}
 

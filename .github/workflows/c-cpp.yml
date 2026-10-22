@@ -2,6 +2,8 @@ name: Build CI
 
 on:
   push:
+    branches-ignore: ['experiment/**']
+    tags-ignore: ['exp-plus-*']
     paths-ignore:
       - '**.md'
   pull_request:

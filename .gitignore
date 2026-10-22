@@ -84,3 +84,17 @@ fastlane/readme.md
 
 # Copilot local config
 .github/copilot-instructions.md
+
+# Project signing and build outputs
+.signing/
+.vita-plus-signing/
+*.jks
+*.p12
+*.pfx
+*.keystore
+__pycache__/
+*.pyc
+/android/app/.cxx/
+/android/app/assets/data/
+/android/app/assets/shaders-builtin/
+/android/app/assets/icons/
