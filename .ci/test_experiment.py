@@ -5,26 +5,38 @@ import json
 from pathlib import Path
 import unittest
 
-from experiment import check_paths, validate_config
+from experiment import AVAILABLE_DECODER_CALL, DECODER_PATH, UNAVAILABLE_DECODER_CALL, check_decoder_source, check_paths, validate_config
 
 
 class ExperimentTests(unittest.TestCase):
     def setUp(self):
         self.config = json.loads(Path(__file__).with_name("experiment.json").read_text())
 
-    def test_baseline_is_unchanged(self):
+    def test_baseline_contains_only_the_shared_build_correction(self):
         baseline = copy.deepcopy(self.config)
-        baseline.update(id="baseline", expected_runtime_paths=[])
+        baseline.update(id="baseline", expected_runtime_paths=[DECODER_PATH])
         validate_config(baseline)
-        check_paths(baseline, [])
+        check_paths(baseline, [DECODER_PATH])
         with self.assertRaisesRegex(ValueError, "Runtime diff"):
-            check_paths(baseline, ["vita3k/renderer/src/renderer.cpp"])
+            check_paths(baseline, [DECODER_PATH, "vita3k/renderer/src/renderer.cpp"])
+        for paths in ([], [DECODER_PATH, "vita3k/io/src/io.cpp"]):
+            baseline["expected_runtime_paths"] = paths
+            with self.assertRaisesRegex(ValueError, "decoder correction"):
+                validate_config(baseline)
+
+    def test_decoder_correction_cannot_include_other_audio_changes(self):
+        upstream = f"before\n{UNAVAILABLE_DECODER_CALL}\nafter\n"
+        current = upstream.replace(UNAVAILABLE_DECODER_CALL, AVAILABLE_DECODER_CALL)
+        check_decoder_source(upstream, current)
+        for source, changed in ((upstream, upstream), (upstream, current + "unrelated change\n"), ("different upstream", current)):
+            with self.assertRaisesRegex(ValueError, "only the shared decoder"):
+                check_decoder_source(source, changed)
 
     def test_candidate_must_match_its_exact_declared_changes(self):
-        self.config.update(id="candidate", expected_runtime_paths=["vita3k/io/src/io.cpp"])
+        self.config.update(id="candidate", expected_runtime_paths=[DECODER_PATH, "vita3k/io/src/io.cpp"])
         validate_config(self.config)
         check_paths(self.config, self.config["expected_runtime_paths"])
-        for paths in ([], ["vita3k/io/src/io.cpp", "vita3k/display/src/display.cpp"]):
+        for paths in ([], [DECODER_PATH, "vita3k/io/src/io.cpp", "vita3k/display/src/display.cpp"]):
             with self.assertRaisesRegex(ValueError, "Runtime diff"):
                 check_paths(self.config, paths)
 
