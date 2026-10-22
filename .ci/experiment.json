@@ -1,16 +1,21 @@
 {
   "upstream_base": "a86b5f93db43e4c4640ad1527e2a4695aad0f35b",
-  "id": "baseline",
-  "tag": "exp-plus-baseline-20261023",
-  "title": "VITAdev experiment: unchanged Plus baseline",
+  "id": "ngs-mempool",
+  "tag": "exp-plus-ngs-mempool-20261023",
+  "title": "VITAdev experiment: NGS pool block splitting",
   "version_code": 1030800,
-  "version_name": "1.3.2-plus-exp.baseline.1",
-  "expected_runtime_paths": [],
-  "purpose": "Establish Jak and Uncharted visual behavior using the unchanged all-enhancements emulator and Android frontend.",
+  "version_name": "1.3.2-plus-exp.ngs-mempool.1",
+  "expected_runtime_paths": [
+    "vita3k/mem/CMakeLists.txt",
+    "vita3k/mem/include/mem/mempool.h",
+    "vita3k/mem/tests/mempool_tests.cpp"
+  ],
+  "purpose": "Remove an extra vector resize that creates phantom pool blocks and can make valid NGS allocations impossible to free. This is the only emulator behavior change from the Plus baseline.",
   "device_checks": [
     "Install over VITAdev and confirm that settings, saves and the imported Vulkan driver remain available.",
-    "Use the same actual Vulkan driver, save, camera, resolution and memory mapping as Vita3K-Plus.",
-    "Check Jak's sky, terrain, water and HUD, and Uncharted's black rectangle, lighting and shadows.",
-    "After shader compilation finishes, restart and repeat the same scenes. Record the driverID line and paired screenshots."
+    "Compare first with exp-plus-baseline-20261023 using the same driver, save, resolution, mapping and camera.",
+    "Check startup, repeated save/load, level transitions, dialogue, music and sound effects in Jak and Uncharted. Listen for missing or stuck voices.",
+    "Confirm that the sky, black rectangle, lighting and shadows match the baseline. This candidate does not change rendering or shader code.",
+    "Reinstall either APK over the other to compare. Both deliberately use version code 1030800."
   ]
 }
