@@ -1,7 +1,9 @@
 # Plus experiment review
 
 Upstream baseline: `a86b5f93db43e4c4640ad1527e2a4695aad0f35b`.
-Baseline packaging source: `cd0701d56c61195d254ccabfdaa9ede8583ac222`.
+Baseline packaging source: `9197e56160c32ad7610df870c55bbd89a5bb4fa0`.
+The build generates the logging identity header required but not tracked by
+Plus. Its constants are recorded by hash in each manifest.
 The baseline keeps native code, Android frontend behavior, dependencies,
 shaders and data files unchanged. Its first device question is whether the
 Jak and Uncharted defects match the reference Plus build.
