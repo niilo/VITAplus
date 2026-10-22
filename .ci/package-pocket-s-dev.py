@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from dev_apk import PACKAGE, apk_identity, verify_dev_identity
+from dev_apk import PACKAGE, ISOLATED_PACKAGE, apk_identity, verify_dev_identity, verify_isolated_identity
 
 
 def run(*args):
@@ -26,17 +26,23 @@ def digest(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--package", default=PACKAGE)
-    parser.add_argument("--label", default="VITAdev")
-    parser.add_argument("--name", default="VITAdev")
+    parser.add_argument("--package")
+    parser.add_argument("--label")
+    parser.add_argument("--name")
     parser.add_argument("--application-source", default=None)
     parser.add_argument("--testing", type=Path, default=Path(".scratch/visual-followup-2026-10-22/testing.md"))
     parser.add_argument("--notes", type=Path)
     parser.add_argument("--build-label")
+    parser.add_argument("--isolated-test", action="store_true", help="Package the explicitly requested separate visual test app")
     parser.add_argument("--previous-apk", type=Path, help="Check package, certificate and version against the installed build APK")
     args = parser.parse_args()
-    if args.package != PACKAGE or args.label != "VITAdev":
-        parser.error("Development updates must use the VITAdev package and launcher name")
+    expected_package = ISOLATED_PACKAGE if args.isolated_test else PACKAGE
+    expected_label = "VITAdev Visual Test" if args.isolated_test else "VITAdev"
+    args.package = args.package or expected_package
+    args.label = args.label or expected_label
+    args.name = args.name or ("VITAdev-visual-test-20261022" if args.isolated_test else "VITAdev")
+    if args.package != expected_package or args.label != expected_label:
+        parser.error("APK identity must match the selected update or separate-test mode")
     if not re.fullmatch(r"[A-Za-z0-9_-]+", args.name):
         parser.error("Artifact name must contain only letters, digits, underscores and hyphens")
     root = Path.cwd()
@@ -53,7 +59,7 @@ def main():
     if args.previous_apk:
         previous = apk_identity(run(sdk / "aapt2", "dump", "badging", args.previous_apk),
             run(sdk / "apksigner", "verify", "--print-certs", args.previous_apk))
-    verify_dev_identity(identity, previous)
+    (verify_isolated_identity if args.isolated_test else verify_dev_identity)(identity, previous)
     if f"name='{args.package}'" not in badging or f"application-label:'{args.label}'" not in badging:
         raise RuntimeError("APK package or launcher label does not match VITAdev")
     if "native-code: 'arm64-v8a'" not in badging:
@@ -108,7 +114,8 @@ def main():
         "native_configuration": "RelWithDebInfo",
         "abi": "arm64-v8a",
         "native_build_id": native_id,
-        "signing": "existing VITAdev key",
+        "signing": "existing CI signing key" if args.isolated_test else "existing VITAdev key",
+        "updates_vitadev": not args.isolated_test,
         "signing_certificate_sha256": identity["certificate_sha256"],
         "version_code": identity["version_code"],
         "workflow_run": f"https://github.com/niilo/VITAplus/actions/runs/{os.environ.get('GITHUB_RUN_ID', 'local-check')}",
@@ -122,6 +129,12 @@ def main():
 Source: `{revision}`. Native build ID: `{native_id}`.
 The package and certificate match the existing VITAdev app. See TESTING.md for device checks.
 Device rendering, performance, power and thermals remain unmeasured.
+"""
+    if args.isolated_test:
+        notes = f"""Download **{args.name}-arm64.apk**. It installs as **{args.label}**, package `{args.package}`.
+
+This is a separate test app. Import the intended Vulkan driver and match the Plus app's settings.
+Source: `{revision}`. Native build ID: `{native_id}`. See TESTING.md for device checks.
 """
     if args.notes:
         notes = (root / args.notes).read_text()

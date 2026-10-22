@@ -30,3 +30,21 @@ def verify_dev_identity(identity, previous=None):
             raise ValueError("APK cannot update the previous APK: package or certificate differs")
         if identity["version_code"] < previous["version_code"]:
             raise ValueError("APK version code is older than the previous APK")
+
+
+ISOLATED_PACKAGE = "org.vita3k.emulator.debug.visualtest"
+ISOLATED_CERTIFICATE_SHA256 = "04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a"
+
+
+def verify_isolated_identity(identity, previous=None):
+    if identity["package_id"] != ISOLATED_PACKAGE:
+        raise ValueError("The separate visual test must use its dedicated package ID")
+    if identity["certificate_sha256"] != ISOLATED_CERTIFICATE_SHA256:
+        raise ValueError("The separate visual test must use the existing CI signing key")
+    if identity["version_code"] < 1:
+        raise ValueError("APK version code must be positive")
+    if previous is not None:
+        if any(identity[field] != previous[field] for field in ("package_id", "certificate_sha256")):
+            raise ValueError("The previous APK belongs to a different test app or signing key")
+        if identity["version_code"] < previous["version_code"]:
+            raise ValueError("APK version code is older than the previous test APK")

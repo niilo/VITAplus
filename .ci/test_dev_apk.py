@@ -2,7 +2,7 @@
 
 import unittest
 
-from dev_apk import CERTIFICATE_SHA256, PACKAGE, apk_identity, verify_dev_identity
+from dev_apk import CERTIFICATE_SHA256, ISOLATED_CERTIFICATE_SHA256, PACKAGE, ISOLATED_PACKAGE, apk_identity, verify_dev_identity, verify_isolated_identity
 
 
 class DevApkTests(unittest.TestCase):
@@ -35,6 +35,19 @@ class DevApkTests(unittest.TestCase):
         for previous in (self.identity(package=PACKAGE + ".visualfixes"), self.identity(certificate="ab" * 32)):
             with self.assertRaisesRegex(ValueError, "differs"):
                 verify_dev_identity(self.identity(), previous)
+
+    def test_explicit_separate_test_uses_the_existing_ci_key(self):
+        verify_isolated_identity(self.identity(package=ISOLATED_PACKAGE, certificate=ISOLATED_CERTIFICATE_SHA256))
+
+    def test_separate_test_never_passes_as_a_vitadev_update(self):
+        with self.assertRaisesRegex(ValueError, "separate app"):
+            verify_dev_identity(self.identity(package=ISOLATED_PACKAGE, certificate=ISOLATED_CERTIFICATE_SHA256))
+        with self.assertRaisesRegex(ValueError, "dedicated package"):
+            verify_isolated_identity(self.identity())
+
+    def test_separate_test_rejects_a_new_random_key(self):
+        with self.assertRaisesRegex(ValueError, "existing CI signing key"):
+            verify_isolated_identity(self.identity(package=ISOLATED_PACKAGE, certificate="ab" * 32))
 
     def test_unknown_signature_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "missing or ambiguous"):

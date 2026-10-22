@@ -162,9 +162,11 @@ android {
 			if (devSuffix != '.debug') {
 				throw new GradleException('VITAdev uses .debug. A different suffix installs a separate app.')
 			}
-			applicationIdSuffix = '.debug'
+			// Explicit visual test builds use a separate package when the VITAdev key is unavailable.
+			def isolatedVisualTest = providers.gradleProperty('vitaIsolatedVisualTest').getOrElse('false') == 'true'
+			applicationIdSuffix = isolatedVisualTest ? '.debug.visualtest' : '.debug'
 			versionNameSuffix = providers.gradleProperty('vitaDevVersionSuffix').getOrElse('')
-			manifestPlaceholders = [vitaAppLabel: '@string/app_name']
+			manifestPlaceholders = [vitaAppLabel: isolatedVisualTest ? 'VITAdev Visual Test' : '@string/app_name']
 			// The launcher name is VITAdev, from src/reldebug/res/values/strings.xml.
 			signingConfig = signingConfigs.debug
 		}
