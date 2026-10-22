@@ -98,6 +98,9 @@ jobs:
           bash tools/release/check-no-signing-keys.sh
           python3 .ci/test_experiment.py
           python3 tools/android/test_fps_sample.py
+          if [ -f vita3k/mem/tests/mempool_tests.cpp ]; then
+            bash .ci/test-native-mempool.sh
+          fi
       - name: Build ARM64 development APK
         shell: bash
         run: |
@@ -177,5 +180,5 @@ jobs:
           fi
           gh release upload "$tag" VITAdev-plus-experiment-arm64.apk \
             VITAdev-plus-experiment-symbols.zip VITAdev-plus-experiment-source.patch \
-            build-manifest.json TESTING.md SHA256SUMS --clobber
+            build-manifest.json TESTING.md RELEASE_NOTES.md SHA256SUMS --clobber
           gh release edit "$tag" --draft=false --prerelease --latest=false
