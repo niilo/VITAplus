@@ -5,8 +5,9 @@
 # or to provide custom queries or build logic.
 name: "CodeQL"
 
-# CodeQL compiles the whole program, so it runs only for a release tag, like the release build.
+# CodeQL compiles the program on release tags or when started manually.
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -20,6 +21,10 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
 
     strategy:
       fail-fast: false
