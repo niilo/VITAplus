@@ -18,7 +18,7 @@ import org.vita3k.emulator.R
 import org.vita3k.emulator.data.FirmwareInstallState
 import org.vita3k.emulator.data.AppInfo
 import org.vita3k.emulator.data.AppRepository
-import org.vita3k.emulator.data.AppVersion
+import org.vita3k.emulator.data.AppStorage
 import org.vita3k.emulator.data.SortOption
 import org.vita3k.emulator.data.UpdateCheckResult
 import org.vita3k.emulator.data.UpdateCheckStatus
@@ -60,9 +60,9 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
         private set
     var sortOption by mutableStateOf(SortOption.TITLE)
         private set
-    var viewMode by mutableStateOf(ViewMode.LIST)
+    var viewMode by mutableStateOf(AppStorage.appsViewMode(application))
         private set
-    var appVersion by mutableStateOf(AppVersion.EMPTY)
+    var appVersion by mutableStateOf("")
         private set
     var updateCheckInProgress by mutableStateOf(false)
         private set
@@ -129,6 +129,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleViewMode() {
         viewMode = if (viewMode == ViewMode.LIST) ViewMode.GRID else ViewMode.LIST
+        AppStorage.setAppsViewMode(getApplication<Application>(), viewMode)
     }
 
     fun dismissActionResult() {
@@ -234,7 +235,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
                 updateCheckResult = UpdateCheckResult(
                     status = UpdateCheckStatus.Failed,
                     message = str(R.string.updates_check_in_progress),
-                    currentDisplayVersion = appVersion.displayVersion()
+                    currentDisplayVersion = appVersion
                 )
             }
             return
@@ -257,7 +258,7 @@ class AppsListViewModel(application: Application) : AndroidViewModel(application
                     updateCheckResult = UpdateCheckResult(
                         status = UpdateCheckStatus.Failed,
                         message = str(R.string.install_error_generic, e.message ?: ""),
-                        currentDisplayVersion = appVersion.displayVersion()
+                        currentDisplayVersion = appVersion
                     )
                 }
             } finally {

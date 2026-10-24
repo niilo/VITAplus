@@ -86,14 +86,18 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
 
     assert(m_b.getTypeClass(m_b.getContainedTypeId(m_b.getTypeId(coord_id))) == spv::OpTypeFloat);
 
-    // Cast-sampler UV re-anchor
+    // Cast-sampler UV re-anchor (now compiled only into pipelines where a sampled unit holds a cast)
     constexpr int cast_mask_width = 16;
-    if (dim == 2 && m_spirv_params.frag_coord_id != spv::NoResult
+    if (dim == 2 && m_spirv_params.has_surface_casts_constant != spv::NoResult && m_spirv_params.frag_coord_id != spv::NoResult
         && texture_index >= 0 && texture_index < cast_mask_width) {
         spv::Id coord_xy = coord_id;
         const bool has_extra_comps = m_b.getNumComponents(coord_id) > 2;
         if (has_extra_comps)
             coord_xy = m_b.createOp(spv::OpVectorShuffle, type_f32_v[2], { { true, coord_id }, { true, coord_id }, { false, 0 }, { false, 1 } });
+
+        const spv::Id cast_coord = m_b.createVariable(spv::NoPrecision, spv::StorageClassFunction, type_f32_v[2], "cast_coord");
+        m_b.createStore(coord_xy, cast_coord);
+        spv::Builder::If cast_branch(m_spirv_params.has_surface_casts_constant, spv::SelectionControlMaskNone, m_b);
 
         const auto load_frag_uniform = [&](FragUniformFieldId field) {
             spv::Id ptr = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(field) });
@@ -118,6 +122,7 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
         // ... && res_multiplier != 1.0
         spv::Id not_1x = m_b.createBinOp(spv::OpFUnordNotEqual, type_bool, res_mult, m_b.makeFloatConstant(1.0f));
         spv::Id active = m_b.createBinOp(spv::OpLogicalAnd, type_bool, unit_is_cast, not_1x);
+        spv::Builder::If active_branch(active, spv::SelectionControlMaskNone, m_b);
 
         // screen_uv = gl_FragCoord.xy * inv_size
         spv::Id frag_coord = m_b.createLoad(m_spirv_params.frag_coord_id, spv::NoPrecision);
@@ -166,15 +171,32 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
         const spv::Id has_offset = m_b.createBinOp(spv::OpFOrdGreaterThan, type_bool, adx, eps);
         const spv::Id reanchor_ok = m_b.createBinOp(spv::OpFOrdLessThanEqual, type_bool, adx, threshold);
         spv::Id x_offset_path = m_b.createTriOp(spv::OpSelect, type_f32, reanchor_ok, adj_x, coord_x);
-        spv::Id x_active = m_b.createTriOp(spv::OpSelect, type_f32, has_offset, x_offset_path, snapped_x);
-        const spv::Id new_x = m_b.createTriOp(spv::OpSelect, type_f32, active, x_active, coord_x);
+        const spv::Id new_x = m_b.createTriOp(spv::OpSelect, type_f32, has_offset, x_offset_path, snapped_x);
 
         // Y keeps the plain re-anchor (harmless identity for zero delta; big deltas untouched)
-        spv::Id y_ok = m_b.createBinOp(spv::OpFOrdLessThanEqual, type_bool, ady, threshold);
-        y_ok = m_b.createBinOp(spv::OpLogicalAnd, type_bool, y_ok, active);
+        const spv::Id y_ok = m_b.createBinOp(spv::OpFOrdLessThanEqual, type_bool, ady, threshold);
         const spv::Id new_y = m_b.createTriOp(spv::OpSelect, type_f32, y_ok, adj_y, coord_y);
 
-        spv::Id new_xy = m_b.createCompositeConstruct(type_f32_v[2], { new_x, new_y });
+        m_b.createStore(m_b.createCompositeConstruct(type_f32_v[2], { new_x, new_y }), cast_coord);
+        active_branch.makeEndIf();
+
+        // Settles a point read exactly on a texel boundary on the lower texel
+        spv::Id tie_phase = m_b.createUnaryOp(spv::OpConvertFToU, type_u32, phase_f);
+        tie_phase = m_b.createBinOp(spv::OpShiftRightLogical, type_u32, tie_phase, m_b.makeUintConstant(texture_index));
+        tie_phase = m_b.createBinOp(spv::OpBitwiseAnd, type_u32, tie_phase, m_b.makeUintConstant(1));
+        const spv::Id is_phase_view = m_b.createBinOp(spv::OpLogicalAnd, type_bool, m_b.createBinOp(spv::OpINotEqual, type_bool, tie_phase, m_b.makeUintConstant(0)),
+            m_b.createUnaryOp(spv::OpLogicalNot, type_bool, unit_is_cast));
+        const spv::Id cast_at_1x = m_b.createBinOp(spv::OpLogicalAnd, type_bool, unit_is_cast, m_b.createUnaryOp(spv::OpLogicalNot, type_bool, not_1x));
+        spv::Builder::If tie_branch(m_b.createBinOp(spv::OpLogicalOr, type_bool, is_phase_view, cast_at_1x), spv::SelectionControlMaskNone, m_b);
+        const spv::Id tie_int = m_b.makeIntType(32);
+        const spv::Id tie_image = m_b.createUnaryOp(spv::OpImage, m_b.makeImageType(type_f32, spv::Dim2D, false, false, false, 1, spv::ImageFormatUnknown), tex);
+        const spv::Id tie_size = m_b.createOp(spv::OpImageQuerySizeLod, m_b.makeVectorType(tie_int, 2), { tie_image, m_b.makeIntConstant(0) });
+        const spv::Id tie_w = m_b.createUnaryOp(spv::OpConvertSToF, type_f32, utils::extract_vector_component(m_b, tie_int, tie_size, m_b.makeIntConstant(0)));
+        const spv::Id tie_x = m_b.createBinOp(spv::OpFSub, type_f32, utils::extract_vector_component(m_b, type_f32, coord_xy, m_b.makeIntConstant(0)), m_b.createBinOp(spv::OpFDiv, type_f32, m_b.makeFloatConstant(1.0f / 256.0f), tie_w));
+        m_b.createStore(m_b.createCompositeConstruct(type_f32_v[2], { tie_x, utils::extract_vector_component(m_b, type_f32, coord_xy, m_b.makeIntConstant(1)) }), cast_coord);
+        tie_branch.makeEndIf();
+        cast_branch.makeEndIf();
+        const spv::Id new_xy = m_b.createLoad(cast_coord, spv::NoPrecision);
 
         if (has_extra_comps) {
             // splice x,y back, keep remaining components
@@ -253,17 +275,23 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
 
     image_sample = m_b.createOp(op, type_f32_v[4], params);
 
-    if (m_spirv_params.frag_coord_id != spv::NoResult && m_spirv_params.render_info_id != spv::NoResult
+    // Raw half-float rebuild (now compiled only into pipelines where a sampled unit holds a cast)
+    if (m_spirv_params.has_surface_casts_constant != spv::NoResult && m_spirv_params.frag_coord_id != spv::NoResult && m_spirv_params.render_info_id != spv::NoResult
         && texture_index >= 0 && texture_index < 16) {
         const spv::Id type_u32 = m_b.makeUintType(32);
         const spv::Id type_u32_v4 = m_b.makeVectorType(type_u32, 4);
         const spv::Id type_bool = m_b.makeBoolType();
+
+        const spv::Id raw_cast_result = m_b.createVariable(spv::NoPrecision, spv::StorageClassFunction, type_f32_v[4], "raw_cast_result");
+        m_b.createStore(image_sample, raw_cast_result);
+        spv::Builder::If cast_branch(m_spirv_params.has_surface_casts_constant, spv::SelectionControlMaskNone, m_b);
 
         spv::Id mask_ptr = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(FRAG_UNIFORM_raw_cast_mask) });
         spv::Id mask_u = m_b.createUnaryOp(spv::OpConvertFToU, type_u32, m_b.createLoad(mask_ptr, spv::NoPrecision));
         spv::Id bit = m_b.createBinOp(spv::OpShiftRightLogical, type_u32, mask_u, m_b.makeUintConstant(texture_index));
         bit = m_b.createBinOp(spv::OpBitwiseAnd, type_u32, bit, m_b.makeUintConstant(1));
         spv::Id unit_is_raw = m_b.createBinOp(spv::OpINotEqual, type_bool, bit, m_b.makeUintConstant(0));
+        spv::Builder::If raw_branch(unit_is_raw, spv::SelectionControlMaskNone, m_b);
 
         spv::Id scaled = m_b.createBinOp(spv::OpVectorTimesScalar, type_f32_v[4], image_sample, m_b.makeFloatConstant(65535.0f));
         spv::Id rounded = m_b.createBuiltinCall(type_f32_v[4], std_builtins, GLSLstd450Round, { scaled });
@@ -284,9 +312,10 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
         spv::Id zero_f = m_b.makeFloatConstant(0.0f);
         spv::Id rebuilt = m_b.createCompositeConstruct(type_f32_v[4], { word(0, 1), word(2, 3), zero_f, zero_f });
 
-        const spv::Id type_bool_v4 = m_b.makeVectorType(type_bool, 4);
-        const spv::Id unit_is_raw_v4 = m_b.createCompositeConstruct(type_bool_v4, { unit_is_raw, unit_is_raw, unit_is_raw, unit_is_raw });
-        image_sample = m_b.createTriOp(spv::OpSelect, type_f32_v[4], unit_is_raw_v4, rebuilt, image_sample);
+        m_b.createStore(rebuilt, raw_cast_result);
+        raw_branch.makeEndIf();
+        cast_branch.makeEndIf();
+        image_sample = m_b.createLoad(raw_cast_result, spv::NoPrecision);
     }
 
     if (get_data_type_size(dest_type) < 4 && dest_type != DataType::UINT16 && dest_type != DataType::INT16)
@@ -388,6 +417,11 @@ bool USSETranslatorVisitor::smp(
         is_texture_buffer_load = true;
         inst.opr.src1.type = DataType::INT32;
         texture_index = load(inst.opr.src1, 0b1);
+    }
+
+    if (is_texture_buffer_load && m_spirv_params.samplers.empty()) {
+        LOG_ERROR("Texture buffer load without any sampler");
+        return true;
     }
 
     // if this is a texture buffer load, just attribute the first available sampler to it

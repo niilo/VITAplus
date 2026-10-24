@@ -19,15 +19,10 @@
 
 #include "renderer/vulkan/state.h"
 #include "util/log.h"
-#include "util/perf_log.h"
 #include "vkutil/vkutil.h"
 
-#include <fmt/format.h>
-
-#include <algorithm>
 #include <cstdint>
 #include <exception>
-#include <string>
 
 #ifdef _WIN32
 #include <vulkan/vulkan_win32.h>
@@ -210,7 +205,28 @@ bool ScreenRenderer::setup() {
         state.deep_stencil_use = vk::Format::eD16Unorm;
     }
 
-    select_present_mode();
+    // preferred order : mailbox > fifo_relaxed > fifo > whatever
+    // the only drawback for mailbox is that it draws more power, so maybe on a portable device use something else
+    // this one should always be available
+    present_mode = vk::PresentModeKHR::eImmediate;
+    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
+    for (const auto &mode : present_modes) {
+        if (mode == vk::PresentModeKHR::eMailbox) {
+            present_mode = mode;
+            break;
+        }
+
+        if (mode == vk::PresentModeKHR::eFifoRelaxed) {
+            present_mode = mode;
+        }
+        if (present_mode == vk::PresentModeKHR::eFifoRelaxed)
+            continue;
+
+        if (mode == vk::PresentModeKHR::eFifo) {
+            present_mode = mode;
+        }
+    }
+    LOG_INFO("Present mode: {}", vk::to_string(present_mode));
 
     create_render_pass();
 
@@ -225,66 +241,6 @@ bool ScreenRenderer::setup() {
     return true;
 }
 
-// Ticket 09: one function chooses the present mode, keyed on v-sync.
-void ScreenRenderer::select_present_mode() {
-    // A v-sync change while a game runs arrives here as a pending value.
-    // compare-exchange clears it, so two changes cannot collapse into one.
-    const int requested_vsync = state.pending_vsync.exchange(-1, std::memory_order_relaxed);
-    if (requested_vsync >= 0)
-        vsync = requested_vsync != 0;
-
-    const auto present_modes = state.physical_device.getSurfacePresentModesKHR(surface);
-    const auto has_mode = [&present_modes](const vk::PresentModeKHR mode) {
-        return std::find(present_modes.begin(), present_modes.end(), mode) != present_modes.end();
-    };
-
-    // FIFO is the only mode Vulkan requires, so it is the fallback everywhere.
-#ifdef __ANDROID__
-    // A 30 FPS game on a 60 Hz panel presents every other vsync. FIFO lets the
-    // GPU idle between presents instead of being woken to throw work away, so
-    // v-sync on uses FIFO. v-sync off uses MAILBOX when the surface has it.
-    present_mode = (!vsync && has_mode(vk::PresentModeKHR::eMailbox)) ? vk::PresentModeKHR::eMailbox
-                                                                      : vk::PresentModeKHR::eFifo;
-#else
-    // Other systems keep the order this base has always used, and v-sync does
-    // not change it: MAILBOX, then FIFO_RELAXED, then FIFO.
-    if (has_mode(vk::PresentModeKHR::eMailbox))
-        present_mode = vk::PresentModeKHR::eMailbox;
-    else if (has_mode(vk::PresentModeKHR::eFifoRelaxed))
-        present_mode = vk::PresentModeKHR::eFifoRelaxed;
-    else
-        present_mode = vk::PresentModeKHR::eFifo;
-#endif
-
-    if (perf_log::enabled()) {
-        std::string list;
-        for (const auto &mode : present_modes) {
-            if (!list.empty())
-                list += ", ";
-            list += vk::to_string(mode);
-        }
-        LOG_INFO("Present modes the surface offers: {}", list);
-    }
-}
-
-vk::Extent2D ScreenRenderer::scaled_extent(const vk::Extent2D &in) const {
-    // The guest image is tiled, so each dimension is rounded down to a whole
-    // number of 8-pixel tiles. The display scales the smaller surface up, so a
-    // rounded-down extent costs a little sharpness and nothing else.
-    const auto one = [this](uint32_t v, uint32_t floor) {
-        const uint32_t scaled = static_cast<uint32_t>(static_cast<float>(v) * scale);
-        return std::max((scaled / kTilePixels) * kTilePixels, std::max(floor, kTilePixels));
-    };
-
-    if (in.width == 0 || in.height == 0)
-        return in;
-
-    return vk::Extent2D{
-        one(in.width, surface_capabilities.minImageExtent.width),
-        one(in.height, surface_capabilities.minImageExtent.height)
-    };
-}
-
 void ScreenRenderer::create_swapchain() {
     surface_capabilities = state.physical_device.getSurfaceCapabilitiesKHR(surface);
 
@@ -296,16 +252,13 @@ void ScreenRenderer::create_swapchain() {
         extent.height = std::clamp<uint32_t>(static_cast<uint32_t>(frame_host->drawable_height()), surface_capabilities.minImageExtent.height, surface_capabilities.maxImageExtent.height);
     }
 
-    // Ticket 28: the scale is applied to the output surface extent, not to the
-    // guest image. Both call sites below use scaled_extent() so the extent that
-    // is created and the extent that is compared against cannot drift apart.
-    if (scale != 1.0f)
-        extent = scaled_extent(extent);
-
+    confirmed_window_size = vk::Extent2D{};
+    swapchain_surface_extent = surface_capabilities.currentExtent;
+    surface_check_countdown = 15;
     if (extent.width == 0 || extent.height == 0)
         return;
 
-    swapchain_size = surface_capabilities.minImageCount + extra_images;
+    swapchain_size = surface_capabilities.minImageCount + 1;
     if (surface_capabilities.maxImageCount != 0)
         swapchain_size = std::min(swapchain_size, surface_capabilities.maxImageCount);
 
@@ -317,22 +270,29 @@ void ScreenRenderer::create_swapchain() {
             surface_usage |= vk::ImageUsageFlagBits::eTransferDst;
         if (surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eTransferSrc)
             surface_usage |= vk::ImageUsageFlagBits::eTransferSrc;
-        vk::ImageUsageFlags fsr_flags = vk::ImageUsageFlagBits::eTransferDst;
-        if (!state.is_adreno_turnip)
+        // FSR's sharpening pass declares an rgba8 storage image so it can only write an R8G8B8A8 swapchain directly.
+        // Any other swapchain (BGRA on most desktops) gets the sharpened image through a blit.
+        const vk::FormatFeatureFlags swapchain_features = state.physical_device.getFormatProperties(surface_format.format).optimalTilingFeatures;
+        const vk::FormatFeatureFlags rgba_features = state.physical_device.getFormatProperties(vk::Format::eR8G8B8A8Unorm).optimalTilingFeatures;
+        swapchain_has_storage = surface_format.format == vk::Format::eR8G8B8A8Unorm
             // workaround for a Turnip driver bug: adding storage flag here breaks the swapchain
-            // and fsr works fine without this flag on Adreno
-            fsr_flags |= vk::ImageUsageFlagBits::eStorage;
+            && !state.is_adreno_turnip
+            && static_cast<bool>(surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
+            && static_cast<bool>(swapchain_features & vk::FormatFeatureFlagBits::eStorageImage);
+        if (swapchain_has_storage)
+            surface_usage |= vk::ImageUsageFlagBits::eStorage;
 
-        if (surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage)
-            // needed for FSR
-            surface_usage |= fsr_flags;
-        swapchain_has_storage = static_cast<bool>(surface_usage & vk::ImageUsageFlagBits::eStorage);
+        constexpr vk::FormatFeatureFlags intermediate_features = vk::FormatFeatureFlagBits::eStorageImage | vk::FormatFeatureFlagBits::eSampledImage;
+        constexpr vk::FormatFeatureFlags blit_source_features = vk::FormatFeatureFlagBits::eTransferSrc | vk::FormatFeatureFlagBits::eBlitSrc;
+        swapchain_supports_fsr = support_swapchain_transfer_dst
+            && static_cast<bool>(swapchain_features & vk::FormatFeatureFlagBits::eTransferDst)
+            && (rgba_features & intermediate_features) == intermediate_features
+            && (swapchain_has_storage || ((rgba_features & blit_source_features) == blit_source_features && static_cast<bool>(swapchain_features & vk::FormatFeatureFlagBits::eBlitDst)));
 
-        LOG_INFO("swapchain: format={} colorspace={} extent={}x{} supportedUsage=0x{:X} chosenUsage=0x{:X} images={} currentTransform={} usedTransform=Identity{}",
+        LOG_INFO("swapchain: format={} colorspace={} extent={}x{} supportedUsage=0x{:X} chosenUsage=0x{:X} images={} currentTransform={} usedTransform=Identity",
             vk::to_string(surface_format.format), vk::to_string(surface_format.colorSpace), extent.width, extent.height,
             static_cast<uint32_t>(surface_capabilities.supportedUsageFlags), static_cast<uint32_t>(surface_usage),
-            swapchain_size, vk::to_string(surface_capabilities.currentTransform),
-            scale == 1.0f ? "" : fmt::format(" swapchain-scale={}", scale));
+            swapchain_size, vk::to_string(surface_capabilities.currentTransform));
 
         vk::CompositeAlphaFlagBitsKHR comp_alpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
         if (!(surface_capabilities.supportedCompositeAlpha & comp_alpha))
@@ -359,17 +319,6 @@ void ScreenRenderer::create_swapchain() {
     // Get Swapchain Images
     swapchain_images = state.device.getSwapchainImagesKHR(swapchain);
     swapchain_size = swapchain_images.size();
-    LOG_INFO("Present mode: {} (v-sync {}), swapchain images: {} (minimum {}, plus {})",
-        vk::to_string(present_mode), vsync ? "on" : "off", swapchain_size, surface_capabilities.minImageCount, extra_images);
-
-    // vita_surface has one image per swapchain image, and the driver may return
-    // a different count than was asked for. rebuild_swapchain_if_visible() calls
-    // create_swapchain() without calling create_surface_image() again, so resize
-    // here and the per-image index stays in range.
-    // The GPU is idle here: setup() runs before the first frame, and the
-    // rebuild path waits for the device first.
-    if (!vita_surface.empty() && vita_surface.size() != swapchain_size)
-        vita_surface.resize(swapchain_size);
 
     // Get Image views
     swapchain_views.resize(swapchain_size);
@@ -399,7 +348,10 @@ void ScreenRenderer::create_swapchain() {
     }
 
     if (filter) {
-        if (command_buffers.size() < swapchain_size) {
+        if (filter->get_name() == "FSR" && !swapchain_supports_fsr) {
+            // the new swapchain cannot take FSR's output
+            set_filter("Bilinear");
+        } else if (command_buffers.size() < swapchain_size) {
             // if the swapchain size increased, we need to reset the filter
             std::string filter_name{ filter->get_name() };
             filter.reset();
@@ -428,7 +380,7 @@ void ScreenRenderer::destroy_swapchain() {
 }
 
 void ScreenRenderer::cleanup() {
-    state.device.waitIdle();
+    state.wait_gpu_idle();
 
     filter.reset();
 
@@ -645,8 +597,6 @@ void ScreenRenderer::swap_window() {
     };
 
     auto result = state.general_queue.presentKHR(&present_info);
-    if (perf_log::enabled())
-        perf_log::write("presents", "steady_us,result", fmt::format("{},{}", perf_log::now_us(), static_cast<int>(result)));
     if (result == vk::Result::eSuboptimalKHR) {
         if (note_size_mismatch(!surface_matches_window_size())) {
             need_rebuild = true;
@@ -672,7 +622,7 @@ void ScreenRenderer::set_filter(const std::string_view &filter) {
         return;
 
     this->filter.reset();
-    if (filter == "FSR")
+    if (filter == "FSR" && swapchain_supports_fsr)
         this->filter = std::make_unique<FSRScreenFilter>(*this);
     else if (filter == "FXAA")
         this->filter = std::make_unique<FXAAScreenFilter>(*this);
@@ -756,7 +706,9 @@ void ScreenRenderer::create_render_pass() {
 
     default_render_pass = state.device.createRenderPass(pass_info);
 
-    // renderpass after post processing filter
+    // renderpass after post processing filter which wrote the swapchain image from a compute shader or a blit
+    dependency.srcStageMask |= vk::PipelineStageFlagBits::eTransfer;
+    dependency.srcAccessMask = vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite;
     color_attachment
         .setLoadOp(vk::AttachmentLoadOp::eLoad)
         .setInitialLayout(vk::ImageLayout::eGeneral);
@@ -785,22 +737,20 @@ bool ScreenRenderer::ensure_swapchain() {
     if (!window_has_drawable_size(state))
         return false;
 
-    // Ticket 09: a v-sync change while a game runs has to create the swapchain
-    // again, because the present mode is fixed when it is created.
-    // pending_vsync is set by set_vsync_state() and cleared by
-    // select_present_mode(). Read it here without clearing it, so the mode is
-    // chosen by create_swapchain().
-    const int pending = state.pending_vsync.load(std::memory_order_relaxed);
-    if (pending >= 0 && ((pending != 0) != vsync)) {
-        need_rebuild = true;
-        rebuild_reason = "v-sync changed";
-    }
-
     if (!need_rebuild && !need_surface_recreate && swapchain) {
-        // A one-frame disagreement between what Vulkan reports as the surface extent and what the window reports as its client size is not a resize
-        if (!note_size_mismatch(!surface_matches_window_size()))
-            return true;
-        rebuild_reason = "persistent window size mismatch";
+#ifdef __ANDROID__
+        const bool surface_changed = android_surface_changed();
+#else
+        constexpr bool surface_changed = false;
+#endif
+        if (surface_changed) {
+            rebuild_reason = "surface resized";
+        } else {
+            // A one-frame disagreement between what Vulkan reports as the surface extent and what the window reports as its client size is not a resize
+            if (!note_size_mismatch(!surface_matches_window_size()))
+                return true;
+            rebuild_reason = "persistent window size mismatch";
+        }
     }
 
     if (!rebuild_swapchain_if_visible()) {
@@ -829,20 +779,27 @@ bool ScreenRenderer::rebuild_swapchain_if_visible() {
     // it idles the device, which stalls the vblank thread too
     auto *frame_host = static_cast<renderer::State &>(state).frame;
     const auto rebuild_start = std::chrono::steady_clock::now();
-    state.device.waitIdle();
-    const auto idled = std::chrono::steady_clock::now();
-    destroy_swapchain();
-    const auto destroyed = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point idled, destroyed;
+    // a lost surface (an Android app switch, a closing window) or a lost device throws out of these calls
+    try {
+        state.device.waitIdle();
+        idled = std::chrono::steady_clock::now();
+        destroy_swapchain();
+        destroyed = std::chrono::steady_clock::now();
 
 #ifdef __ANDROID__
-    if (!create())
-        return false;
+        if (!create())
+            return false;
 #else
-    if (need_surface_recreate && !create())
-        return false;
+        if (need_surface_recreate && !create())
+            return false;
 #endif
 
-    create_swapchain();
+        create_swapchain();
+    } catch (const vk::SystemError &error) {
+        LOG_WARN("[SWAPCHAIN] rebuild ({}) failed: {}", rebuild_reason, error.what());
+        return false;
+    }
     const auto created = std::chrono::steady_clock::now();
     const auto ms = [](auto a, auto b) {
         return std::chrono::duration_cast<std::chrono::microseconds>(b - a).count() / 1000.0;
@@ -856,18 +813,46 @@ bool ScreenRenderer::rebuild_swapchain_if_visible() {
 }
 
 bool ScreenRenderer::surface_matches_window_size() {
-    // Ticket 28: the extent carries the scale, so comparing it to the window size
-    // directly would report a mismatch forever and rebuild the swapchain every
-    // frame. Compare against the extent the scale produces.
     auto *frame_host = static_cast<renderer::State &>(state).frame;
     if (frame_host->drawable_width() == 0 || frame_host->drawable_height() == 0)
         return true;
 
-    const vk::Extent2D expected = scaled_extent(vk::Extent2D{
-        static_cast<uint32_t>(frame_host->drawable_width()),
-        static_cast<uint32_t>(frame_host->drawable_height()) });
+    const vk::Extent2D window_size{ static_cast<uint32_t>(frame_host->drawable_width()), static_cast<uint32_t>(frame_host->drawable_height()) };
+    if (window_size == extent || window_size == confirmed_window_size)
+        return true;
 
-    return extent.width == expected.width && extent.height == expected.height;
+    // Qt's scaled window size can differ from the window's real size (fractional scaling on Linux)
+    // and the surface extent is the one the swapchain has to match
+    vk::Extent2D surface_extent{};
+    try {
+        surface_extent = state.physical_device.getSurfaceCapabilitiesKHR(surface).currentExtent;
+    } catch (const vk::SystemError &) {
+        return false;
+    }
+    if (surface_extent.width == std::numeric_limits<uint32_t>::max() || surface_extent != extent)
+        return false;
+#ifdef __ANDROID__
+    // a window of the other orientation is a rotation the swapchain has not followed (it's never a scaling difference)
+    if ((window_size.width > window_size.height) != (extent.width > extent.height))
+        return false;
+#endif
+
+    confirmed_window_size = window_size;
+    return true;
 }
+
+#ifdef __ANDROID__
+bool ScreenRenderer::android_surface_changed() {
+    if (--surface_check_countdown > 0)
+        return false;
+    surface_check_countdown = 15;
+
+    try {
+        return state.physical_device.getSurfaceCapabilitiesKHR(surface).currentExtent != swapchain_surface_extent;
+    } catch (const vk::SystemError &) {
+        return false;
+    }
+}
+#endif
 
 } // namespace renderer::vulkan

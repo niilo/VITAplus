@@ -198,7 +198,8 @@ class InstallForegroundService : Service() {
         val total = paths.size
         var successCount = 0
 
-        paths.forEachIndexed { index, path ->
+        val orderedPaths = NativeLib.archiveInstallOrder(paths.toTypedArray()).map { paths[it] }
+        orderedPaths.forEachIndexed { index, path ->
             val archiveName = File(path).name.ifBlank { path }
             val batchStatus = getString(
                 R.string.install_status_archive_batch,
@@ -278,7 +279,7 @@ class InstallForegroundService : Service() {
 
     private fun buildNotification(status: String) =
         NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_vita)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(getString(R.string.install_progress_title))
             .setContentText(status)
             .setOngoing(true)

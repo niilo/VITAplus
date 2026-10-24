@@ -53,6 +53,7 @@ struct EmulatorConfigFields {
     jfieldID anisotropicFiltering = nullptr;
     jfieldID asyncPipelineCompilation = nullptr;
     jfieldID accurateThreadScheduling = nullptr;
+    jfieldID guestCores = nullptr;
     jfieldID exportTextures = nullptr;
     jfieldID importTextures = nullptr;
     jfieldID exportAsPng = nullptr;
@@ -109,7 +110,6 @@ struct EmulatorConfigFields {
     jfieldID checkForUpdatesMode = nullptr;
     jfieldID archiveLog = nullptr;
     jfieldID logCompatWarn = nullptr;
-    jfieldID perfLog = nullptr;
     jfieldID logLevel = nullptr;
     jfieldID performanceOverlay = nullptr;
     jfieldID performanceOverlayDetail = nullptr;
@@ -140,6 +140,7 @@ EmulatorConfigFields resolve_config_fields(JNIEnv *env) {
     fields.anisotropicFiltering = env->GetFieldID(fields.cls, "anisotropicFiltering", "I");
     fields.asyncPipelineCompilation = env->GetFieldID(fields.cls, "asyncPipelineCompilation", "Z");
     fields.accurateThreadScheduling = env->GetFieldID(fields.cls, "accurateThreadScheduling", "Z");
+    fields.guestCores = env->GetFieldID(fields.cls, "guestCores", "I");
     fields.exportTextures = env->GetFieldID(fields.cls, "exportTextures", "Z");
     fields.importTextures = env->GetFieldID(fields.cls, "importTextures", "Z");
     fields.exportAsPng = env->GetFieldID(fields.cls, "exportAsPng", "Z");
@@ -196,7 +197,6 @@ EmulatorConfigFields resolve_config_fields(JNIEnv *env) {
     fields.checkForUpdatesMode = env->GetFieldID(fields.cls, "checkForUpdatesMode", "I");
     fields.archiveLog = env->GetFieldID(fields.cls, "archiveLog", "Z");
     fields.logCompatWarn = env->GetFieldID(fields.cls, "logCompatWarn", "Z");
-    fields.perfLog = env->GetFieldID(fields.cls, "perfLog", "Z");
     fields.logLevel = env->GetFieldID(fields.cls, "logLevel", "I");
     fields.performanceOverlay = env->GetFieldID(fields.cls, "performanceOverlay", "Z");
     fields.performanceOverlayDetail = env->GetFieldID(fields.cls, "performanceOverlayDetail", "I");
@@ -322,6 +322,7 @@ void fill_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     env->SetIntField(obj, fields.anisotropicFiltering, static_cast<jint>(current_config.anisotropic_filtering));
     env->SetBooleanField(obj, fields.asyncPipelineCompilation, current_config.async_pipeline_compilation);
     env->SetBooleanField(obj, fields.accurateThreadScheduling, current_config.accurate_thread_scheduling);
+    env->SetIntField(obj, fields.guestCores, static_cast<jint>(current_config.guest_cores));
     env->SetBooleanField(obj, fields.exportTextures, current_config.export_textures);
     env->SetBooleanField(obj, fields.importTextures, current_config.import_textures);
     env->SetBooleanField(obj, fields.exportAsPng, current_config.export_as_png);
@@ -411,7 +412,6 @@ void fill_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     env->SetIntField(obj, fields.checkForUpdatesMode, static_cast<jint>(config.check_for_updates_mode));
     env->SetBooleanField(obj, fields.archiveLog, config.archive_log);
     env->SetBooleanField(obj, fields.logCompatWarn, config.log_compat_warn);
-    env->SetBooleanField(obj, fields.perfLog, config.perf_log);
     env->SetIntField(obj, fields.logLevel, static_cast<jint>(config.log_level));
     env->SetBooleanField(obj, fields.performanceOverlay, config.performance_overlay);
     env->SetIntField(obj, fields.performanceOverlayDetail, static_cast<jint>(config.performance_overlay_detail));
@@ -466,6 +466,7 @@ void read_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     current_config.anisotropic_filtering = static_cast<int>(env->GetIntField(obj, fields.anisotropicFiltering));
     current_config.async_pipeline_compilation = env->GetBooleanField(obj, fields.asyncPipelineCompilation) != JNI_FALSE;
     current_config.accurate_thread_scheduling = env->GetBooleanField(obj, fields.accurateThreadScheduling) != JNI_FALSE;
+    current_config.guest_cores = static_cast<int>(env->GetIntField(obj, fields.guestCores));
     current_config.export_textures = env->GetBooleanField(obj, fields.exportTextures) != JNI_FALSE;
     current_config.import_textures = env->GetBooleanField(obj, fields.importTextures) != JNI_FALSE;
     current_config.export_as_png = env->GetBooleanField(obj, fields.exportAsPng) != JNI_FALSE;
@@ -563,7 +564,6 @@ void read_config_object(JNIEnv *env, jobject obj, const EmulatorConfigFields &fi
     config.check_for_updates = config.check_for_updates_mode != static_cast<int>(UPDATE_STARTUP_OFF);
     config.archive_log = env->GetBooleanField(obj, fields.archiveLog) != JNI_FALSE;
     config.log_compat_warn = env->GetBooleanField(obj, fields.logCompatWarn) != JNI_FALSE;
-    config.perf_log = env->GetBooleanField(obj, fields.perfLog) != JNI_FALSE;
     config.log_level = static_cast<int>(env->GetIntField(obj, fields.logLevel));
     config.performance_overlay = env->GetBooleanField(obj, fields.performanceOverlay) != JNI_FALSE;
     config.performance_overlay_detail = static_cast<int>(env->GetIntField(obj, fields.performanceOverlayDetail));

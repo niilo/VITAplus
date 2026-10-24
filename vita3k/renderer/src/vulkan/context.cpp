@@ -27,28 +27,29 @@
 
 #include <util/log.h>
 #include <util/overloaded.h>
-#include <util/perf_log.h>
-#include <util/thread_priority.h>
-
-#include <fmt/format.h>
-
-#ifdef __ANDROID__
-#include <unistd.h>
-#endif
 
 #include <algorithm>
-#include <atomic>
+#include <cmath>
 
 namespace renderer::vulkan {
 
-void VKContext::wait_thread_function(const MemState &mem) {
-    util::set_thread_name("vita3k-gpuwait");
-    util::set_thread_nice(state.gpu_wait_thread_nice);
-#ifdef __ANDROID__
-    // Ticket 13: the ADPF hint names this thread, so it needs its id.
-    state.gpu_wait_thread_id.store(static_cast<int>(::gettid()), std::memory_order_relaxed);
-#endif
+static constexpr bool restart_macroblock_pass_only_before_reads = true;
+static constexpr bool slow_path_ignores_macroblock_moves = true;
+static constexpr bool skip_read_restart_when_reads_use_copies = true;
 
+void VKState::start_gpu_request_wait_thread(const MemState &mem) {
+    if (!gpu_request_wait_thread.joinable())
+        gpu_request_wait_thread = std::thread(&VKState::wait_thread_function, this, std::cref(mem));
+}
+
+void VKState::stop_gpu_request_wait_thread() {
+    request_queue.abort();
+    if (gpu_request_wait_thread.joinable())
+        gpu_request_wait_thread.join();
+}
+
+void VKState::wait_thread_function(const MemState &mem) {
+    VKState &state = *this;
     // try to wait for multiple fences at the same time if possible
     std::vector<vk::Fence> fences;
 
@@ -61,11 +62,23 @@ void VKContext::wait_thread_function(const MemState &mem) {
 
     uint64_t pending_max_serial = 0;
 
+    bool device_lost = false;
     auto wait_for_fences = [&]() {
         const auto t0 = std::chrono::steady_clock::now();
         while (!fences.empty()) {
+            if (device_lost) {
+                fences.clear();
+                break;
+            }
             // timeout so we can check for shutdown
-            auto result = state.device.waitForFences(fences, VK_TRUE, 100'000'000ULL);
+            vk::Result result;
+            try {
+                result = state.device.waitForFences(fences, VK_TRUE, 100'000'000ULL);
+            } catch (const vk::SystemError &error) {
+                LOG_CRITICAL("Vulkan device lost while waiting for GPU work: {}", error.what());
+                device_lost = true;
+                continue;
+            }
             if (result == vk::Result::eSuccess) {
                 // don't reset them
                 fences.clear();
@@ -117,6 +130,7 @@ void VKContext::wait_thread_function(const MemState &mem) {
                                // unlocking before a notify should be faster
                                lock.unlock();
                                state.notification_ready.notify_all();
+                               renderer::note_gpu_event();
                            }
                        },
                        [&](FrameDoneRequest &request) {
@@ -125,10 +139,10 @@ void VKContext::wait_thread_function(const MemState &mem) {
 
                            // don't reset them, the reset will be done in the new_frame function
                            // and these fences can still be waited for during texture uploading
-                           std::unique_lock<std::mutex> lock(new_frame_mutex);
-                           last_frame_waited = request.frame_timestamp;
+                           std::unique_lock<std::mutex> lock(request.context->new_frame_mutex);
+                           request.context->last_frame_waited = request.frame_timestamp;
                            lock.unlock();
-                           new_frame_condv.notify_one();
+                           request.context->new_frame_condv.notify_one();
                        },
                        [&](BufferSyncRequest &request) {
                            stat_buffer_syncs++;
@@ -159,7 +173,7 @@ void VKContext::wait_thread_function(const MemState &mem) {
                            wait_for_fences();
                            const std::shared_lock<std::shared_mutex> transition_lock(mem.external_transition_mutex);
                            renderer::vulkan::surface_sync_internal_write = true;
-                           state.surface_cache.perform_post_surface_sync(mem, request.cache_info);
+                           state.surface_cache.perform_post_surface_sync(mem, request);
                            renderer::vulkan::surface_sync_internal_write = false;
                            stat_post_us += elapsed_us(post_t0);
                        },
@@ -196,6 +210,13 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
     context.draw_rect_y0 = INT32_MAX;
     context.draw_rect_x1 = 0;
     context.draw_rect_y1 = 0;
+
+    context.half_pixel_fill_cols = 0;
+    context.half_pixel_fill_rows = 0;
+    context.half_pixel_col_y0 = INT32_MAX;
+    context.half_pixel_col_y1 = 0;
+    context.half_pixel_row_x0 = INT32_MAX;
+    context.half_pixel_row_x1 = 0;
 
     context.render_target = rt;
     context.scene_timestamp++;
@@ -317,6 +338,7 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
     context.current_fb_width = framebuffer.width;
     context.current_fb_height = framebuffer.height;
     context.current_color_raw_view = framebuffer.raw_image ? framebuffer.raw_image->view : state.default_raw_image.view;
+    context.current_color_raw_image = framebuffer.raw_image;
 
     // make sure we are not keeping any texture from the previous pass
     // (textures can be still bound even though they are not used)
@@ -338,11 +360,6 @@ void VKContext::start_recording(bool first_in_scene) {
         LOG_ERROR("Attempt to start recording while already recording");
         return;
     }
-
-    // A scene that the guest splits starts a new recording, so the perf-log
-    // draw count and start time belong to this recording, not to the scene.
-    scene_draw_calls = 0;
-    scene_start_us = perf_log::enabled() ? perf_log::now_us() : 0;
 
     if (render_target == nullptr) {
         LOG_ERROR("Recording started without a set command buffer");
@@ -384,6 +401,7 @@ void VKContext::start_recording(bool first_in_scene) {
         render_target->fence_idx = (render_target->fence_idx + 1) % render_target->fences.size();
     }
 
+    recording_serial++;
     render_cmd = render_target->cmd_buffers[state.current_frame_idx][render_target->cmd_buffer_idx];
     prerender_cmd = render_target->pre_cmd_buffers[state.current_frame_idx][render_target->cmd_buffer_idx];
     render_target->cmd_buffer_idx++;
@@ -401,6 +419,7 @@ void VKContext::start_recording(bool first_in_scene) {
     render_cmd.setScissor(0, scissor);
     sync_depth_bias(*this);
     sync_point_line_width(*this, true);
+    stencil_compare_mask_zeroed = false;
     sync_stencil_func(*this, false);
     if (record.two_sided == SCE_GXM_TWO_SIDED_ENABLED) {
         sync_stencil_func(*this, true);
@@ -416,15 +435,14 @@ static vk::DescriptorSet retrieve_color_descriptor(VKState &state, FrameDescript
 
     // we have no more frame descriptor available, create a bunch of new one for this specific layout
     // the type depends on the way we read it; each set holds the color attachment (binding 0)
-    uint32_t storage_images_per_set = state.features.support_shader_interlock ? 1 : 0;
+    const uint32_t attachment_images_per_set = state.features.preserve_f16_nan_as_u16 ? 2 : 1;
+    uint32_t storage_images_per_set = state.features.support_shader_interlock ? attachment_images_per_set : 0;
     if (state.features.use_mask_bit)
-        storage_images_per_set++;
-    if (state.features.preserve_f16_nan_as_u16)
         storage_images_per_set++;
 
     std::vector<vk::DescriptorPoolSize> pool_sizes;
     if (!state.features.support_shader_interlock)
-        pool_sizes.push_back({ vk::DescriptorType::eInputAttachment, DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
+        pool_sizes.push_back({ vk::DescriptorType::eInputAttachment, attachment_images_per_set * DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
     if (storage_images_per_set > 0)
         pool_sizes.push_back({ vk::DescriptorType::eStorageImage, storage_images_per_set * DESCRIPTOR_PACK_SIZE * MAX_FRAMES_RENDERING });
 
@@ -553,7 +571,7 @@ void VKContext::start_render_pass(bool create_descriptor_set) {
             .dstSet = rendertarget_set,
             .dstBinding = 2,
             .dstArrayElement = 0,
-            .descriptorType = vk::DescriptorType::eStorageImage,
+            .descriptorType = input_type,
         };
         write_raw_descr.setImageInfo(descr_raw_info);
         std::array<vk::WriteDescriptorSet, 2> writes = { write_descr, write_raw_descr };
@@ -578,6 +596,8 @@ void VKContext::stop_render_pass() {
     render_cmd.endRenderPass();
 
     in_renderpass = false;
+
+    fill_half_pixel_strips();
 }
 
 void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNotification &notif2, bool submit) {
@@ -622,10 +642,7 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
                 sizeof(uint32_t), vk::QueryResultFlagBits::eWait);
         }
         visibility_max_used_idx = -1;
-        // Keep the +1 element that sync_state.cpp:241 allocated. The loop above
-        // reads entry == visibility_max_used_idx + 1, which is one past the last
-        // real query, and assigning size would make that read out of bounds.
-        current_visibility_buffer->queries_used.assign(current_visibility_buffer->size + 1, false);
+        current_visibility_buffer->queries_used.assign(current_visibility_buffer->size, false);
     }
 
     // remember which part of the colour surface this scene's draws could have touched (for write-back bounds)
@@ -648,12 +665,6 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     if (!submit)
         return;
 
-    if (render_target->multisample_mode && !record.color_surface.downscale) {
-        // revert changes made in set_context
-        render_target->width /= 2;
-        render_target->height /= 2;
-    }
-
     vk::Fence fence = next_fence;
     next_fence = nullptr;
 
@@ -665,17 +676,12 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     state.frame().rendered_fences.push_back(fence);
     state.submit_serial++; // seq-248
 
-    // One row per submit, not per GXM scene: a scene that the guest splits,
-    // through a mid-scene flush or a macroblock change, submits more than
-    // once. The draw count is the draws of this submit, because
-    // start_recording() resets it. The time is host time from the start of the
-    // recording to the submit, so it does not say how long the GPU was busy. A
-    // GPU timestamp needs a timestamp query pool and a readback of it.
-    if (perf_log::enabled()) {
-        const int64_t record_us = perf_log::now_us() - scene_start_us;
-        perf_log::write("scenes", "steady_us,draws,record_us",
-            fmt::format("{},{},{}", scene_start_us, scene_draw_calls, record_us));
-    }
+    // the vertex ring data of this submission stays untouched until its fence has signalled
+    if (fence && vertex_stream_ring_buffer.handle() && (vertex_ring_marks.empty() || vertex_ring_marks.back().end != vertex_stream_ring_buffer.position()))
+        vertex_ring_marks.push_back({ vertex_stream_ring_buffer.position(), fence, frame_timestamp });
+    for (vkutil::Buffer &old_ring : vertex_ring_retired)
+        state.frame().destroy_queue.add_buffer(old_ring);
+    vertex_ring_retired.clear();
 
     if (state.features.enable_memory_mapping) {
         // send it to the wait queue
@@ -689,8 +695,16 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
 
             // we must sync the two buffers
             if (surface_info && surface_info->need_buffer_sync) {
-                if (render_target->has_macroblock_sync && state.res_multiplier != 1.0f
-                    && rendered_rect_x1 > rendered_rect_x0 && rendered_rect_y1 > rendered_rect_y0) {
+                if (surface_info->partial_write_back) {
+                    // only the rows of the rect the GPU copied are fresh in the mirror the rest of it may be older than guest memory
+                    const uint32_t bpp = gxm::bits_per_pixel(surface_info->format) / 8;
+                    const uint32_t row_stride_bytes = surface_info->stride_bytes;
+                    const Address rect_start = surface_info->data.address() + static_cast<uint32_t>(surface_info->post_sync_y0) * row_stride_bytes + static_cast<uint32_t>(surface_info->post_sync_x0) * bpp;
+                    const uint32_t rect_row_bytes = surface_info->post_sync_width * bpp;
+                    const uint32_t rect_row_count = surface_info->post_sync_height;
+                    if (rect_row_count > 0 && rect_row_bytes > 0)
+                        state.request_queue.push(BufferSyncRequest{ rect_start, (rect_row_count - 1) * row_stride_bytes + rect_row_bytes, row_stride_bytes, rect_row_bytes, rect_row_count });
+                } else if (render_target->has_macroblock_sync && state.res_multiplier != 1.0f && rendered_rect_x1 > rendered_rect_x0 && rendered_rect_y1 > rendered_rect_y0) {
                     const uint32_t bpp = gxm::bits_per_pixel(surface_info->format) / 8;
                     const uint32_t row_stride_bytes = surface_info->stride_bytes;
                     const int32_t nx0 = static_cast<int32_t>(rendered_rect_x0 / state.res_multiplier);
@@ -700,12 +714,8 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
                     const Address rect_start = surface_info->data.address() + ny0 * row_stride_bytes + nx0 * bpp;
                     const uint32_t rect_row_bytes = static_cast<uint32_t>(nx1 - nx0) * bpp;
                     const uint32_t rect_row_count = static_cast<uint32_t>(ny1 - ny0);
-                    state.request_queue.push(BufferSyncRequest{
-                        rect_start,
-                        static_cast<uint32_t>(surface_info->total_bytes),
-                        row_stride_bytes,
-                        rect_row_bytes,
-                        rect_row_count });
+                    if (rect_row_count > 0 && rect_row_bytes > 0)
+                        state.request_queue.push(BufferSyncRequest{ rect_start, (rect_row_count - 1) * row_stride_bytes + rect_row_bytes, row_stride_bytes, rect_row_bytes, rect_row_count });
                 } else {
                     state.request_queue.push(BufferSyncRequest{ surface_info->data.address(), static_cast<uint32_t>(surface_info->total_bytes) });
                 }
@@ -716,7 +726,7 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
         const bool post_sync_after_notifications = surface_info && surface_info->need_post_surface_sync && (surface_info->format == SCE_GXM_COLOR_BASE_FORMAT_U2F10F10F10 || surface_info->format == SCE_GXM_COLOR_BASE_FORMAT_SE5M9M9M9);
 
         if (surface_info && surface_info->need_post_surface_sync && !post_sync_after_notifications) {
-            state.request_queue.push(PostSurfaceSyncRequest{ surface_info });
+            state.request_queue.push(PostSurfaceSyncRequest{ *surface_info });
         }
 
         if (notif1.address || notif2.address) {
@@ -727,20 +737,204 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
         }
 
         if (post_sync_after_notifications) {
-            state.request_queue.push(PostSurfaceSyncRequest{ surface_info });
+            state.request_queue.push(PostSurfaceSyncRequest{ *surface_info });
         }
     }
 }
 
-void VKContext::check_for_macroblock_change(bool is_draw) {
+void VKContext::vertex_ring_make_room(const uint32_t size) {
+    vkutil::HostRingBuffer &ring = vertex_stream_ring_buffer;
+    if (ring.position_after(size) - vertex_ring_free <= ring.get_capacity())
+        return;
+
+    // what the scene being recorded has put in the ring cannot be waited for
+    uint64_t unsubmitted_start = 0;
+    try {
+        while (!vertex_ring_marks.empty() && state.device.getFenceStatus(vertex_ring_marks.front().fence) == vk::Result::eSuccess) {
+            vertex_ring_free = vertex_ring_marks.front().end;
+            vertex_ring_marks.pop_front();
+        }
+
+        unsubmitted_start = vertex_ring_marks.empty() ? vertex_ring_free : vertex_ring_marks.back().end;
+        if (ring.position_after(size) - unsubmitted_start <= ring.get_capacity()) {
+            while (!vertex_ring_marks.empty() && ring.position_after(size) - vertex_ring_free > ring.get_capacity()) {
+                const VertexRingMark mark = vertex_ring_marks.front();
+                if (state.device.waitForFences(mark.fence, VK_TRUE, 5'000'000'000ULL) != vk::Result::eSuccess) {
+                    // better to risk overwriting a copy than to hang the renderer
+                    LOG_ERROR("The fence of frame {} did not signal within 5 s, the scenes in flight are no longer protected in the vertex ring", mark.frame);
+                    vertex_ring_marks.clear();
+                    vertex_ring_free = unsubmitted_start;
+                    return;
+                }
+                vertex_ring_free = mark.end;
+                vertex_ring_marks.pop_front();
+            }
+            return;
+        }
+    } catch (const vk::SystemError &error) {
+        LOG_ERROR("Could not wait for the GPU to free the vertex ring: {}", error.what());
+        vertex_ring_marks.clear();
+        vertex_ring_free = ring.position();
+        return;
+    }
+
+    // the scene being recorded needs more than the whole ring so it goes on in a larger one
+    constexpr uint64_t max_capacity = 512ull * 1024 * 1024;
+    const uint64_t needed = ring.position_after(size) - unsubmitted_start;
+    const uint64_t old_capacity = ring.get_capacity();
+    uint64_t new_capacity = old_capacity;
+    while (new_capacity < 2 * needed && new_capacity < max_capacity)
+        new_capacity *= 2;
+
+    vkutil::Buffer old_ring;
+    if (new_capacity == old_capacity || !ring.grow(new_capacity, old_ring)) {
+        LOG_ERROR("The scene being recorded needs {} B of the {} B vertex ring and it could not grow to {} B, its earlier copies can be overwritten", needed, old_capacity, new_capacity);
+        vertex_ring_marks.clear();
+        vertex_ring_free = ring.position();
+        return;
+    }
+
+    vertex_ring_retired.push_back(std::move(old_ring));
+    vertex_ring_marks.clear();
+    vertex_ring_free = 0;
+    LOG_WARN("The scene being recorded needs {} B of the {} B vertex ring, it goes on in a {} B ring", needed, old_capacity, new_capacity);
+}
+
+static bool is_raw_word_format(const SceGxmColorBaseFormat format) {
+    return format == SCE_GXM_COLOR_BASE_FORMAT_F32 || format == SCE_GXM_COLOR_BASE_FORMAT_F32F32;
+}
+
+void VKContext::note_half_pixel_origin(const int32_t x0, const int32_t y0, const int32_t x1, const int32_t y1) {
+    const float scale = state.res_multiplier * surface_downscale;
+    if (std::abs(scale - 1.0f) < 1e-4f || !render_target || render_target->multisample_mode != SCE_GXM_MULTISAMPLE_NONE)
+        return;
+
+    const bool raw_words = is_raw_word_format(record.color_base_format);
+    const auto lines_to_fill = [&](const float edge, const int32_t scissor_start) -> uint32_t {
+        const float native_edge = edge / scale;
+        const float native_pixel = std::floor(native_edge + 1e-4f);
+        const float fraction = native_edge - native_pixel;
+        if (std::abs(fraction) < 1e-3f || native_pixel != 0.0f || fraction > 0.5f + 1e-3f || scissor_start > 0)
+            return 0;
+        const int32_t first = static_cast<int32_t>(std::floor(edge - 0.5f + 1e-4f)) + 1;
+        // up to 1.5x that line belongs to the next native pixel (fine for an image wrong for raw words)
+        if (first <= 0 || (raw_words && (static_cast<float>(first) + 0.5f) / scale >= 1.0f - 1e-4f))
+            return 0;
+        return static_cast<uint32_t>(first);
+    };
+
+    const uint32_t cols = lines_to_fill(std::min(viewport.x, viewport.x + viewport.width), scissor.offset.x);
+    const uint32_t rows = lines_to_fill(std::min(viewport.y, viewport.y + viewport.height), scissor.offset.y);
+    if (cols != 0 && static_cast<int32_t>(cols) < x1) {
+        half_pixel_fill_cols = std::max(half_pixel_fill_cols, cols);
+        half_pixel_col_y0 = std::min(half_pixel_col_y0, y0);
+        half_pixel_col_y1 = std::max(half_pixel_col_y1, y1);
+    }
+    if (rows != 0 && static_cast<int32_t>(rows) < y1) {
+        half_pixel_fill_rows = std::max(half_pixel_fill_rows, rows);
+        half_pixel_row_x0 = std::min(half_pixel_row_x0, x0);
+        half_pixel_row_x1 = std::max(half_pixel_row_x1, x1);
+    }
+}
+
+void VKContext::fill_half_pixel_strips() {
+    const uint32_t cols = half_pixel_fill_cols, rows = half_pixel_fill_rows;
+    int32_t col_y0 = half_pixel_col_y0, col_y1 = half_pixel_col_y1;
+    int32_t row_x0 = half_pixel_row_x0, row_x1 = half_pixel_row_x1;
+    half_pixel_fill_cols = 0;
+    half_pixel_fill_rows = 0;
+    half_pixel_col_y0 = INT32_MAX;
+    half_pixel_col_y1 = 0;
+    half_pixel_row_x0 = INT32_MAX;
+    half_pixel_row_x1 = 0;
+
+    vkutil::Image *const color = current_color_base_image;
+    if ((cols == 0 && rows == 0) || in_renderpass || !render_cmd || record.color_surface.data.address() == 0 || !color || !color->image)
+        return;
+
+    vkutil::Image *const raw = (current_color_raw_image && current_color_raw_image->image) ? current_color_raw_image : nullptr;
+    const std::array<vk::Image, 2> images = { color->image, raw ? raw->image : vk::Image() };
+    const uint32_t image_count = raw ? 2 : 1;
+    const int32_t width = static_cast<int32_t>(raw ? std::min(color->width, raw->width) : color->width);
+    const int32_t height = static_cast<int32_t>(raw ? std::min(color->height, raw->height) : color->height);
+
+    col_y0 = std::max(col_y0, 0);
+    col_y1 = std::min(col_y1, height);
+    const bool fill_cols = cols != 0 && static_cast<int32_t>(cols) < width && col_y1 > col_y0;
+    // the rows span the filled columns too so the corner is filled
+    row_x0 = fill_cols ? 0 : std::max(row_x0, 0);
+    row_x1 = std::min(row_x1, width);
+    const bool fill_rows = rows != 0 && static_cast<int32_t>(rows) < height && row_x1 > row_x0;
+    if (!fill_cols && !fill_rows)
+        return;
+
+    const auto barrier = [&](const vk::PipelineStageFlags src_stage, const vk::AccessFlags src_access, const vk::PipelineStageFlags dst_stage, const vk::AccessFlags dst_access) {
+        std::array<vk::ImageMemoryBarrier, 2> barriers;
+        for (uint32_t i = 0; i < image_count; i++)
+            barriers[i] = vk::ImageMemoryBarrier{
+                .srcAccessMask = src_access,
+                .dstAccessMask = dst_access,
+                .oldLayout = vk::ImageLayout::eGeneral,
+                .newLayout = vk::ImageLayout::eGeneral,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = images[i],
+                .subresourceRange = vkutil::color_subresource_range
+            };
+        render_cmd.pipelineBarrier(src_stage, dst_stage, {}, {}, {}, vk::ArrayProxy<const vk::ImageMemoryBarrier>(image_count, barriers.data()));
+    };
+    const auto copy_lines = [&](const std::vector<vk::ImageCopy> &regions) {
+        for (uint32_t i = 0; i < image_count; i++)
+            render_cmd.copyImage(images[i], vk::ImageLayout::eGeneral, images[i], vk::ImageLayout::eGeneral, regions);
+    };
+
+    barrier(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eFragmentShader,
+        vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderWrite,
+        vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite);
+
+    std::vector<vk::ImageCopy> regions;
+    if (fill_cols) {
+        for (uint32_t c = 0; c < cols; c++)
+            regions.push_back(vk::ImageCopy{
+                .srcSubresource = vkutil::color_subresource_layer,
+                .srcOffset = { static_cast<int32_t>(cols), col_y0, 0 },
+                .dstSubresource = vkutil::color_subresource_layer,
+                .dstOffset = { static_cast<int32_t>(c), col_y0, 0 },
+                .extent = { 1, static_cast<uint32_t>(col_y1 - col_y0), 1 } });
+        copy_lines(regions);
+    }
+    if (fill_rows) {
+        if (fill_cols)
+            barrier(vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite,
+                vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite);
+        regions.clear();
+        for (uint32_t r = 0; r < rows; r++)
+            regions.push_back(vk::ImageCopy{
+                .srcSubresource = vkutil::color_subresource_layer,
+                .srcOffset = { row_x0, static_cast<int32_t>(rows), 0 },
+                .dstSubresource = vkutil::color_subresource_layer,
+                .dstOffset = { row_x0, static_cast<int32_t>(r), 0 },
+                .extent = { static_cast<uint32_t>(row_x1 - row_x0), 1, 1 } });
+        copy_lines(regions);
+    }
+
+    barrier(vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite,
+        vk::PipelineStageFlagBits::eAllCommands,
+        vk::AccessFlagBits::eColorAttachmentRead | vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite
+            | vk::AccessFlagBits::eInputAttachmentRead | vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite);
+}
+
+void VKContext::check_for_macroblock_change(bool is_draw, bool draw_reads_target) {
     if (!render_target->has_macroblock_sync)
         return;
 
+    bool entering_slow_path = false;
     if (!ignore_macroblock && (scissor.extent.width > render_target->macroblock_width || scissor.extent.height > render_target->macroblock_height)) {
         // flower does not specify a scissor adapted to the current macroblock
-        // so fallback to the slow path (one scene per draw, can't really do better)
+        // so fallback to the slow path (whole-target render passes, restarted before a draw that reads the target)
         // TODO: with the feedback loop extension we can do better
         ignore_macroblock = true;
+        entering_slow_path = true;
         // in this case we must load and store the depth stencil each time
         current_render_pass = state.pipeline_cache.retrieve_render_pass(current_color_format, true, true, true, !record.color_surface.data, false, record.color_base_format == SCE_GXM_COLOR_BASE_FORMAT_F16F16F16F16);
     }
@@ -749,7 +943,16 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
     uint16_t curr_macroblock_x = scissor.offset.x / render_target->macroblock_width;
     uint16_t curr_macroblock_y = scissor.offset.y / render_target->macroblock_height;
 
-    if ((ignore_macroblock && is_draw) || curr_macroblock_x != last_macroblock_x || curr_macroblock_y != last_macroblock_y) {
+    const bool macroblock_moved = curr_macroblock_x != last_macroblock_x || curr_macroblock_y != last_macroblock_y;
+    // a draw that does not read the render target can stay in the render pass
+    const bool restart_for_draw = ignore_macroblock && is_draw && (!restart_macroblock_pass_only_before_reads || draw_reads_target);
+    const bool restart_for_move = macroblock_moved && !(ignore_macroblock && slow_path_ignores_macroblock_moves);
+    if (macroblock_moved && !restart_for_move) {
+        last_macroblock_x = curr_macroblock_x;
+        last_macroblock_y = curr_macroblock_y;
+    }
+    // entering the slow path restarts an open pass: it was begun for one macroblock and its render area covers only that
+    if (restart_for_draw || restart_for_move || entering_slow_path) {
         // we changed the current macroblock, restart the renderpass
         last_macroblock_x = curr_macroblock_x;
         last_macroblock_y = curr_macroblock_y;
@@ -771,9 +974,36 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
     }
 }
 
+void VKContext::find_render_target_reads(bool &reads_color, bool &reads_depth) const {
+    reads_color = false;
+    reads_depth = false;
+    const uint32_t color_begin = record.color_surface.data.address();
+    const uint32_t color_end = color_begin
+        + static_cast<uint32_t>(record.color_surface.strideInPixels * record.color_surface.height * gxm::bits_per_pixel(record.color_base_format) / 8);
+    const uint32_t depth_begin = record.depth_stencil_surface.depth_data.address();
+    const uint32_t depth_end = depth_begin + record.color_surface.strideInPixels * record.color_surface.height * 4;
+    const auto check_units = [&](const uint32_t first, const uint32_t count) {
+        for (uint32_t unit = first; unit < first + count && unit < texture_unit_ranges.size(); unit++) {
+            const TextureUnitRange &range = texture_unit_ranges[unit];
+            if (range.begin == 0)
+                continue;
+            if (color_begin && range.begin < color_end && color_begin < range.end)
+                reads_color = true;
+            if (depth_begin && range.begin < depth_end && depth_begin < range.end)
+                reads_depth = true;
+        }
+    };
+    check_units(0, record.fragment_program_binding->fragment_program->texture_count);
+    check_units(SCE_GXM_MAX_TEXTURE_UNITS, record.vertex_program_binding->vertex_program->texture_count);
+}
+
+bool VKContext::read_needs_restart(const bool reads_color, const bool reads_depth) const {
+    return reads_depth || (reads_color && !(skip_read_restart_when_reads_use_copies && !state.features.use_texture_viewport));
+}
+
 void new_frame(VKContext &context) {
     if (context.state.features.enable_memory_mapping) {
-        FrameDoneRequest request = { context.frame_timestamp };
+        FrameDoneRequest request = { context.frame_timestamp, &context };
         context.state.request_queue.push(request);
 
         context.state.surface_cache.clear_surfaces_changed();
@@ -806,6 +1036,12 @@ void new_frame(VKContext &context) {
                 assert(false);
                 return;
             }
+        }
+
+        // the frame waited for above is done with its part of the vertex ring and its fences are about to be reset
+        while (!context.vertex_ring_marks.empty() && context.vertex_ring_marks.front().frame + MAX_FRAMES_RENDERING <= context.frame_timestamp) {
+            context.vertex_ring_free = context.vertex_ring_marks.front().end;
+            context.vertex_ring_marks.pop_front();
         }
 
         // reset the fences in both case (the wait thread does not do that as they can still be used)

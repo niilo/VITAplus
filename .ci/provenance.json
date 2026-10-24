@@ -1,0 +1,9 @@
+{
+  "upstream_repository": "nckstwrt/Vita3K-Plus",
+  "upstream_branch": "all-enhancements",
+  "upstream_commit": "a86b5f93db43e4c4640ad1527e2a4695aad0f35b",
+  "tested_candidate_commit": "c48f8b20ce61958fa091489e68836c782a85bdaa",
+  "previous_master_commit": "09f207d31196c20c238183a01420207ea1c640a2",
+  "previous_master_archive": "archive/master-before-plus-promotion-20261024",
+  "device_confirmation_date": "2026-10-24"
+}

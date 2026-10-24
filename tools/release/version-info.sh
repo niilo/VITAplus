@@ -69,6 +69,23 @@ if [[ -n "$release_tag" ]] && [[ "$commits_since" -eq 0 ]]; then
     is_release=1
 fi
 
+# A new code base can contain more commits than the previous version's numeric
+# field allows. The declared next version keeps pre-tag builds above the tested
+# VITAdev APK. Once that tag exists, normal development commit counts resume.
+if [[ -f .ci/version-base.txt ]]; then
+    declared_version="$(cat .ci/version-base.txt)"
+    if [[ ! "$declared_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "Invalid .ci/version-base.txt; expected major.minor.patch" >&2
+        exit 1
+    fi
+    newest="$(printf '%s\n' "${release_tag#v}" "$declared_version" | sort_versions | tail -n 1)"
+    if [[ "$newest" == "$declared_version" && "$release_tag" != "v$declared_version" ]]; then
+        release_tag="v$declared_version"
+        commits_since=0
+        is_release=0
+    fi
+fi
+
 base_version="${release_tag#v}"
 if [[ -z "$base_version" ]]; then
     base_version="0.0"
@@ -85,6 +102,13 @@ if [[ "$is_release" -eq 1 ]]; then
 else
     version="${release_tag:-v0.0}-dev.${commits_since}"
     ver_build="${commits_since}"
+    # Pre-release tags retain their own name without becoming a stable version.
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        prerelease="$(git tag --points-at HEAD --list "v${base_version}-*" | sort_versions | tail -n 1)"
+        if [[ "$prerelease" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+            version="$prerelease"
+        fi
+    fi
 fi
 
 # Respect SOURCE_DATE_EPOCH so a reproducible build keeps one version id.

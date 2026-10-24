@@ -85,17 +85,17 @@ fastlane/readme.md
 # Copilot local config
 .github/copilot-instructions.md
 
-# local test output (logs, CSV, screenshots)
-/tmp/
-
-# Python bytecode from the tools/android tests
-__pycache__/
-*.pyc
-
-# Signing keys must never be committed. They live in 1Password and in GitHub secrets.
+# Project signing and build outputs
+.signing/
+.vita-plus-signing/
 *.jks
 *.p12
+*.pfx
 *.keystore
-.vita-plus-signing/
-# Local signing keys of the project (dev key and release key). See docs/release.md.
-.signing/
+__pycache__/
+*.pyc
+/android/app/.cxx/
+/android/app/assets/data/
+/android/app/assets/shaders-builtin/
+/android/app/assets/icons/
+/vita3k/util/include/util/fork_build.h

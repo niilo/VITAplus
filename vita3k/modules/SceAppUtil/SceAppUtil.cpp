@@ -36,6 +36,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <cstring>
 
 TRACY_MODULE_NAME(SceAppUtil);
@@ -162,8 +163,13 @@ EXPORT(int, sceAppUtilBgdlGetStatus) {
 }
 
 static bool is_addcont_exist(EmuEnvState &emuenv, const SceChar8 *path) {
-    const auto drm_content_id_path{ emuenv.vita_fs_path / "ux0" / emuenv.io.device_paths.addcont0 / reinterpret_cast<const char *>(path) };
-    return (fs::exists(drm_content_id_path) && (!fs::is_empty(drm_content_id_path)));
+    const SceChar8 *const end = std::find(path, path + SCE_APPUTIL_NP_DRM_ADDCONT_ID_SIZE, '\0');
+    const std::string dir_name(reinterpret_cast<const char *>(path), reinterpret_cast<const char *>(end));
+    if (dir_name.empty())
+        return false;
+    const auto drm_content_id_path{ emuenv.vita_fs_path / "ux0" / emuenv.io.device_paths.addcont0 / dir_name };
+    boost::system::error_code ec;
+    return fs::exists(drm_content_id_path, ec) && !fs::is_empty(drm_content_id_path, ec) && !ec;
 }
 
 EXPORT(SceInt32, sceAppUtilDrmClose, const SceAppUtilDrmAddcontId *dirName, const SceAppUtilMountPoint *mountPoint) {
@@ -248,15 +254,23 @@ std::string construct_slotparam_path(const unsigned int data) {
 
 EXPORT(int, sceAppUtilSaveDataDataRemove, SceAppUtilSaveDataFileSlot *slot, SceAppUtilSaveDataRemoveItem *files, unsigned int fileNum, SceAppUtilMountPoint *mountPoint) {
     TRACY_FUNC(sceAppUtilSaveDataDataRemove, slot, files, fileNum, mountPoint);
+    if (!files && fileNum)
+        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);
+
     for (unsigned int i = 0; i < fileNum; i++) {
-        const auto file = fs::path(construct_savedata0_path(files[i].dataPath.get(emuenv.mem)));
+        const char *const data_path = files[i].dataPath.get(emuenv.mem);
+        if (!data_path) {
+            LOG_WARN("{}: file entry {} of {} has no path, skipping it", export_name, i, fileNum);
+            continue;
+        }
+        const auto file = fs::path(construct_savedata0_path(data_path));
         if (fs::is_regular_file(file)) {
             remove_file(emuenv.io, file.string().c_str(), emuenv.vita_fs_path, export_name);
         } else
             remove_dir(emuenv.io, file.string().c_str(), emuenv.vita_fs_path, export_name);
     }
 
-    if (slot && files[0].mode == SCE_APPUTIL_SAVEDATA_DATA_REMOVE_MODE_DEFAULT) {
+    if (slot && files && files[0].mode == SCE_APPUTIL_SAVEDATA_DATA_REMOVE_MODE_DEFAULT) {
         remove_file(emuenv.io, construct_slotparam_path(slot->id).c_str(), emuenv.vita_fs_path, export_name);
     }
 
@@ -272,7 +286,12 @@ EXPORT(int, sceAppUtilSaveDataDataSave, SceAppUtilSaveDataFileSlot *slot, SceApp
         *requiredSizeKiB = 0;
 
     for (unsigned int i = 0; i < fileNum; i++) {
-        const auto file_path = construct_savedata0_path(files[i].dataPath.get(emuenv.mem));
+        const char *const data_path = files[i].dataPath.get(emuenv.mem);
+        if (!data_path) {
+            LOG_WARN("{}: file entry {} of {} has no path, skipping it", export_name, i, fileNum);
+            continue;
+        }
+        const auto file_path = construct_savedata0_path(data_path);
         switch (files[i].mode) {
         case SCE_APPUTIL_SAVEDATA_DATA_SAVE_MODE_DIRECTORY:
             create_dir(emuenv.io, file_path.c_str(), 0777, emuenv.vita_fs_path, export_name);
@@ -280,19 +299,27 @@ EXPORT(int, sceAppUtilSaveDataDataSave, SceAppUtilSaveDataFileSlot *slot, SceApp
         case SCE_APPUTIL_SAVEDATA_DATA_SAVE_MODE_FILE_TRUNCATE:
             if (files[i].buf) {
                 fd = open_file(emuenv.io, file_path.c_str(), SCE_O_WRONLY | SCE_O_CREAT, emuenv.vita_fs_path, export_name);
+                if (fd < 0)
+                    break;
                 seek_file(fd, static_cast<int>(files[i].offset), SCE_SEEK_SET, emuenv.io, export_name);
                 write_file(fd, files[i].buf.get(emuenv.mem), files[i].bufSize, emuenv.io, export_name);
                 close_file(emuenv.io, fd, export_name);
             }
-            fd = open_file(emuenv.io, file_path.c_str(), SCE_O_WRONLY | SCE_O_APPEND | SCE_O_TRUNC, emuenv.vita_fs_path, export_name);
+            fd = open_file(emuenv.io, file_path.c_str(), SCE_O_WRONLY | SCE_O_APPEND, emuenv.vita_fs_path, export_name);
+            if (fd < 0)
+                break;
             truncate_file(fd, files[i].bufSize + files[i].offset, emuenv.io, export_name);
             close_file(emuenv.io, fd, export_name);
             break;
         case SCE_APPUTIL_SAVEDATA_DATA_SAVE_MODE_FILE:
         default:
             fd = open_file(emuenv.io, file_path.c_str(), SCE_O_WRONLY | SCE_O_CREAT, emuenv.vita_fs_path, export_name);
-            seek_file(fd, static_cast<int>(files[i].offset), SCE_SEEK_SET, emuenv.io, export_name);
-            write_file(fd, files[i].buf.get(emuenv.mem), files[i].bufSize, emuenv.io, export_name);
+            if (fd < 0)
+                break;
+            if (files[i].buf) {
+                seek_file(fd, static_cast<int>(files[i].offset), SCE_SEEK_SET, emuenv.io, export_name);
+                write_file(fd, files[i].buf.get(emuenv.mem), files[i].bufSize, emuenv.io, export_name);
+            }
             close_file(emuenv.io, fd, export_name);
             break;
         }
@@ -357,9 +384,46 @@ EXPORT(int, sceAppUtilSaveDataGetQuota, SceSize *quotaSizeKiB, SceSize *usedSize
     return 0;
 }
 
-EXPORT(int, sceAppUtilSaveDataMount) {
-    TRACY_FUNC(sceAppUtilSaveDataMount);
-    return UNIMPLEMENTED();
+struct SceAppUtilTitleId {
+    SceChar8 data[10];
+    SceChar8 padding[6];
+};
+
+struct SceAppUtilPassCode {
+    SceUChar8 data[32];
+};
+
+EXPORT(SceInt32, sceAppUtilSaveDataMount, const SceAppUtilTitleId *titleId, const SceAppUtilPassCode *passCode) {
+    TRACY_FUNC(sceAppUtilSaveDataMount, titleId, passCode);
+    if (!titleId || !passCode)
+        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);
+
+    const char *const id = reinterpret_cast<const char *>(titleId->data);
+    const std::string title_id(id, strnlen(id, sizeof(titleId->data)));
+    // the title must be listed in INSTALL_DIR_SAVEDATA_ADD_1..7 of the app's param.sfo
+    bool listed = false;
+    for (int i = 1; i <= 7 && !listed; i++) {
+        std::string listed_id;
+        if (sfo::get_data_by_key(listed_id, emuenv.sfo_handle, fmt::format("INSTALL_DIR_SAVEDATA_ADD_{}", i))
+            || sfo::get_data_by_key(listed_id, emuenv.sfo_handle, fmt::format("INSTALL_DIR_SAVEDATA_ADD{}", i)))
+            listed = listed_id.c_str() == title_id;
+    }
+    if (!listed) {
+        LOG_WARN("sceAppUtilSaveDataMount: {} is not in INSTALL_DIR_SAVEDATA_ADD of param.sfo", title_id);
+        return RET_ERROR(SCE_APPUTIL_ERROR_PARAMETER);
+    }
+    if (!emuenv.io.device_paths.savedata1.empty())
+        return RET_ERROR(SCE_APPUTIL_ERROR_BUSY);
+
+    // the passcode of the other title's package is not known here, so it is not checked
+    const std::string savedata_path = "user/" + emuenv.io.user_id + "/savedata/" + title_id;
+    if (!fs::is_directory(emuenv.vita_fs_path / "ux0" / savedata_path)) {
+        LOG_INFO("sceAppUtilSaveDataMount: no save data of {} at ux0:{}", title_id, savedata_path);
+        return SCE_ERROR_ERRNO_ENOENT;
+    }
+    emuenv.io.device_paths.savedata1 = savedata_path;
+    LOG_INFO("sceAppUtilSaveDataMount: savedata1: is ux0:{}", savedata_path);
+    return 0;
 }
 
 EXPORT(int, sceAppUtilSaveDataSlotCreate, unsigned int slotId, SceAppUtilSaveDataSlotParam *param, SceAppUtilMountPoint *mountPoint) {
@@ -402,16 +466,17 @@ EXPORT(SceInt32, sceAppUtilSaveDataSlotSearch, SceAppUtilWorkBuffer *workBuf, co
     auto slotList = result->slotList.get(emuenv.mem);
     for (auto i = cond->from; i < (cond->from + cond->range); i++) {
         if (slotList) {
-            slotList[i].id = -1;
-            slotList[i].status = 0;
-            slotList[i].userParam = 0;
-            slotList[i].emptyParam = Ptr<SceAppUtilSaveDataSlotEmptyParam>(0);
+            const auto slot_index = i - cond->from;
+            slotList[slot_index].id = -1;
+            slotList[slot_index].status = 0;
+            slotList[slot_index].userParam = 0;
+            slotList[slot_index].emptyParam = Ptr<SceAppUtilSaveDataSlotEmptyParam>(0);
         }
 
         const auto fd = open_file(emuenv.io, construct_slotparam_path(i).c_str(), SCE_O_RDONLY, emuenv.vita_fs_path, export_name);
         switch (cond->type) {
         case SCE_APPUTIL_SAVEDATA_SLOT_SEARCH_TYPE_EXIST_SLOT:
-            if (fd > 0) {
+            if (fd >= 0) {
                 if (slotList) {
                     SceAppUtilSaveDataSlotParam param{};
                     read_file(&param, emuenv.io, fd, sizeof(SceAppUtilSaveDataSlotParam), export_name);
@@ -432,7 +497,7 @@ EXPORT(SceInt32, sceAppUtilSaveDataSlotSearch, SceAppUtilWorkBuffer *workBuf, co
         default: break;
         }
 
-        if (fd > 0)
+        if (fd >= 0)
             close_file(emuenv.io, fd, export_name);
     }
 
@@ -449,9 +514,12 @@ EXPORT(SceInt32, sceAppUtilSaveDataSlotSetParam, SceAppUtilSaveDataSlotId slotId
     return 0;
 }
 
-EXPORT(int, sceAppUtilSaveDataUmount) {
+EXPORT(SceInt32, sceAppUtilSaveDataUmount) {
     TRACY_FUNC(sceAppUtilSaveDataUmount);
-    return UNIMPLEMENTED();
+    if (emuenv.io.device_paths.savedata1.empty())
+        return RET_ERROR(SCE_APPUTIL_ERROR_NOT_MOUNTED);
+    emuenv.io.device_paths.savedata1.clear();
+    return 0;
 }
 
 static SceInt32 SafeMemory(EmuEnvState &emuenv, void *buf, SceSize bufSize, SceOff offset, const char *export_name, bool save) {

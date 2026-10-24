@@ -20,6 +20,7 @@
 #include <audio/state.h>
 #include <codec/state.h>
 #include <kernel/state.h>
+#include <kernel/thread/thread_state.h>
 #include <util/lock_and_find.h>
 #include <util/tracy.h>
 
@@ -156,7 +157,7 @@ static int create_decoder(EmuEnvState &emuenv, SceAudiodecCtrl *ctrl, SceAudiode
         state->decoders[handle] = decoder;
 
         info.channels = decoder->get(DecoderQuery::CHANNELS);
-        info.bit_rate = decoder->get(DecoderQuery::BIT_RATE);
+        info.bit_rate = (decoder->get(DecoderQuery::BIT_RATE) + 500) / 1000;
         info.sample_rate = decoder->get(DecoderQuery::SAMPLE_RATE);
         info.super_frame_size = decoder->get(DecoderQuery::AT9_SUPERFRAME_SIZE);
         info.frames_in_super_frame = decoder->get(DecoderQuery::AT9_FRAMES_IN_SUPERFRAME);
@@ -167,7 +168,7 @@ static int create_decoder(EmuEnvState &emuenv, SceAudiodecCtrl *ctrl, SceAudiode
     }
     case SCE_AUDIODEC_TYPE_AAC: {
         SceAudiodecInfoAac &info = ctrl->info.get(emuenv.mem)->aac;
-        DecoderPtr decoder = std::make_shared<AacDecoderState>(info.sample_rate, info.channels);
+        DecoderPtr decoder = std::make_shared<AacDecoderState>(info.sample_rate, info.channels, info.is_sbr != 0);
         state->decoders[handle] = decoder;
 
         ctrl->es_size_max = SCE_AUDIODEC_AAC_MAX_ES_SIZE;
@@ -259,11 +260,13 @@ static int decode_audio_frames(EmuEnvState &emuenv, const char *export_name, Sce
 
 EXPORT(int, sceAudiodecDecode, SceAudiodecCtrl *ctrl) {
     TRACY_FUNC(sceAudiodecDecode, ctrl);
+    note_audio_thread(emuenv.kernel, thread_id, export_name);
     return decode_audio_frames(emuenv, export_name, ctrl, 1);
 }
 
 EXPORT(int, sceAudiodecDecodeNFrames, SceAudiodecCtrl *ctrl, SceUInt32 nFrames) {
     TRACY_FUNC(sceAudiodecDecodeNFrames, ctrl, nFrames);
+    note_audio_thread(emuenv.kernel, thread_id, export_name);
     return decode_audio_frames(emuenv, export_name, ctrl, nFrames);
 }
 
@@ -383,7 +386,7 @@ EXPORT(int, sceAudiodecPartlyDecode, SceAudiodecCtrl *ctrl, SceUInt32 samples_of
         decoder->receive(temp_storage.data() + old_size, &size);
     }
 
-    memcpy(pcm_data + samples_offset * bytes_per_sample, temp_storage.data() + samples_offset * bytes_per_sample, samples_to_decode * bytes_per_sample);
+    memcpy(pcm_data, temp_storage.data() + samples_offset * bytes_per_sample, samples_to_decode * bytes_per_sample);
 
     return 0;
 }

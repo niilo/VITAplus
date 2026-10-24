@@ -212,13 +212,15 @@ struct KernelState {
     int nudge_all_condvar_waiters();
 
     std::atomic<uint64_t> thread_wake_counter{ 0 };
+    std::atomic<uint64_t> thread_create_counter{ 0 };
 
     // Kill all guest threads and block until they have exited. Must only be called from a host thread.
     void process_exit();
     std::function<void(int, std::optional<AppLaunchRequest>)> process_exit_callback;
     // Request process exit. Safe to call from a guest thread. Returns immediately.
-    // The registered process_exit_callback is invoked to notify the host layer.
+    // The registered process_exit_callback is invoked to notify the host layer, for the first request only.
     void request_process_exit(int res, std::optional<AppLaunchRequest> relaunch = std::nullopt);
+    std::atomic<bool> process_exit_requested{ false };
 
     void set_memory_watch(bool enabled);
     void invalidate_jit_cache(Address start, size_t length);

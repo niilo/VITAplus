@@ -17,10 +17,6 @@
 
 #include <app/functions.h>
 
-#include <cstdio>
-#ifdef __ANDROID__
-#include <unistd.h>
-#endif
 #include <exception>
 
 #include <audio/state.h>
@@ -238,6 +234,9 @@ static Config::CurrentConfig get_runtime_current_config_after_save(
         case config::RestartRequiredSetting::AccurateThreadScheduling:
             runtime_current.accurate_thread_scheduling = previous_current.accurate_thread_scheduling;
             break;
+        case config::RestartRequiredSetting::GuestCores:
+            runtime_current.guest_cores = previous_current.guest_cores;
+            break;
         }
     }
 
@@ -420,18 +419,6 @@ void init_paths(Root &root_paths) {
 }
 
 bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
-#ifdef __ANDROID__
-    // Android discards stdout and stderr. Libraries such as Dynarmic print fault details there,
-    // so keep the text in a file next to vita3k.log.
-    const std::string stdio_log = (root_paths.get_log_path() / "stdio.log").string();
-    if (std::freopen(stdio_log.c_str(), "w", stdout)) {
-        std::setvbuf(stdout, nullptr, _IOLBF, 0);
-        // Share the open file with stdout. Two separate opens would write at separate positions.
-        dup2(fileno(stdout), fileno(stderr));
-        std::setvbuf(stderr, nullptr, _IONBF, 0);
-    }
-#endif
-
     // Log the escaped exception's message before dying instead of a bare std::terminate().
     std::set_terminate([]() {
         if (auto exc = std::current_exception()) {
@@ -446,10 +433,6 @@ bool init(EmuEnvState &state, Config &cfg, const Root &root_paths) {
             LOG_CRITICAL("std::terminate called without an active exception");
         }
         logging::flush();
-        // Dynarmic reports a fault in JIT code with fmt::print before it calls std::terminate.
-        // The text stays in the stdio buffer unless it is flushed here.
-        std::fflush(stdout);
-        std::fflush(stderr);
         std::abort();
     });
 
@@ -565,6 +548,7 @@ void shutdown_app_runtime(EmuEnvState &state) {
 
     state.kernel.deinit(state.mem);
 
+    unprotect_external_mappings(state.mem);
     state.renderer->cleanup();
     state.renderer.reset();
 
@@ -677,12 +661,8 @@ void apply_renderer_config(EmuEnvState &emuenv) {
             return poll_overlay_input(emuenv);
         },
         [&emuenv](bool intercepted) {
-            auto &ctrl = emuenv.ctrl;
-            if (intercepted) {
-                ctrl.overlay_input_intercepted.store(true, std::memory_order_relaxed);
-            } else {
-                ctrl.overlay_input_intercepted.store(false, std::memory_order_relaxed);
-            }
+            if (emuenv.ctrl.native_overlay_intercepted.exchange(intercepted, std::memory_order_relaxed) != intercepted)
+                LOG_INFO("[CTRL] game input {} by a native overlay", intercepted ? "blocked" : "released");
         },
         [&emuenv]() -> overlay::overlay_touch_state {
             auto &mouse = emuenv.ctrl.overlay_mouse;

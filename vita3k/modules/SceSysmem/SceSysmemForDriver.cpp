@@ -256,8 +256,10 @@ EXPORT(int, ksceKernelFreeHeapMemoryFromGlobalHeap) {
 }
 
 EXPORT(int, ksceKernelFreeMemBlock, SceUID uid) {
-    if (emuenv.renderer && renderer::has_dormant_mappings())
+    if (emuenv.renderer && renderer::has_dormant_mappings()) {
+        guest_sched_release_for_block();
         renderer::send_single_command(*emuenv.renderer, nullptr, renderer::CommandOpcode::MemoryUnmapFlush, true, static_cast<uint32_t>(thread_id));
+    }
 
     const auto state = emuenv.kernel.obj_store.get<SysmemState>();
     const auto guard = std::lock_guard<std::mutex>(state->mutex);
@@ -268,13 +270,7 @@ EXPORT(int, ksceKernelFreeMemBlock, SceUID uid) {
 
     free(emuenv.mem, block->second->mappedBase.address());
 
-    // A VM block was added to vm_blocks as well. Leaving it there lets
-    // sceKernelFreeMemBlockForVM find it again and free the same mapping twice.
-    state->vm_blocks.erase(uid);
-
-    // The allocation path added mappedSize, which is the requested size. The
-    // size field is only sizeof(SceKernelMemBlockInfo), so subtracting it makes
-    // the reported free memory drift on every allocation.
+    // size is sizeof(SceKernelMemBlockInfo); allocation counted the mapped size
     switch (block->second->type) {
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_RX:
     case SCE_KERNEL_MEMBLOCK_TYPE_USER_RW:
@@ -293,6 +289,8 @@ EXPORT(int, ksceKernelFreeMemBlock, SceUID uid) {
         break;
     }
 
+    // a VM block freed here must not be freed or uncounted again through the VM path
+    state->vm_blocks.erase(uid);
     state->blocks.erase(block);
     return SCE_KERNEL_OK;
 }

@@ -94,19 +94,20 @@ static void perform_transfer_copy_impl(MemState &mem, const SceGxmTransferImage 
         }
     };
 
-    // Check for overlap and use a snapshot of source data if needed
-    const uintptr_t src_start = reinterpret_cast<uintptr_t>(src_ptr);
-    const uintptr_t dst_start = reinterpret_cast<uintptr_t>(dst_ptr);
-    const size_t src_span = (src.y + src.height) * (src.stride ? src.stride : src.width * sizeof(T));
-    const size_t dst_span = (dst.y + dst.height) * (dst.stride ? dst.stride : dst.width * sizeof(T));
-    const bool overlaps = src_start < dst_start + dst_span && dst_start < src_start + src_span;
-
+    // Check for overlap and use a snapshot of source data if needed.
     std::vector<T> src_copy;
     const T *safe_src = src_ptr;
-    if (overlaps) {
-        const size_t src_elements = src_span / sizeof(T);
-        src_copy.assign(src_ptr, src_ptr + src_elements);
-        safe_src = src_copy.data();
+    if constexpr (src_type == SCE_GXM_TRANSFER_LINEAR) {
+        const uintptr_t src_start = reinterpret_cast<uintptr_t>(src_ptr);
+        const uintptr_t dst_start = reinterpret_cast<uintptr_t>(dst_ptr);
+        const size_t src_span = (src.y + src.height) * (src.stride ? src.stride : src.width * sizeof(T));
+        const size_t dst_span = (dst.y + dst.height) * (dst.stride ? dst.stride : dst.width * sizeof(T));
+        const bool overlaps = src_start < dst_start + dst_span && dst_start < src_start + src_span;
+        if (overlaps) {
+            const size_t src_elements = src_span / sizeof(T);
+            src_copy.assign(src_ptr, src_ptr + src_elements);
+            safe_src = src_copy.data();
+        }
     }
 
     for (uint32_t dy = 0; dy < src.height; dy++) {
@@ -436,9 +437,23 @@ COMMAND(handle_transfer_fill) {
         }
     }
 
+    if (renderer.current_backend == Backend::Vulkan && renderer.features.enable_memory_mapping)
+        dynamic_cast<vulkan::VKState &>(renderer).surface_cache.note_cpu_write(dest->address.address());
     // TODO: handle case where dest is a cached surface
 
     delete dest;
+}
+
+COMMAND(handle_sync_guest_range) {
+    TRACY_FUNC_COMMANDS(handle_sync_guest_range);
+    const Address address = helper.pop<Address>();
+    const uint32_t size = helper.pop<uint32_t>();
+
+    int synced = 0;
+    if (renderer.current_backend == Backend::Vulkan)
+        synced = dynamic_cast<vulkan::VKState &>(renderer).surface_cache.sync_surfaces_for_cpu_read(mem, address, size);
+
+    complete_command(renderer, helper, synced);
 }
 
 } // namespace renderer

@@ -77,11 +77,6 @@ struct VKState : public renderer::State {
 
     vma::Allocator allocator;
 
-    // The nice value the GPU wait thread sets for itself at start. 0 means
-    // leave the default. A thread may only change its own priority, so the
-    // value is read from here rather than passed to the thread function.
-    int gpu_wait_thread_nice = 0;
-
     uint32_t general_family_index = 0;
     uint32_t transfer_family_index = 0;
     uint32_t general_queue_last = 0;
@@ -142,6 +137,7 @@ struct VKState : public renderer::State {
 
     // queue where we put requests that need to wait for the GPU
     Queue<WaitThreadRequest> request_queue;
+    std::thread gpu_request_wait_thread;
 
     vkutil::Image default_image;
     vkutil::Image default_raw_image;
@@ -151,6 +147,11 @@ struct VKState : public renderer::State {
     // support for the VK_KHR_uniform_buffer_standard_layout extension, needed for memory mapping and texture viewport
     bool support_standard_layout = false;
     bool support_rasterized_order_access = false;
+    // VK_EXT_pipeline_creation_cache_control (a pipeline can be requested from the driver cache without compiling it)
+    bool support_pipeline_cache_control = false;
+    bool is_mesa_turnip = false;
+    // Turnip Adreno 6xx fix: a draw that switches pipeline waits for the draws before it
+    bool wait_on_pipeline_switch = false;
     // bound guest write-backs to the render-target extent the surface was rendered with
     bool surface_sync_clamp_rt = true;
     LinuxSurfaceType linux_surface_type = LinuxSurfaceType::Unknown;
@@ -200,6 +201,9 @@ struct VKState : public renderer::State {
     void precompile_shader(const ShadersHash &hash) override;
     void preclose_action() override;
     void wait_gpu_idle() override;
+    void start_gpu_request_wait_thread(const MemState &mem);
+    void stop_gpu_request_wait_thread();
+    void wait_thread_function(const MemState &mem);
     uint32_t diag_pipelines_created() const override { return pipeline_cache.pipelines_created.load(std::memory_order_relaxed); }
 
     // dumps the resolved device/driver/feature configuration to the log, once, from late_init

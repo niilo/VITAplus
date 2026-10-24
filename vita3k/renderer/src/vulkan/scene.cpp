@@ -49,6 +49,27 @@ static bool draw_drops_fragments_beyond_far_plane(const GxmRecordState &record) 
     return drop_fragments_beyond_far_plane && front_drops && back_drops;
 }
 
+// a program can index a uniform buffer past its declared size (therefore Double Buffer copies the rest of it too)
+constexpr uint32_t UNIFORM_SLACK_WINDOW = 16 * 1024;
+
+static void copy_uniform_slack(VKContext &context, MemState &mem, const Address address, const uint32_t declared) {
+    VKState &state = context.state;
+    const auto mapping = state.mapped_memories.lower_bound(address);
+    if (mapping == state.mapped_memories.end() || static_cast<uint64_t>(address) >= static_cast<uint64_t>(mapping->first) + mapping->second.size)
+        return;
+    const vkutil::Buffer *buffer = std::get_if<vkutil::Buffer>(&mapping->second.buffer_impl);
+    const uint8_t *guest = Ptr<const uint8_t>(address).get(mem);
+    if (!buffer || !buffer->mapped_data || !guest)
+        return;
+
+    const uint64_t end = std::min<uint64_t>({ static_cast<uint64_t>(address) + UNIFORM_SLACK_WINDOW,
+        static_cast<uint64_t>(mapping->first) + mapping->second.size, state.surface_cache.color_surface_limit(address) });
+    if (end <= static_cast<uint64_t>(address) + declared)
+        return;
+    uint8_t *mirror = reinterpret_cast<uint8_t *>(buffer->mapped_data) + (address - mapping->first);
+    memcpy(mirror + declared, guest + declared, static_cast<size_t>(end - address - declared));
+}
+
 void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *program, const bool vertex_shader, const int block_num, const int size, Ptr<uint8_t> data) {
     auto offset = program->uniform_buffer_data_offsets.at(block_num);
     if (offset == static_cast<std::uint32_t>(-1)) {
@@ -61,6 +82,8 @@ void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *
 
         if (!aliases_surface && context.state.mapping_method == MappingMethod::DoubleBuffer) {
             context.state.buffer_trapping.access_buffer(data.address(), data_size_upload, mem, false, true);
+            if ((program->dynamic_uniform_buffers & (1u << block_num)) && !context.state.has_shader_store)
+                copy_uniform_slack(context, mem, data.address(), data_size_upload);
         }
 
         const uint64_t buffer_address = context.state.get_matching_device_address(data.address());
@@ -118,29 +141,31 @@ void mid_scene_flush(VKContext &context, const SceGxmNotification notification) 
     if (restart_render_pass) {
         SceGxmNotification empty_notification = { Ptr<uint32_t>(0), 0 };
         const bool submit = notification.address.address() != 0;
+        ColorSurfaceCacheInfo *const written_surface = context.state.surface_cache.get_last_written_surface();
         context.stop_recording(notification, empty_notification, submit);
         context.start_recording();
+        context.state.surface_cache.restore_last_written_surface(written_surface);
         context.scene_timestamp++;
         context.scene_has_drawn = false;
     }
 }
 
-#ifdef __APPLE__
-// restride vertex attribute binding strides to multiple of 4
-// needed for metal because it only allows multiples of 4.
-void restride_stream(const uint8_t *&stream, uint32_t &size, uint32_t stride) {
-    const uint32_t new_stride = align(stride, 4);
-    const uint32_t nb_vertex_input = ((size + stride - 1) / stride);
-
-    uint8_t *new_data = new uint8_t[nb_vertex_input * new_stride];
-    for (uint32_t i = 0; i < nb_vertex_input; i++) {
-        memcpy(new_data + new_stride * i, stream + stride * i, stride);
-    }
-
-    stream = new_data;
-    size = nb_vertex_input * new_stride;
+// Vulkan requires each vertex attribute address to be a multiple of the component size of its format
+uint32_t repacked_size(const uint32_t size, const uint32_t stride, const VertexStreamLayout &layout) {
+    return stride ? (size + stride - 1) / stride * layout.stride : layout.record_size;
 }
-#endif
+
+void repack_stream(uint8_t *dst, const uint8_t *stream, const uint32_t size, const uint32_t stride, const VertexStreamLayout &layout) {
+    const uint32_t nb_vertex_input = stride ? (size + stride - 1) / stride : 1;
+    for (uint32_t i = 0; i < nb_vertex_input; i++) {
+        for (uint32_t c = 0; c < layout.copy_count; c++) {
+            const VertexStreamLayout::Copy &copy = layout.copies[c];
+            const uint32_t src = stride * i + copy.src;
+            if (src < size)
+                memcpy(dst + layout.stride * i + copy.dst, stream + src, std::min(copy.size, size - src));
+        }
+    }
+}
 
 // when needed, how many descriptor of the given size we allocate for each frame at once
 static constexpr uint32_t DESCRIPTOR_PACK_SIZE = 64;
@@ -314,31 +339,40 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
     if (max_stream_idx == 0)
         return;
 
+    std::array<VertexStreamLayout, SCE_GXM_MAX_VERTEX_STREAMS> layouts;
+    for (int i = 0; i < max_stream_idx; i++)
+        layouts[i] = context.state.pipeline_cache.vertex_stream_layout(vertex_program, i);
+
     for (int i = 0; i < max_stream_idx; i++) {
         if (state.vertex_streams[i].data) {
-            if (context.state.features.enable_memory_mapping) {
+            const bool mapped = context.state.features.enable_memory_mapping;
+            const bool restride = layouts[i].repack;
+            uint32_t stream_size = state.vertex_streams[i].size;
+            // by the time we bind the game may already have recycled this block so prefer the copy taken when the scene was kicked
+            const uint8_t *snapshot = mapped
+                ? renderer::stream_snapshot_get(state.vertex_streams[i].snapshot, stream_size)
+                : nullptr;
+            if (mapped && !snapshot && !restride) {
                 auto [buffer, offset] = context.state.get_matching_mapping(state.vertex_streams[i].data.cast<void>());
 
                 context.vertex_stream_offsets[i] = offset;
                 context.vertex_stream_buffers[i] = buffer;
             } else {
-                const uint8_t *stream = state.vertex_streams[i].data.get(mem);
-                uint32_t stream_size = state.vertex_streams[i].size;
-#ifdef __APPLE__
-                // Vulkan allows any stride, but Metal only allows multiples of 4.
-                const bool restride = vertex_program.streams[i].stride % 4 != 0;
+                if (!context.vertex_stream_ring_buffer.handle())
+                    context.vertex_stream_ring_buffer.create();
+                const uint8_t *stream = snapshot ? snapshot : state.vertex_streams[i].data.get(mem);
                 if (restride) {
-                    restride_stream(stream, stream_size, vertex_program.streams[i].stride);
+                    const uint32_t repacked = repacked_size(stream_size, vertex_program.streams[i].stride, layouts[i]);
+                    context.vertex_ring_make_room(repacked);
+                    context.vertex_stream_ring_buffer.allocate(repacked);
+                    repack_stream(context.vertex_stream_ring_buffer.allocation_data(), stream, stream_size, vertex_program.streams[i].stride, layouts[i]);
+                    context.vertex_stream_ring_buffer.flush(repacked);
+                } else {
+                    context.vertex_ring_make_room(stream_size);
+                    context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, stream_size, stream);
                 }
-#endif
-                context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, stream_size, stream);
                 context.vertex_stream_offsets[i] = context.vertex_stream_ring_buffer.data_offset;
-
-#ifdef __APPLE__
-                if (restride) {
-                    delete[] stream;
-                }
-#endif
+                context.vertex_stream_buffers[i] = context.vertex_stream_ring_buffer.handle();
             }
 
             state.vertex_streams[i].data = nullptr;
@@ -346,11 +380,41 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
         }
     }
 
-    context.render_cmd.bindVertexBuffers(0, max_stream_idx, context.vertex_stream_buffers, context.vertex_stream_offsets);
+    if (!context.state.pipeline_cache.needs_attribute_bindings(vertex_program)) {
+        context.render_cmd.bindVertexBuffers(0, max_stream_idx, context.vertex_stream_buffers, context.vertex_stream_offsets);
+        return;
+    }
+
+    // one binding per attribute, in get_vertex_input_state's order, carrying the attribute offset
+    static thread_local std::vector<vk::Buffer> buffers;
+    static thread_local std::vector<vk::DeviceSize> offsets;
+    buffers.clear();
+    offsets.clear();
+    for (size_t a = 0; a < vertex_program.attributes.size(); a++) {
+        const SceGxmVertexAttribute &attribute = vertex_program.attributes[a];
+        if (!vkvert->attribute_infos.contains(attribute.regIndex))
+            continue;
+        buffers.push_back(context.vertex_stream_buffers[attribute.streamIndex]);
+        offsets.push_back(context.vertex_stream_offsets[attribute.streamIndex] + (a < VertexStreamLayout::MAX_ATTRIBUTES ? layouts[attribute.streamIndex].offsets[a] : attribute.offset));
+    }
+    context.render_cmd.bindVertexBuffers(0, buffers, offsets);
+}
+
+static void draw_bounds(const VKContext &context, int32_t &x0, int32_t &y0, int32_t &x1, int32_t &y1) {
+    const int32_t sx0 = context.scissor.offset.x, sy0 = context.scissor.offset.y;
+    const int32_t sx1 = sx0 + static_cast<int32_t>(context.scissor.extent.width), sy1 = sy0 + static_cast<int32_t>(context.scissor.extent.height);
+    const int32_t vx0 = static_cast<int32_t>(std::floor(std::min(context.viewport.x, context.viewport.x + context.viewport.width)));
+    const int32_t vy0 = static_cast<int32_t>(std::floor(std::min(context.viewport.y, context.viewport.y + context.viewport.height)));
+    const int32_t vx1 = static_cast<int32_t>(std::ceil(std::max(context.viewport.x, context.viewport.x + context.viewport.width)));
+    const int32_t vy1 = static_cast<int32_t>(std::ceil(std::max(context.viewport.y, context.viewport.y + context.viewport.height)));
+    x0 = std::max(sx0, vx0);
+    y0 = std::max(sy0, vy0);
+    x1 = std::min(sx1, vx1);
+    y1 = std::min(sy1, vy1);
 }
 
 void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format,
-    Ptr<void> indices, size_t count, uint32_t instance_count, MemState &mem, const Config &config) {
+    Ptr<void> indices, size_t count, uint32_t instance_count, uint64_t index_snapshot, MemState &mem, const Config &config) {
     // the mask bit is not emulated here, so a mask-update program would just paint writing_mask over the whole target (gl/draw.cpp skips these too)
     if (!context.state.features.use_mask_bit && context.record.fragment_program_binding->is_maskupdate)
         return;
@@ -383,7 +447,6 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
                             written_mask |= 1u << e.location;
                 }
                 vp_data->varying_location_mask = written_mask;
-                LOG_INFO("[ITERMASK] vertex program varying mask = 0x{:04X}", written_mask);
             }
             context.curr_frag_ublock.set_iterator_written_mask(vp_data->varying_location_mask);
         }
@@ -416,11 +479,16 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
             context.draw_rect_y0 = std::min(context.draw_rect_y0, y0);
             context.draw_rect_x1 = std::max(context.draw_rect_x1, x1);
             context.draw_rect_y1 = std::max(context.draw_rect_y1, y1);
+            context.note_half_pixel_origin(x0, y0, x1, y1);
         }
     }
     context.scene_has_drawn = true;
 
-    context.check_for_macroblock_change(true);
+    bool reads_color = false;
+    bool reads_depth = false;
+    if (context.render_target->has_macroblock_sync)
+        context.find_render_target_reads(reads_color, reads_depth);
+    context.check_for_macroblock_change(true, context.read_needs_restart(reads_color, reads_depth));
 
     if (!context.in_renderpass)
         context.start_render_pass();
@@ -455,8 +523,12 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
             .image = context.current_color_base_image->image,
             .subresourceRange = vkutil::color_subresource_range
         };
+        std::array<vk::ImageMemoryBarrier, 2> barriers = { barrier, barrier };
+        const uint32_t barrier_count = context.current_color_raw_image ? 2 : 1;
+        if (context.current_color_raw_image)
+            barriers[1].image = context.current_color_raw_image->image;
         context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
-            vk::DependencyFlagBits::eByRegion, {}, {}, barrier);
+            vk::DependencyFlagBits::eByRegion, {}, {}, vk::ArrayProxy<const vk::ImageMemoryBarrier>(barrier_count, barriers.data()));
     } else if (context.state.features.support_shader_interlock
         && fragment_program_gxp.is_frag_color_used() != context.last_draw_was_framebuffer_fetch) {
         // restart the render pass to act as a barrier
@@ -497,6 +569,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         // to be able to see anything
         bool can_be_whole_quad = instance_count == 1 && count <= 6;
         vk::Pipeline new_pipeline = context.state.pipeline_cache.retrieve_pipeline(context, type, !can_be_whole_quad, mem);
+        context.pipeline_stops_lrz_write = fetch_draw_stops_lrz_write(context.state, context.record, fragment_program_gxp);
 
         if (new_pipeline != context.current_pipeline) {
             context.current_pipeline = new_pipeline;
@@ -509,6 +582,20 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     // can happen with asynchronous pipeline compilation
     if (context.current_pipeline == nullptr)
         return;
+
+    if (context.render_target->has_macroblock_sync && context.ignore_macroblock) {
+        int32_t x0, y0, x1, y1;
+        draw_bounds(context, x0, y0, x1, y1);
+        if (x1 > x0 && y1 > y0) {
+            const bool exact_coordinates = context.render_target->multisample_mode == SCE_GXM_MULTISAMPLE_NONE && context.surface_downscale == 1.0f;
+            context.state.surface_cache.refresh_casts_drawn_over(context.scene_timestamp, x0, y0, x1, y1, exact_coordinates);
+        }
+    }
+
+    if (context.pipeline_stops_lrz_write != context.stencil_compare_mask_zeroed) {
+        context.stencil_compare_mask_zeroed = context.pipeline_stops_lrz_write;
+        sync_stencil_func(context, false);
+    }
 
     if (config.log_active_shaders) {
         const std::string hash_text_f = hex_string(context.record.fragment_program_binding->fragment_program->hash);
@@ -584,7 +671,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     frag_ublock.raw_cast_mask = static_cast<float>(context.curr_frag_ublock.raw_cast_bits);
     frag_ublock.inv_frag_width = 1.0f / static_cast<float>(context.render_target->width);
     frag_ublock.inv_frag_height = 1.0f / static_cast<float>(context.render_target->height);
-    if (context.curr_frag_ublock.cast_sampler_bits != 0) {
+    if (context.curr_frag_ublock.cast_sampler_bits != 0 || context.curr_frag_ublock.cast_phase_bits != 0) {
         static uint64_t reanchor_log_n = 0;
         if (reanchor_log_n < 16 || (reanchor_log_n % 512) == 0)
             LOG_INFO("UV re-anchor: mask=0x{:X} phase=0x{:X} rt={}x{} res_mult={} surface_orig={}x{}",
@@ -609,7 +696,25 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     const size_t index_size = (format == SCE_GXM_INDEX_FORMAT_U16) ? 2 : 4;
 
     uint32_t max_index = 0;
-    if (use_memory_mapping) {
+    const uint32_t index_bytes = static_cast<uint32_t>(index_size * count);
+    // the game may already have reused its index memory so prefer the copy taken when the scene was kicked
+    const uint8_t *index_copy = use_memory_mapping ? renderer::stream_snapshot_get(index_snapshot, index_bytes) : nullptr;
+    if (index_copy) {
+        if (context.state.mapping_method == MappingMethod::DoubleBuffer) {
+            if (format == SCE_GXM_INDEX_FORMAT_U16) {
+                const uint16_t *data = reinterpret_cast<const uint16_t *>(index_copy);
+                max_index = *std::max_element(&data[0], &data[count]);
+            } else {
+                const uint32_t *data = reinterpret_cast<const uint32_t *>(index_copy);
+                max_index = *std::max_element(&data[0], &data[count]);
+            }
+        }
+        if (!context.vertex_stream_ring_buffer.handle())
+            context.vertex_stream_ring_buffer.create();
+        context.vertex_ring_make_room(index_bytes);
+        context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, index_bytes, index_copy);
+        context.render_cmd.bindIndexBuffer(context.vertex_stream_ring_buffer.handle(), context.vertex_stream_ring_buffer.data_offset, index_type);
+    } else if (use_memory_mapping) {
         auto [buffer, offset] = context.state.get_matching_mapping(indices);
         if (context.state.mapping_method == MappingMethod::DoubleBuffer) {
             TrappedBuffer *trapped_buffer = context.state.buffer_trapping.access_buffer(indices.address(), count * index_size, mem);
@@ -635,8 +740,14 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     // bind the vertex streams
     bind_vertex_streams(context, mem, instance_count, max_index);
 
+    // Turnip on Adreno 6xx: a draw with another pipeline than the previous draw waits for the draws before it
+    if (context.state.wait_on_pipeline_switch && context.current_pipeline != context.last_draw_pipeline && context.record.color_surface.data) {
+        context.render_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlagBits::eByRegion, {}, {}, {});
+    }
+    context.last_draw_pipeline = context.current_pipeline;
+
     context.render_cmd.drawIndexed(count, instance_count, 0, 0, 0);
-    context.scene_draw_calls++;
 
     context.vertex_uniform_storage_allocated = false;
     context.fragment_uniform_storage_allocated = false;

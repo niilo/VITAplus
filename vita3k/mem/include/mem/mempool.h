@@ -29,7 +29,7 @@ struct MemspaceBlockAllocator {
         bool free;
     };
 
-    std::vector<Block> blocks; /// All block sorted by size
+    std::vector<Block> blocks; // Blocks are sorted by address offset.
 
     explicit MemspaceBlockAllocator() = default;
     explicit MemspaceBlockAllocator(const std::uint32_t memspace_size) {
@@ -64,10 +64,6 @@ struct MemspaceBlockAllocator {
                     blocks[i].size = aligned_size;
 
                     const std::uint32_t offset = blocks[i].offset;
-
-                    if (blocks.capacity() == blocks.size()) {
-                        blocks.resize(blocks.size() + 1);
-                    }
 
                     blocks.insert(blocks.begin() + i + 1, division);
 

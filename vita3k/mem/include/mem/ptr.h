@@ -96,16 +96,6 @@ private:
 
 static_assert(sizeof(Ptr<const void>) == 4, "Size of Ptr isn't 4 bytes.");
 
-// So that a Ptr can key an unordered container. NGS keeps queues and sets of
-// voices across frames, and a host pointer goes stale where a guest address
-// does not.
-template <class T>
-struct std::hash<Ptr<T>> {
-    size_t operator()(const Ptr<T> &ptr) const noexcept {
-        return std::hash<Address>{}(ptr.address());
-    }
-};
-
 template <class T>
 Ptr<T> operator+(const Ptr<T> &base, int32_t offset) {
     return Ptr<T>(base.address() + (offset * sizeof(T)));

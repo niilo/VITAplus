@@ -31,14 +31,8 @@
 #include <overlay/display_manager.h>
 #include <overlay/shader_precompile_progress.h>
 #include <util/log.h>
-#include <util/thread_priority.h>
-#ifdef __ANDROID__
-#include <unistd.h>
-#include <util/adpf.h>
-#endif
 
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <thread>
 
@@ -49,13 +43,6 @@
 struct FeatureState;
 
 namespace renderer {
-
-#ifdef __ANDROID__
-// Ticket 13: the period a frame's work is expected to finish in. 16.667 ms is
-// 60 FPS. The device's own preferred period is logged when the session opens,
-// and it is not necessarily this.
-static constexpr int64_t k_adpf_target_ns = 16667000;
-#endif
 Command *generic_command_allocate() {
     return new Command;
 }
@@ -103,6 +90,7 @@ static void process_batch(renderer::State &state, const FeatureState &features, 
         { CommandOpcode::MemoryMap, cmd_handle_memory_map },
         { CommandOpcode::MemoryUnmap, cmd_handle_memory_unmap },
         { CommandOpcode::MemoryUnmapFlush, cmd_handle_memory_unmap_flush },
+        { CommandOpcode::SyncGuestRange, cmd_handle_sync_guest_range },
         { CommandOpcode::Draw, cmd_handle_draw },
         { CommandOpcode::TransferCopy, cmd_handle_transfer_copy },
         { CommandOpcode::TransferDownscale, cmd_handle_transfer_downscale },
@@ -117,6 +105,9 @@ static void process_batch(renderer::State &state, const FeatureState &features, 
         { CommandOpcode::DestroyRenderTarget, cmd_handle_destroy_render_target },
         { CommandOpcode::DestroyContext, cmd_handle_destroy_context }
     };
+
+    if (command_list.context)
+        state.context = command_list.context;
 
     Command *cmd = command_list.first;
     uint32_t executed_in_list = 0;
@@ -163,7 +154,7 @@ static void process_batch(renderer::State &state, const FeatureState &features, 
         } else {
             CommandHelper helper(cmd);
             state.last_cmd_opcode.store(static_cast<int>(cmd->opcode), std::memory_order_relaxed); // seq-249
-            state.last_cmd_epoch_ms.store(duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+            state.last_cmd_epoch_ms.store(coarse_now_ms(), std::memory_order_relaxed);
             handler_fn(state, mem, config, helper, features, command_list.context);
         }
 
@@ -196,7 +187,7 @@ void process_batches(renderer::State &state, const FeatureState &features, MemSt
             return;
 
         // Try to wait for a batch (about 2 or 3ms, game should be fast for this)
-        auto cmd_list = state.command_buffer_queue.top(3);
+        auto cmd_list = state.command_buffer_queue.top(3000);
 
         if (!cmd_list || !is_cmd_ready(mem, *cmd_list)) {
             // beginning of the game or homebrew not using gxm
@@ -238,31 +229,6 @@ void reset_command_list(CommandList &command_list) {
 }
 
 static void render_loop(renderer::State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
-    util::set_thread_name("vita3k-render");
-    util::set_thread_nice(state.render_thread_nice);
-
-#ifdef __ANDROID__
-    // Ticket 13: one session for the threads a frame depends on. The renderer
-    // thread, the GPU wait thread and the vblank thread. Guest threads are left
-    // out on purpose: naming every thread would tell the system nothing.
-    const int adpf_tids[] = {
-        static_cast<int>(::gettid()),
-        state.gpu_wait_thread_id.load(std::memory_order_relaxed),
-        state.vblank_thread_id.load(std::memory_order_relaxed),
-    };
-    bool adpf_started = false;
-    if (config.adpf) {
-        int usable[3];
-        int count = 0;
-        for (const int tid : adpf_tids) {
-            if (tid > 0)
-                usable[count++] = tid;
-        }
-        if (count > 0)
-            adpf_started = adpf::start(usable, count, k_adpf_target_ns, "render thread start");
-    }
-#endif
-
     if (state.precompile_requested) {
         auto progress_overlay = state.overlay_manager
             ? state.overlay_manager->create<overlay::shader_precompile_progress>()
@@ -323,51 +289,48 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
             state.swap_window();
         }
     }
-    while (!state.render_abort.load(std::memory_order_relaxed)) {
+    try {
+        while (!state.render_abort.load(std::memory_order_relaxed)) {
 #ifdef TRACY_ENABLE
-        ZoneScopedN("Game rendering");
+            ZoneScopedN("Game rendering");
 #endif
-#ifdef __ANDROID__
-        const auto frame_start = std::chrono::steady_clock::now();
-#endif
-        if (!state.set_current())
-            break;
+            if (!state.set_current())
+                break;
 
-        process_batches(state, state.features, mem, config, 500);
+            process_batches(state, state.features, mem, config, 500);
 
-        if (state.render_abort.load(std::memory_order_relaxed))
-            break;
+            if (state.render_abort.load(std::memory_order_relaxed))
+                break;
 
-        if (state.overlay_manager) {
-            auto precompile = state.overlay_manager->get<overlay::shader_precompile_progress>();
-            if (precompile) {
-                DisplayFrameInfo peek;
-                {
-                    std::lock_guard<std::mutex> guard(display.display_info_mutex);
-                    peek = display.next_rendered_frame;
-                }
-                if (peek.base) {
-                    state.overlay_manager->remove<overlay::shader_precompile_progress>();
+            state.run_render_thread_tasks();
+
+            if (state.overlay_manager) {
+                auto precompile = state.overlay_manager->get<overlay::shader_precompile_progress>();
+                if (precompile) {
+                    DisplayFrameInfo peek;
+                    {
+                        std::lock_guard<std::mutex> guard(display.display_info_mutex);
+                        peek = display.next_rendered_frame;
+                    }
+                    if (peek.base) {
+                        state.overlay_manager->remove<overlay::shader_precompile_progress>();
+                    }
                 }
             }
-        }
 
-        state.render_frame(display, gxm, mem);
-        state.swap_window();
-        state.async_flip_requested.store(false, std::memory_order_relaxed);
-
-#ifdef __ANDROID__
-        if (adpf_started) {
-            // Ticket 13: once per frame. The thermal and perf HALs rate-limit
-            // their own callers, so more often than this is wasted.
-            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - frame_start).count();
-            adpf::report_work(elapsed);
-        }
-#endif
+            state.render_frame(display, gxm, mem);
+            state.swap_window();
+            state.async_flip_requested.store(false, std::memory_order_relaxed);
 
 #ifdef TRACY_ENABLE
-        FrameMark;
+            FrameMark;
 #endif
+        }
+    } catch (const std::exception &e) {
+        // a lost device fails every later submit so stop drawing rather than let it reach std::terminate
+        LOG_CRITICAL("Render thread stopped: {}", e.what());
+        state.render_abort = true;
+        state.command_finish_one.notify_all();
     }
 
     state.done_current();
@@ -375,9 +338,6 @@ static void render_loop(renderer::State &state, DisplayState &display, GxmState 
 
 void start_render_thread(State &state, DisplayState &display, GxmState &gxm, MemState &mem, Config &config) {
     state.render_abort = false;
-    // The nice value has to be set from inside the thread, because an
-    // unprivileged process may only change the priority of its own thread.
-    state.render_thread_nice = config.thread_nice_renderer;
     state.render_thread = std::make_unique<std::thread>(render_loop, std::ref(state), std::ref(display), std::ref(gxm), std::ref(mem), std::ref(config));
 }
 

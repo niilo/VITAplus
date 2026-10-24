@@ -911,6 +911,18 @@ EXPORT(int, sceRemoteOSKDialogTerm) {
     return UNIMPLEMENTED();
 }
 
+static constexpr uint64_t SAVEDATA_DIALOG_CLOSE_MS = 150;
+
+// the dialog closes before the status reports FINISHED so a Term straight after Finish fails as on the console
+static void complete_savedata_close(EmuEnvState &emuenv) {
+    std::lock_guard<std::recursive_mutex> lock(emuenv.common_dialog.mutex);
+    auto &savedata = emuenv.common_dialog.savedata;
+    if (savedata.finishing && SDL_GetTicks() >= savedata.finish_tick) {
+        savedata.finishing = false;
+        emuenv.common_dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
+    }
+}
+
 EXPORT(int, sceSaveDataDialogAbort) {
     TRACY_FUNC(sceSaveDataDialogAbort);
     if (emuenv.common_dialog.type != SAVEDATA_DIALOG) {
@@ -918,6 +930,7 @@ EXPORT(int, sceSaveDataDialogAbort) {
     }
 
     std::lock_guard<std::recursive_mutex> lock(emuenv.common_dialog.mutex);
+    emuenv.common_dialog.savedata.finishing = false;
     emuenv.common_dialog.savedata.bar_percent = 0;
     emuenv.common_dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
     emuenv.common_dialog.savedata.button_id = SCE_SAVEDATA_DIALOG_BUTTON_ID_INVALID;
@@ -949,9 +962,11 @@ static void check_save_file(const uint32_t index, EmuEnvState &emuenv, const cha
                 vfs::read_file(VitaIoDevice::ux0, icon_buf_tmp, emuenv.vita_fs_path, thumbnail_path);
             } else if (iconBuf && (iconBufSize > 0)) {
                 const Address icon_start = empty_param->iconBuf.address();
-                if (is_valid_addr_range(emuenv.mem, icon_start, icon_start + iconBufSize - 1)) {
-                    icon_buf_tmp.insert(icon_buf_tmp.end(), iconBuf, iconBuf + iconBufSize);
-                } else {
+                const size_t icon_offset = icon_buf_tmp.size();
+                icon_buf_tmp.resize(icon_offset + iconBufSize);
+                // copy page by page so a buffer that straddles two host backings is read correctly
+                if (!debug_safe_copy_guest(emuenv.mem, icon_start, icon_buf_tmp.data() + icon_offset, iconBufSize)) {
+                    icon_buf_tmp.resize(icon_offset);
                     LOG_WARN("Save slot {} empty-param iconBuf 0x{:X} size 0x{:X} is not mapped - icon skipped", index, icon_start, iconBufSize);
                 }
             }
@@ -1246,12 +1261,14 @@ EXPORT(int, sceSaveDataDialogFinish, const SceSaveDataDialogFinishParam *finishP
     std::lock_guard<std::recursive_mutex> lock(emuenv.common_dialog.mutex);
     emuenv.common_dialog.savedata.bar_percent = 0;
     emuenv.common_dialog.substatus = SCE_COMMON_DIALOG_STATUS_RUNNING;
-    emuenv.common_dialog.status = SCE_COMMON_DIALOG_STATUS_FINISHED;
+    emuenv.common_dialog.savedata.finishing = true;
+    emuenv.common_dialog.savedata.finish_tick = SDL_GetTicks() + SAVEDATA_DIALOG_CLOSE_MS;
     return 0;
 }
 
 EXPORT(SceInt32, sceSaveDataDialogGetResult, SceSaveDataDialogResult *result) {
     TRACY_FUNC(sceSaveDataDialogGetResult, result);
+    complete_savedata_close(emuenv);
     if (emuenv.common_dialog.type != SAVEDATA_DIALOG)
         return RET_ERROR(SCE_COMMON_DIALOG_ERROR_NOT_FINISHED);
 
@@ -1287,7 +1304,8 @@ EXPORT(SceInt32, sceSaveDataDialogGetResult, SceSaveDataDialogResult *result) {
 
 EXPORT(int, sceSaveDataDialogGetStatus) {
     TRACY_FUNC(sceSaveDataDialogGetStatus);
-    if ((emuenv.common_dialog.type != SAVEDATA_DIALOG) || ((emuenv.common_dialog.status != SCE_COMMON_DIALOG_STATUS_RUNNING) && (emuenv.common_dialog.substatus != SCE_COMMON_DIALOG_STATUS_RUNNING)))
+    complete_savedata_close(emuenv);
+    if (emuenv.common_dialog.type != SAVEDATA_DIALOG)
         return SCE_COMMON_DIALOG_STATUS_NONE;
 
     return emuenv.common_dialog.status;
@@ -1295,6 +1313,7 @@ EXPORT(int, sceSaveDataDialogGetStatus) {
 
 EXPORT(int, sceSaveDataDialogGetSubStatus) {
     TRACY_FUNC(sceSaveDataDialogGetSubStatus);
+    complete_savedata_close(emuenv);
     if (emuenv.common_dialog.type != SAVEDATA_DIALOG || emuenv.common_dialog.status != SCE_COMMON_DIALOG_STATUS_RUNNING) {
         return SCE_COMMON_DIALOG_STATUS_NONE;
     }
@@ -1487,6 +1506,8 @@ EXPORT(int, sceSaveDataDialogSubClose) {
     }
 
     std::lock_guard<std::recursive_mutex> lock(emuenv.common_dialog.mutex);
+    if (emuenv.common_dialog.savedata.finishing)
+        return 0;
     emuenv.common_dialog.substatus = SCE_COMMON_DIALOG_STATUS_FINISHED;
     emuenv.common_dialog.result = SCE_COMMON_DIALOG_RESULT_OK;
     emuenv.common_dialog.savedata.button_id = SCE_SAVEDATA_DIALOG_BUTTON_ID_INVALID;
@@ -1495,6 +1516,7 @@ EXPORT(int, sceSaveDataDialogSubClose) {
 
 EXPORT(int, sceSaveDataDialogTerm) {
     TRACY_FUNC(sceSaveDataDialogTerm);
+    complete_savedata_close(emuenv);
     if (emuenv.common_dialog.type != SAVEDATA_DIALOG) {
         return RET_ERROR(SCE_COMMON_DIALOG_ERROR_NOT_IN_USE);
     }

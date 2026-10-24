@@ -29,8 +29,7 @@ struct System;
 
 struct State {
     Ptr<VoiceDefinition> definitions;
-    // Guest addresses, not host pointers. See Voice::rack.
-    std::vector<Ptr<System>> systems;
+    std::vector<System *> systems;
 };
 
 bool init(State &ngs, MemState &mem);

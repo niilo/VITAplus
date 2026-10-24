@@ -44,7 +44,17 @@
 #include <timeapi.h>
 // clang-format on
 #pragma comment(lib, "winmm.lib")
+#else
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <unistd.h>
 #endif
+#include <algorithm>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -52,11 +62,18 @@
 #include <set>
 #include <sstream>
 
-void ThreadSignal::wait() {
+bool ThreadSignal::wait() {
     guest_sched_release_for_block();
     std::unique_lock<std::mutex> lock(mutex);
+    const bool was_pending = signaled;
     recv_cond.wait(lock, [&]() { return signaled; });
     signaled = false;
+    return was_pending;
+}
+
+bool ThreadSignal::pending() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    return signaled;
 }
 
 bool ThreadSignal::send() {
@@ -92,6 +109,7 @@ bool ThreadState::wait_for_run_precise(std::unique_lock<std::mutex> &lock, int64
 
 // LOG_DEBUG is compiled out, so set this true to get every thread creation back rather than one per shape
 static constexpr bool LOG_EVERY_THREAD_CREATION = false;
+static constexpr uint32_t INITIAL_FPSCR_FLUSH_TO_ZERO_DEFAULT_NAN = 0x03000000;
 
 int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_priority, SceInt32 affinity_mask, int stack_size, const SceKernelThreadOptParam *option = nullptr) {
     constexpr size_t KERNEL_TLS_SIZE = 0x800;
@@ -133,7 +151,7 @@ int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_pr
 
     std::string alloc_name = fmt::format("Stack for thread {} (#{})", name, id);
     stack = alloc_block(mem, stack_size, alloc_name.c_str());
-    memset(stack.get_ptr<void>().get(mem), 0xcc, stack_size);
+    memset(stack.get_ptr<void>().get(mem), 0xff, stack_size);
 
     const std::string thread_line = fmt::format("[THREAD] created \"{}\" (#{}) entry=0x{:X} prio={} affinity=0x{:X} stack=0x{:X}..0x{:X}", name, id, entry_point.address(), priority, affinity_mask, stack.get(), stack.get() + stack_size);
     bool first_of_shape;
@@ -172,6 +190,7 @@ int ThreadState::init(const char *name, Ptr<const void> entry_point, int init_pr
 
     CPUContext ctx;
     ctx.set_sp(stack_top());
+    ctx.fpscr = INITIAL_FPSCR_FLUSH_TO_ZERO_DEFAULT_NAN;
     if (option) {
         ctx.cpu_registers[0] = option->attr;
         ctx.cpu_registers[1] = option->size;
@@ -246,7 +265,12 @@ void ThreadState::exit_delete(bool exit) {
     }
 
     // Wake if thread waiting on sceKernelWaitSignal
-    signal.send();
+    note_signal_event(SIGNAL_DELETE_WAKE, nullptr, id, signal.send() ? 0 : 1);
+}
+
+void ThreadState::stop_for_process_exit() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    stopped_for_process_exit = true;
 }
 
 // Guest execution gate (config: accurate-thread-scheduling).
@@ -463,6 +487,653 @@ void sched_maybe_yield(SceInt32 affinity_mask, bool enabled, CPUState *cpu) {
 }
 } // namespace
 
+// Per-core lock: On a Vita two threads pinned to the same single core never run at the same time
+// This can cause issues with libfios2 (as its callback and i/o scheduler can deadlock)
+namespace {
+constexpr int CORE_LOCK_CORES = 3;
+constexpr int64_t CORE_LOCK_BEHIND_HLE_NS = 2'000'000;
+constexpr int64_t CORE_LOCK_HLE_TAKEOVER_NS = 20'000'000;
+constexpr int64_t CORE_LOCK_HARD_TAKEOVER_NS = 2'000'000'000;
+constexpr int64_t CORE_LOCK_REPORT_NS = 10'000'000'000;
+constexpr uint32_t CORE_LOCK_LOG_FIRST = 64;
+constexpr uint32_t CORE_LOCK_TAKEOVER_LOG_FIRST = 32;
+constexpr size_t CORE_LOCK_RING_SIZE = 2048;
+constexpr size_t CORE_LOCK_DUMP_EVENTS = 256;
+
+enum CoreEv : uint8_t {
+    CoreEvGrant = 1,
+    CoreEvHandoff,
+    CoreEvRelease,
+    CoreEvYield,
+    CoreEvTakeoverHle,
+    CoreEvTakeoverHard,
+    CoreEvLost,
+    CoreEvStop,
+    CoreEvAbandon,
+    CoreEvMove,
+    CoreEvRelock,
+};
+
+struct CoreWaiter {
+    ThreadState *thread;
+    uint64_t ticket;
+    int64_t since_ns;
+};
+
+struct CoreRec {
+    int64_t ns = 0;
+    SceUID thread = 0;
+    SceUID other = 0;
+    int16_t prio = 0;
+    int16_t other_prio = 0;
+    uint32_t us = 0;
+    uint32_t nid = 0;
+    uint8_t core = 0;
+    uint8_t ev = 0;
+};
+
+struct BehindHle {
+    uint32_t nid = 0;
+    uint32_t count = 0;
+    int64_t max_ns = 0;
+};
+
+struct CoreLock {
+    ThreadState *holder = nullptr;
+    int64_t holder_since_ns = 0;
+    std::atomic<uint64_t> gen{ 0 };
+    std::atomic<int> best_waiter{ 256 };
+    std::vector<CoreWaiter> waiters;
+    uint64_t acquires = 0;
+    uint64_t contended = 0;
+    int64_t wait_ns = 0;
+    int64_t wait_max_ns = 0;
+    std::string wait_max_who;
+    uint32_t yields = 0;
+    uint32_t stops = 0;
+    uint32_t takeovers_hle = 0;
+    uint32_t takeovers_hard = 0;
+    std::array<BehindHle, 16> behind{};
+};
+
+std::mutex g_core_mutex;
+std::condition_variable g_core_cv;
+std::array<CoreLock, CORE_LOCK_CORES> g_cores;
+std::atomic<uint32_t> g_core_boot{ 0 };
+uint64_t g_core_ticket = 0;
+std::array<CoreRec, CORE_LOCK_RING_SIZE> g_core_ring{};
+uint64_t g_core_ring_next = 0;
+int64_t g_core_report_ns = 0;
+uint32_t g_core_handoffs_logged = 0;
+uint32_t g_core_takeovers_logged = 0;
+int64_t g_core_takeover_log_ns = 0;
+int64_t g_core_waited_log_ns = 0;
+std::set<SceUID> g_core_announced;
+
+thread_local int tls_core = -1;
+thread_local uint64_t tls_core_gen = 0;
+thread_local const ThreadState *tls_core_thread = nullptr;
+
+int64_t core_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+int core_of(const SceInt32 affinity) {
+    const uint32_t cores = static_cast<uint32_t>(affinity) & SCE_KERNEL_CPU_MASK_USER_ALL;
+    if (!cores || (cores & (cores - 1)))
+        return -1;
+    return cores == 0x10000 ? 0 : cores == 0x20000 ? 1
+                                                   : 2;
+}
+
+std::string core_thread_desc(const ThreadState *t) {
+    return t ? fmt::format("'{}' ({}) p{}", t->name, t->id, t->priority) : std::string("nobody");
+}
+
+void core_record(const int core, const uint8_t ev, const ThreadState *t, const ThreadState *other, const int64_t ns, const uint32_t nid) {
+    CoreRec &r = g_core_ring[g_core_ring_next++ % CORE_LOCK_RING_SIZE];
+    r.ns = core_now_ns();
+    r.thread = t ? t->id : 0;
+    r.other = other ? other->id : 0;
+    r.prio = static_cast<int16_t>(t ? t->priority : 0);
+    r.other_prio = static_cast<int16_t>(other ? other->priority : 0);
+    r.us = static_cast<uint32_t>(std::clamp<int64_t>(ns / 1000, 0, 0xFFFFFFFFLL));
+    r.nid = nid;
+    r.core = static_cast<uint8_t>(core);
+    r.ev = ev;
+}
+
+void core_update_best(CoreLock &c) {
+    int best = 256;
+    for (const CoreWaiter &w : c.waiters)
+        best = std::min(best, w.thread->priority);
+    c.best_waiter.store(best, std::memory_order_relaxed);
+}
+
+void core_erase_waiter(CoreLock &c, const ThreadState *t) {
+    c.waiters.erase(std::remove_if(c.waiters.begin(), c.waiters.end(), [t](const CoreWaiter &w) { return w.thread == t; }), c.waiters.end());
+    core_update_best(c);
+}
+
+void core_grant(CoreLock &c, ThreadState *t, const int64_t now) {
+    c.holder = t;
+    c.holder_since_ns = now;
+    c.gen.fetch_add(1, std::memory_order_relaxed);
+}
+
+void core_reset_window(CoreLock &c) {
+    c.acquires = 0;
+    c.contended = 0;
+    c.wait_ns = 0;
+    c.wait_max_ns = 0;
+    c.wait_max_who.clear();
+    c.yields = 0;
+    c.stops = 0;
+    c.takeovers_hle = 0;
+    c.takeovers_hard = 0;
+    c.behind = {};
+}
+
+void core_note_wait(CoreLock &c, const ThreadState *waiter, const ThreadState *holder, const int64_t waited) {
+    c.contended++;
+    c.wait_ns += waited;
+    if (waited > c.wait_max_ns) {
+        c.wait_max_ns = waited;
+        c.wait_max_who = core_thread_desc(waiter) + " behind " + core_thread_desc(holder);
+    }
+}
+
+void core_note_behind_hle(CoreLock &c, const uint32_t nid, const int64_t in_call_ns, const bool count_it) {
+    BehindHle *slot = nullptr;
+    for (BehindHle &b : c.behind) {
+        if (b.count && b.nid == nid) {
+            slot = &b;
+            break;
+        }
+        if (!b.count && !slot)
+            slot = &b;
+    }
+    if (!slot)
+        return;
+    if (!slot->count) {
+        slot->nid = nid;
+        slot->count = 1;
+    } else if (count_it) {
+        slot->count++;
+    }
+    slot->max_ns = std::max(slot->max_ns, in_call_ns);
+}
+
+void core_hand_over(CoreLock &c, const int core, const int64_t now) {
+    ThreadState *const prev = c.holder;
+    if (c.waiters.empty()) {
+        c.holder = nullptr;
+        c.gen.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    auto best = c.waiters.begin();
+    for (auto it = c.waiters.begin() + 1; it != c.waiters.end(); ++it) {
+        if (it->thread->priority < best->thread->priority || (it->thread->priority == best->thread->priority && it->ticket < best->ticket))
+            best = it;
+    }
+    const CoreWaiter next = *best;
+    c.waiters.erase(best);
+    core_update_best(c);
+    core_grant(c, next.thread, now);
+    const int64_t waited = now - next.since_ns;
+    core_note_wait(c, next.thread, prev, waited);
+    core_record(core, CoreEvHandoff, next.thread, prev, waited, prev ? prev->last_import_nid : 0);
+    if (g_core_handoffs_logged < CORE_LOCK_LOG_FIRST) {
+        g_core_handoffs_logged++;
+        LOG_INFO("[CORELOCK] core {}: {} got the core after {} us, from {}", core, core_thread_desc(next.thread), waited / 1000, core_thread_desc(prev));
+    }
+    g_core_cv.notify_all();
+}
+
+void core_report(const int64_t now) {
+    if (now - g_core_report_ns < CORE_LOCK_REPORT_NS)
+        return;
+    g_core_report_ns = now;
+    for (int k = 0; k < CORE_LOCK_CORES; k++) {
+        CoreLock &c = g_cores[k];
+        if (!c.acquires)
+            continue;
+        std::string behind;
+        for (const BehindHle &b : c.behind) {
+            if (b.count)
+                behind += fmt::format(" 0x{:08X} x{} (max {:.1f} ms)", b.nid, b.count, b.max_ns / 1e6);
+        }
+        LOG_INFO("[CORELOCK] 10s core {}: acquires={} contended={} wait_total_ms={:.1f} wait_max_ms={:.2f}{} yields={} stops={} takeovers hle={} hard={} waiting now={} holder {}{}",
+            k, c.acquires, c.contended, c.wait_ns / 1e6, c.wait_max_ns / 1e6, c.wait_max_who.empty() ? std::string() : " (" + c.wait_max_who + ")",
+            c.yields, c.stops, c.takeovers_hle, c.takeovers_hard, c.waiters.size(), core_thread_desc(c.holder),
+            behind.empty() ? std::string() : " | waited behind HLE calls:" + behind);
+        core_reset_window(c);
+    }
+}
+
+void core_set_tls(const int core, const ThreadState *t) {
+    tls_core = core;
+    tls_core_gen = g_cores[core].gen.load(std::memory_order_relaxed);
+    tls_core_thread = t;
+}
+
+void core_acquire(ThreadState &t, const int core, const bool relock) {
+    std::unique_lock<std::mutex> lock(g_core_mutex);
+    CoreLock &c = g_cores[core];
+    const int64_t start = core_now_ns();
+    if (g_core_announced.insert(t.id).second)
+        LOG_INFO("[CORELOCK] {} aff 0x{:X} runs under the core {} lock", core_thread_desc(&t), static_cast<uint32_t>(t.affinity_mask), core);
+    c.acquires++;
+    core_report(start);
+    if (!c.holder || c.holder == &t) {
+        if (!c.holder)
+            core_grant(c, &t, start);
+        core_record(core, relock ? CoreEvRelock : CoreEvGrant, &t, nullptr, 0, 0);
+        core_set_tls(core, &t);
+        return;
+    }
+    c.waiters.push_back({ &t, ++g_core_ticket, start });
+    core_update_best(c);
+    bool stop_sent = false;
+    uint64_t seen_enters = 0;
+    int64_t seen_since = 0;
+    bool seen_counted = false;
+    while (c.holder != &t) {
+        ThreadState *const holder = c.holder;
+        const int64_t now = core_now_ns();
+        if (!holder) {
+            core_erase_waiter(c, &t);
+            core_grant(c, &t, now);
+            break;
+        }
+        if (t.leave_requested()) {
+            core_erase_waiter(c, &t);
+            core_record(core, CoreEvAbandon, &t, holder, now - start, 0);
+            return;
+        }
+        if (!stop_sent && t.priority < holder->priority) {
+            stop_sent = true;
+            c.stops++;
+            core_record(core, CoreEvStop, &t, holder, now - start, holder->last_import_nid);
+            stop(*holder->cpu);
+        }
+        uint8_t takeover = 0;
+        int64_t in_call = 0;
+        if (holder->inside_hle()) {
+            const uint64_t enters = holder->hle_calls_entered();
+            if (enters != seen_enters) {
+                seen_enters = enters;
+                seen_since = now;
+                seen_counted = false;
+            }
+            in_call = now - seen_since;
+            if (in_call >= CORE_LOCK_BEHIND_HLE_NS) {
+                core_note_behind_hle(c, holder->last_import_nid, in_call, !seen_counted);
+                seen_counted = true;
+            }
+            if (in_call >= CORE_LOCK_HLE_TAKEOVER_NS)
+                takeover = CoreEvTakeoverHle;
+        } else {
+            seen_enters = 0;
+        }
+        if (!takeover && now - start >= CORE_LOCK_HARD_TAKEOVER_NS)
+            takeover = CoreEvTakeoverHard;
+        if (takeover) {
+            const bool hard = takeover == CoreEvTakeoverHard;
+            core_erase_waiter(c, &t);
+            (hard ? c.takeovers_hard : c.takeovers_hle)++;
+            core_note_wait(c, &t, holder, now - start);
+            core_record(core, takeover, &t, holder, now - start, holder->last_import_nid);
+            if (g_core_takeovers_logged < CORE_LOCK_TAKEOVER_LOG_FIRST || now - g_core_takeover_log_ns >= CORE_LOCK_REPORT_NS) {
+                g_core_takeovers_logged++;
+                g_core_takeover_log_ns = now;
+                if (hard)
+                    LOG_ERROR("[CORELOCK] {} took core {} after waiting {} ms: {} has kept it for over 2 s (import 0x{:08X}) - emulation-only safety net, please report",
+                        core_thread_desc(&t), core, (now - start) / 1'000'000, core_thread_desc(holder), holder->last_import_nid);
+                else
+                    LOG_WARN("[CORELOCK] {} took core {} after waiting {} ms: {} has been inside one HLE call for {} ms (import 0x{:08X}), a blocking call that keeps the core",
+                        core_thread_desc(&t), core, (now - start) / 1'000'000, core_thread_desc(holder), in_call / 1'000'000, holder->last_import_nid);
+            }
+            core_grant(c, &t, now);
+            break;
+        }
+        if (now - start >= 1'000'000'000 && now - g_core_waited_log_ns >= 1'000'000'000) {
+            g_core_waited_log_ns = now;
+            LOG_WARN("[CORELOCK] {} has waited {} ms for core {}, held by {} for {} ms, {} (import 0x{:08X})", core_thread_desc(&t), (now - start) / 1'000'000, core,
+                core_thread_desc(holder), (now - c.holder_since_ns) / 1'000'000, holder->inside_hle() ? "inside an HLE call" : "running guest code", holder->last_import_nid);
+        }
+        g_core_cv.wait_for(lock, std::chrono::milliseconds(1));
+    }
+    if (relock)
+        core_record(core, CoreEvRelock, &t, nullptr, core_now_ns() - start, 0);
+    core_set_tls(core, &t);
+}
+
+void core_release_current(const uint8_t ev) {
+    if (tls_core < 0)
+        return;
+    const std::lock_guard<std::mutex> lock(g_core_mutex);
+    CoreLock &c = g_cores[tls_core];
+    if (c.holder == tls_core_thread && c.gen.load(std::memory_order_relaxed) == tls_core_gen) {
+        const int64_t now = core_now_ns();
+        core_record(tls_core, ev, c.holder, nullptr, now - c.holder_since_ns, c.holder->last_import_nid);
+        if (ev == CoreEvYield)
+            c.yields++;
+        core_hand_over(c, tls_core, now);
+    } else {
+        core_record(tls_core, CoreEvLost, tls_core_thread, c.holder, 0, tls_core_thread ? tls_core_thread->last_import_nid : 0);
+    }
+    tls_core = -1;
+    tls_core_thread = nullptr;
+}
+
+bool core_lock_held_by(const ThreadState *t) {
+    return tls_core >= 0 && tls_core_thread == t;
+}
+
+bool core_still_mine(const int core, const ThreadState *t) {
+    return tls_core == core && tls_core_thread == t && g_cores[core].gen.load(std::memory_order_relaxed) == tls_core_gen;
+}
+
+void core_lock_before_guest(ThreadState &t) {
+    const int want = core_of(t.affinity_mask);
+    if (tls_core >= 0) {
+        if (want >= 0 && core_still_mine(want, &t))
+            return;
+        core_release_current(CoreEvMove);
+    }
+    if (want >= 0)
+        core_acquire(t, want, false);
+}
+
+void core_lock_after_run(const ThreadState &t) {
+    if (tls_core < 0)
+        return;
+    const CoreLock &c = g_cores[tls_core];
+    if (c.gen.load(std::memory_order_relaxed) != tls_core_gen || c.best_waiter.load(std::memory_order_relaxed) < t.priority)
+        core_release_current(CoreEvYield);
+}
+
+void core_lock_forget(const ThreadState *t) {
+    const std::lock_guard<std::mutex> lock(g_core_mutex);
+    for (int k = 0; k < CORE_LOCK_CORES; k++) {
+        CoreLock &c = g_cores[k];
+        if (std::any_of(c.waiters.begin(), c.waiters.end(), [t](const CoreWaiter &w) { return w.thread == t; }))
+            core_erase_waiter(c, t);
+        if (c.holder == t) {
+            LOG_WARN("[CORELOCK] {} was destroyed while holding core {} - a release path is missing", core_thread_desc(t), k);
+            core_hand_over(c, k, core_now_ns());
+        }
+    }
+}
+} // namespace
+
+void core_lock_begin_boot(const uint32_t boot) {
+    {
+        const std::lock_guard<std::mutex> lock(g_core_mutex);
+        for (CoreLock &c : g_cores) {
+            c.holder = nullptr;
+            c.gen.fetch_add(1, std::memory_order_relaxed);
+            c.waiters.clear();
+            c.best_waiter.store(256, std::memory_order_relaxed);
+            core_reset_window(c);
+        }
+        g_core_ring_next = 0;
+        g_core_handoffs_logged = 0;
+        g_core_takeovers_logged = 0;
+        g_core_announced.clear();
+        g_core_report_ns = core_now_ns();
+    }
+    g_core_boot.store(boot, std::memory_order_relaxed);
+    LOG_INFO("[CORELOCK] game boot {} in this app session: guest threads pinned to the same single core take turns on it, as on a Vita", boot);
+}
+
+bool core_lock_shares_core(const SceInt32 a, const SceInt32 b) {
+    const int core = core_of(a);
+    return core >= 0 && core == core_of(b);
+}
+
+void core_lock_release_for_block() {
+    core_release_current(CoreEvRelease);
+}
+
+void core_lock_take_current() {
+    ThreadState *const t = g_tls_guest_thread;
+    if (!t)
+        return;
+    const int want = core_of(t->affinity_mask);
+    if (want < 0 || core_still_mine(want, t))
+        return;
+    if (tls_core >= 0)
+        core_release_current(CoreEvMove);
+    core_acquire(*t, want, true);
+}
+
+std::string core_lock_report(KernelState &kernel) {
+    struct WaiterSnap {
+        SceUID id;
+        int prio;
+        int64_t waited_ns;
+    };
+    struct CoreSnap {
+        SceUID holder = 0;
+        int prio = 0;
+        int64_t held_ns = 0;
+        bool in_hle = false;
+        uint32_t nid = 0;
+        std::vector<WaiterSnap> waiters;
+    };
+    std::array<CoreSnap, CORE_LOCK_CORES> cores;
+    std::vector<CoreRec> events;
+    uint64_t total = 0;
+    const int64_t now = core_now_ns();
+    {
+        const std::lock_guard<std::mutex> lock(g_core_mutex);
+        for (int k = 0; k < CORE_LOCK_CORES; k++) {
+            const CoreLock &c = g_cores[k];
+            if (c.holder) {
+                cores[k].holder = c.holder->id;
+                cores[k].prio = c.holder->priority;
+                cores[k].held_ns = now - c.holder_since_ns;
+                cores[k].in_hle = c.holder->inside_hle();
+                cores[k].nid = c.holder->last_import_nid;
+            }
+            for (const CoreWaiter &w : c.waiters)
+                cores[k].waiters.push_back({ w.thread->id, w.thread->priority, now - w.since_ns });
+        }
+        total = g_core_ring_next;
+        const uint64_t count = std::min<uint64_t>(total, CORE_LOCK_DUMP_EVENTS);
+        for (uint64_t i = total - count; i < total; i++)
+            events.push_back(g_core_ring[i % CORE_LOCK_RING_SIZE]);
+    }
+    std::vector<std::pair<SceUID, std::string>> names;
+    const auto who = [&](const SceUID id, const int prio) -> std::string {
+        if (!id)
+            return "nobody";
+        std::string name;
+        const auto it = std::find_if(names.begin(), names.end(), [id](const std::pair<SceUID, std::string> &n) { return n.first == id; });
+        if (it != names.end()) {
+            name = it->second;
+        } else {
+            const ThreadStatePtr th = kernel.get_thread(id);
+            name = th ? th->name : std::string("?");
+            names.emplace_back(id, name);
+        }
+        return fmt::format("'{}' ({}) p{}", name, id, prio);
+    };
+    std::string out = fmt::format("per-core lock, game boot {}\n", g_core_boot.load(std::memory_order_relaxed));
+    for (int k = 0; k < CORE_LOCK_CORES; k++) {
+        const CoreSnap &s = cores[k];
+        out += fmt::format("core {}: held by {}", k, who(s.holder, s.prio));
+        if (s.holder)
+            out += fmt::format(" for {:.1f} ms, {} (import 0x{:08X})", s.held_ns / 1e6, s.in_hle ? "inside an HLE call" : "running guest code", s.nid);
+        if (s.waiters.empty()) {
+            out += ", no waiters\n";
+        } else {
+            out += ", waiting:";
+            for (const WaiterSnap &w : s.waiters)
+                out += fmt::format(" {} for {:.1f} ms;", who(w.id, w.prio), w.waited_ns / 1e6);
+            out += "\n";
+        }
+    }
+    out += fmt::format("last {} of {} core lock events (oldest first, ms before this dump):\n", events.size(), total);
+    for (const CoreRec &r : events) {
+        const std::string other = who(r.other, r.other_prio);
+        std::string what;
+        switch (r.ev) {
+        case CoreEvGrant:
+            what = "took the free core";
+            break;
+        case CoreEvHandoff:
+            what = fmt::format("got the core after {} us, from {} (import 0x{:08X})", r.us, other, r.nid);
+            break;
+        case CoreEvRelease:
+            what = fmt::format("blocked after holding the core {} us (import 0x{:08X})", r.us, r.nid);
+            break;
+        case CoreEvYield:
+            what = fmt::format("gave the core to a higher-priority waiter after {} us (import 0x{:08X})", r.us, r.nid);
+            break;
+        case CoreEvTakeoverHle:
+            what = fmt::format("TOOK the core after {} us from {}, inside HLE call 0x{:08X}", r.us, other, r.nid);
+            break;
+        case CoreEvTakeoverHard:
+            what = fmt::format("TOOK the core after {} us from {} (2 s safety net, import 0x{:08X})", r.us, other, r.nid);
+            break;
+        case CoreEvLost:
+            what = fmt::format("found its core taken (now {}, import 0x{:08X})", other, r.nid);
+            break;
+        case CoreEvStop:
+            what = fmt::format("outranks {} and asked it to stop (waiting {} us, holder import 0x{:08X})", other, r.us, r.nid);
+            break;
+        case CoreEvAbandon:
+            what = fmt::format("stopped waiting after {} us (delete, suspend or world stop), holder {}", r.us, other);
+            break;
+        case CoreEvMove:
+            what = fmt::format("left the core (affinity changed) after {} us", r.us);
+            break;
+        case CoreEvRelock:
+            what = fmt::format("has the core to re-lock its lwcond mutex (waited {} us)", r.us);
+            break;
+        default:
+            what = "?";
+            break;
+        }
+        out += fmt::format("  {:9.3f} core {} {} {}\n", (r.ns - now) / 1e6, r.core, who(r.thread, r.prio), what);
+    }
+    return out;
+}
+
+namespace {
+std::mutex g_deferred_dump_mutex;
+std::string g_deferred_dump_reason;
+bool g_deferred_dump_pending = false;
+} // namespace
+
+void request_deferred_thread_dump(const std::string &reason) {
+    const std::lock_guard<std::mutex> lock(g_deferred_dump_mutex);
+    g_deferred_dump_reason = reason;
+    g_deferred_dump_pending = true;
+}
+
+bool take_deferred_thread_dump(std::string &reason) {
+    const std::lock_guard<std::mutex> lock(g_deferred_dump_mutex);
+    if (!g_deferred_dump_pending)
+        return false;
+    g_deferred_dump_pending = false;
+    reason = g_deferred_dump_reason;
+    return true;
+}
+
+namespace {
+std::mutex g_guest_assert_mutex;
+std::string g_guest_assert_first;
+uint32_t g_guest_asserts = 0;
+bool g_guest_assert_hold_logged = false;
+
+struct SignalEvent {
+    int64_t us = 0;
+    SceUID caller = 0;
+    SceUID target = 0;
+    uint32_t lr = 0;
+    uint32_t caller_lr = 0;
+    uint8_t op = 0;
+    int8_t result = 0;
+};
+constexpr size_t SIGNAL_RING = 8192;
+SignalEvent g_signal_ring[SIGNAL_RING];
+std::atomic<uint64_t> g_signal_ring_pos{ 0 };
+} // namespace
+
+// the first one of a boot gets an all-thread dump at once, while the other threads still show the state that tripped it
+void note_guest_assert(const std::string &what) {
+    bool first;
+    {
+        const std::lock_guard<std::mutex> lock(g_guest_assert_mutex);
+        first = g_guest_asserts++ == 0;
+        if (first)
+            g_guest_assert_first = what;
+    }
+    if (first)
+        request_deferred_thread_dump("guest assert: " + what);
+}
+
+// forcing a broken library's sync objects open only turns its hang into a host crash
+bool guest_assert_holds_breakers(std::string &first_note) {
+    const std::lock_guard<std::mutex> lock(g_guest_assert_mutex);
+    if (!g_guest_asserts)
+        return false;
+    if (!g_guest_assert_hold_logged) {
+        g_guest_assert_hold_logged = true;
+        first_note = fmt::format("{} ({} guest breakpoint(s) this boot)", g_guest_assert_first, g_guest_asserts);
+    }
+    return true;
+}
+
+void guest_assert_begin_boot() {
+    const std::lock_guard<std::mutex> lock(g_guest_assert_mutex);
+    g_guest_assert_first.clear();
+    g_guest_asserts = 0;
+    g_guest_assert_hold_logged = false;
+    g_signal_ring_pos.store(0, std::memory_order_relaxed);
+}
+
+void note_signal_event(const uint8_t op, ThreadState *caller, const SceUID target, const int result) {
+    SignalEvent e;
+    e.us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    e.caller = caller ? caller->id : 0;
+    e.target = target;
+    e.op = op;
+    e.result = static_cast<int8_t>(result);
+    if (caller && caller->cpu) {
+        // the libult wrappers push {r4, lr} before the import, so [sp+4] is the wrapper's caller
+        e.lr = read_lr(*caller->cpu);
+        uint32_t word = 0;
+        if (debug_safe_copy_guest(caller->get_mem(), read_sp(*caller->cpu) + 4, &word, sizeof(word)))
+            e.caller_lr = word;
+    }
+    g_signal_ring[g_signal_ring_pos.fetch_add(1, std::memory_order_relaxed) % SIGNAL_RING] = e;
+}
+
+std::string signal_event_report(const std::function<std::string(SceUID)> &name_of, const size_t max_events) {
+    static const char *const OPS[] = { "wait>", "wait<", "send", "del-wake" };
+    const uint64_t end = g_signal_ring_pos.load(std::memory_order_relaxed);
+    const uint64_t n = std::min<uint64_t>({ end, static_cast<uint64_t>(max_events), static_cast<uint64_t>(SIGNAL_RING) });
+    if (!n)
+        return " none";
+    const int64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto who = [&](const SceUID id) {
+        const std::string name = id ? name_of(id) : std::string();
+        return name.empty() ? fmt::format("({})", id) : fmt::format("'{}' ({})", name, id);
+    };
+    std::string out = fmt::format(" {} event(s) recorded this boot, last {} (wait> result 1 = a signal was already pending; send result 1 = already pending, -1 = no such thread):", end, n);
+    for (uint64_t i = end - n; i < end; i++) {
+        const SignalEvent &e = g_signal_ring[i % SIGNAL_RING];
+        out += fmt::format("\n    {:.3f} ms ago {} {} -> {} result {} lr 0x{:X} caller lr 0x{:X}", (now_us - e.us) / 1000.0, e.op < 4 ? OPS[e.op] : "?",
+            who(e.caller), who(e.target), static_cast<int>(e.result), e.lr, e.caller_lr);
+    }
+    return out;
+}
+
 void guest_sched_set_cores(int cores) {
     const std::lock_guard<std::mutex> lock(g_sched_mutex);
     g_sched_cores = std::clamp(cores, 1, 4); // the Vita has four cores, three for the application
@@ -472,6 +1143,7 @@ void guest_sched_set_cores(int cores) {
 }
 
 void guest_sched_release_for_block() {
+    core_release_current(CoreEvRelease);
     if (tls_holds_token) {
         g_sched_yield_block.fetch_add(1, std::memory_order_relaxed);
         sched_release_internal(tls_token_cpu);
@@ -510,6 +1182,286 @@ void guest_sched_forget_cpu(CPUState *cpu) {
         g_sched_cv.notify_all();
 }
 
+namespace {
+constexpr int64_t WAKE_GATE_CPU_US = 20;
+constexpr int64_t WAKE_GATE_LONG_HLE_NS = 300'000;
+constexpr int64_t WAKE_GATE_STATE_POLL_NS = 100'000;
+constexpr int64_t WAKE_GATE_NO_CLOCK_NS = 200'000;
+constexpr int64_t WAKE_GATE_CAP_NS = 50'000'000;
+constexpr int64_t WAKE_GATE_CPU_POLL_NS = 10'000;
+#ifdef _WIN32
+constexpr int64_t WAKE_GATE_CPU_TICKS_PER_US = 3000;
+constexpr int64_t WAKE_GATE_SPIN_NS = 100'000;
+constexpr auto WAKE_GATE_BLOCK_POLL = std::chrono::milliseconds(1);
+#else
+constexpr int64_t WAKE_GATE_CPU_TICKS_PER_US = 1000;
+constexpr int64_t WAKE_GATE_SPIN_NS = 20'000;
+constexpr auto WAKE_GATE_BLOCK_POLL = std::chrono::microseconds(100);
+#endif
+
+std::mutex g_gate_mutex;
+std::condition_variable g_gate_cv;
+std::atomic<int64_t> g_gate_last_cap_log_ns{ 0 };
+std::atomic<bool> g_gate_clock_warned{ false };
+constexpr int64_t START_PREEMPT_CAP_NS = 20'000'000;
+std::atomic<int64_t> g_start_preempt_last_cap_log_ns{ 0 };
+
+SceInt32 start_user_cores(const SceInt32 affinity) {
+    const SceInt32 cores = affinity & SCE_KERNEL_CPU_MASK_USER_ALL;
+    return cores ? cores : SCE_KERNEL_CPU_MASK_USER_ALL;
+}
+
+int64_t gate_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void wake_gate_notify() {
+    {
+        const std::lock_guard<std::mutex> lock(g_gate_mutex);
+    }
+    g_gate_cv.notify_all();
+}
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+char host_thread_state(int tid) {
+    if (tid <= 0)
+        return '?';
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/self/task/%d/stat", tid);
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return '?';
+    char buf[512];
+    const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+    ::close(fd);
+    if (n <= 0)
+        return '?';
+    buf[n] = 0;
+    const char *const paren = std::strrchr(buf, ')');
+    if (!paren || paren[1] != ' ' || !paren[2])
+        return '?';
+    return paren[2];
+}
+
+constexpr bool GUEST_HOST_PRIORITY = true;
+constexpr bool AUDIO_THREAD_HOST_PRIORITY = true;
+constexpr int HOST_NICE_PRIORITY_STEP = 12;
+constexpr int HOST_NICE_MAX_RAISE = 4;
+constexpr int HOST_NICE_MAX_LOWER = 3;
+constexpr int HOST_AUDIO_NICE = -16;
+
+std::once_flag g_host_nice_once;
+int g_host_base_nice = 0;
+std::atomic<bool> g_host_nice_refused{ false };
+
+int host_nice_for(const int priority) {
+    const int delta = priority - SCE_KERNEL_GAME_DEFAULT_PRIORITY_ACTUAL;
+    const int steps = delta >= 0 ? delta / HOST_NICE_PRIORITY_STEP : -((-delta + HOST_NICE_PRIORITY_STEP - 1) / HOST_NICE_PRIORITY_STEP);
+    return std::clamp(g_host_base_nice + std::clamp(steps, -HOST_NICE_MAX_RAISE, HOST_NICE_MAX_LOWER), -20, 19);
+}
+#endif
+} // namespace
+
+void start_preempt_wait(KernelState &kernel, const SceUID starter_id, const ThreadStatePtr &started) {
+    const ThreadStatePtr starter = kernel.get_thread(starter_id);
+    if (!starter || !started || starter == started || !kernel.preempt_on_wake || started->priority >= starter->priority
+        || !(start_user_cores(started->affinity_mask) & start_user_cores(starter->affinity_mask)))
+        return;
+    guest_sched_release_for_block();
+    const int64_t start = gate_now_ns();
+    bool capped = false;
+    {
+        std::unique_lock<std::mutex> lock(started->mutex);
+        while (started->status == ThreadStatus::run && !started->is_delete_requested()) {
+            if (gate_now_ns() - start >= START_PREEMPT_CAP_NS) {
+                capped = true;
+                break;
+            }
+            started->status_cond.wait_for(lock, std::chrono::microseconds(500));
+        }
+    }
+    if (capped) {
+        const int64_t now = gate_now_ns();
+        int64_t last = g_start_preempt_last_cap_log_ns.load(std::memory_order_relaxed);
+        if (now - last >= 1'000'000'000 && g_start_preempt_last_cap_log_ns.compare_exchange_strong(last, now))
+            LOG_WARN("[STARTPREEMPT] '{}' ({}) stopped waiting after {} ms for '{}' ({}), the higher-priority thread it started, which has not blocked yet",
+                starter->name, starter_id, START_PREEMPT_CAP_NS / 1'000'000, started->name, started->id);
+    }
+}
+
+void ThreadState::capture_host_cpu_clock() {
+    if (host_cpu_ready.load(std::memory_order_relaxed))
+        return;
+#ifdef _WIN32
+    HANDLE handle = nullptr;
+    if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &handle, THREAD_QUERY_LIMITED_INFORMATION, FALSE, 0)) {
+        host_cpu_handle = handle;
+        host_cpu_ready.store(true, std::memory_order_release);
+    }
+#elif !defined(__APPLE__)
+    host_tid = static_cast<int>(syscall(SYS_gettid));
+    clockid_t clock_id;
+    if (pthread_getcpuclockid(pthread_self(), &clock_id) == 0) {
+        host_cpu_clock = static_cast<int64_t>(clock_id);
+        host_cpu_ready.store(true, std::memory_order_release);
+    }
+#endif
+    if (!host_cpu_ready.load(std::memory_order_relaxed) && !g_gate_clock_warned.exchange(true))
+        LOG_WARN("[WAKEGATE] no host thread CPU clock: a thread woken by a higher-priority thread waits at most {} us for its waker to move on", WAKE_GATE_NO_CLOCK_NS / 1000);
+    apply_host_priority();
+}
+
+void ThreadState::apply_host_priority() {
+#if !defined(_WIN32) && !defined(__APPLE__)
+    const int tid = host_tid;
+    if (!GUEST_HOST_PRIORITY || !tid)
+        return;
+    std::call_once(g_host_nice_once, [tid] {
+        errno = 0;
+        const int nice = getpriority(PRIO_PROCESS, static_cast<id_t>(tid));
+        g_host_base_nice = errno ? 0 : nice;
+        LOG_INFO("Guest threads start at host nice {}; host nice follows the guest priority ({} for audio threads)", g_host_base_nice, HOST_AUDIO_NICE);
+    });
+    const int prio = priority;
+    const bool audio = AUDIO_THREAD_HOST_PRIORITY && audio_work_api.load(std::memory_order_relaxed) && prio < SCE_KERNEL_GAME_DEFAULT_PRIORITY_ACTUAL;
+    const int nice = audio ? std::min(host_nice_for(prio), HOST_AUDIO_NICE) : host_nice_for(prio);
+    if (setpriority(PRIO_PROCESS, static_cast<id_t>(tid), nice) != 0 && !g_host_nice_refused.exchange(true)) {
+        const int err = errno;
+        LOG_WARN("Host nice {} for guest priority {} refused: errno {} ({})", nice, prio, err, strerror(err));
+    }
+#endif
+}
+
+void ThreadState::note_audio_work(const char *api) {
+    const char *none = nullptr;
+    if (audio_work_api.load(std::memory_order_relaxed) || !audio_work_api.compare_exchange_strong(none, api, std::memory_order_relaxed))
+        return;
+#if !defined(_WIN32) && !defined(__APPLE__)
+    if (GUEST_HOST_PRIORITY && AUDIO_THREAD_HOST_PRIORITY && priority < SCE_KERNEL_GAME_DEFAULT_PRIORITY_ACTUAL) {
+        apply_host_priority();
+        LOG_INFO("Thread '{}' ({}) does audio work ({}): host nice {}", name, id, api, HOST_AUDIO_NICE);
+    }
+#endif
+}
+
+void note_audio_thread(KernelState &kernel, const SceUID thread_id, const char *api) {
+    thread_local bool noted = false;
+    if (noted)
+        return;
+    noted = true;
+    if (const ThreadStatePtr thread = kernel.get_thread(thread_id))
+        thread->note_audio_work(api);
+}
+
+int64_t ThreadState::host_cpu_now() const {
+    if (!host_cpu_ready.load(std::memory_order_acquire))
+        return -1;
+#ifdef _WIN32
+    ULONG64 cycles = 0;
+    if (!QueryThreadCycleTime(static_cast<HANDLE>(host_cpu_handle), &cycles))
+        return -1;
+    return static_cast<int64_t>(cycles);
+#elif !defined(__APPLE__)
+    timespec ts{};
+    if (clock_gettime(static_cast<clockid_t>(host_cpu_clock), &ts) != 0)
+        return -1;
+    return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+#else
+    return -1;
+#endif
+}
+
+char ThreadState::host_state() const {
+#if !defined(_WIN32) && !defined(__APPLE__)
+    return host_thread_state(host_tid);
+#else
+    return '?';
+#endif
+}
+
+void ThreadState::arm_wake_gate() {
+    const ThreadState *const waker = g_tls_guest_thread;
+    if (!waker || waker == this || waker->priority >= priority)
+        return;
+    gate_h0 = waker->hle_returns.load(std::memory_order_acquire);
+    gate_kind = wait_prim_kind;
+    gate_uid = wait_prim_uid;
+    gate_waker.store(waker->id, std::memory_order_release);
+}
+
+void ThreadState::wait_wake_gate() {
+    const SceUID waker_id = gate_waker.exchange(0, std::memory_order_acquire);
+    if (!waker_id)
+        return;
+    const uint64_t h0 = gate_h0;
+    const ThreadStatePtr waker = kernel.get_thread(waker_id);
+    guest_sched_release_for_block();
+    if (!waker)
+        return;
+    const int64_t start = gate_now_ns();
+    const int64_t cpu0 = waker->host_cpu_now();
+    const int64_t cpu_needed = WAKE_GATE_CPU_US * WAKE_GATE_CPU_TICKS_PER_US;
+    uint64_t hle_seen = 0;
+    int64_t hle_seen_ns = 0;
+    int64_t hle_next_state_ns = 0;
+    int64_t last_cpu_poll = 0;
+    bool capped = false;
+    waker->gated_wakees.fetch_add(1);
+    for (uint32_t iter = 0;; iter++) {
+        const int64_t now = gate_now_ns();
+        const int64_t waited = now - start;
+        if (delete_requested || exit_requested || suspend_requested || world_stop_requested)
+            break;
+        const uint64_t returns = waker->hle_returns.load();
+        if (returns >= h0 + 2 || waker->status != ThreadStatus::run || waker->is_delete_requested())
+            break;
+        if (cpu0 >= 0 && (iter == 0 || now - last_cpu_poll >= WAKE_GATE_CPU_POLL_NS)) {
+            last_cpu_poll = now;
+            const int64_t cpu = waker->host_cpu_now();
+            if (cpu < 0 || cpu - cpu0 >= cpu_needed)
+                break;
+        }
+        const uint64_t enters = waker->hle_enters.load();
+        if (enters > returns) {
+            if (enters != hle_seen) {
+                hle_seen = enters;
+                hle_seen_ns = now;
+                hle_next_state_ns = now + WAKE_GATE_STATE_POLL_NS;
+            } else if (now >= hle_next_state_ns) {
+                hle_next_state_ns = now + WAKE_GATE_STATE_POLL_NS;
+                const char state = waker->host_state();
+                if (state != 'R' && (state != '?' || now - hle_seen_ns >= WAKE_GATE_LONG_HLE_NS))
+                    break;
+            }
+        } else {
+            hle_seen = 0;
+            if (cpu0 < 0 && waited >= WAKE_GATE_NO_CLOCK_NS)
+                break;
+        }
+        if (waited >= WAKE_GATE_CAP_NS) {
+            capped = true;
+            break;
+        }
+        if (waited < WAKE_GATE_SPIN_NS) {
+            std::this_thread::yield();
+            continue;
+        }
+        std::unique_lock<std::mutex> lock(g_gate_mutex);
+        if (waker->hle_returns.load() < h0 + 2 && waker->status == ThreadStatus::run)
+            g_gate_cv.wait_for(lock, WAKE_GATE_BLOCK_POLL);
+    }
+    waker->gated_wakees.fetch_sub(1);
+
+    if (capped) {
+        const int64_t now = gate_now_ns();
+        int64_t last = g_gate_last_cap_log_ns.load(std::memory_order_relaxed);
+        if (now - last >= 1'000'000'000 && g_gate_last_cap_log_ns.compare_exchange_strong(last, now))
+            LOG_WARN("[WAKEGATE] '{}' ({}) stopped waiting after {} ms for '{}' ({}), which woke it through {}#{} and has not moved on since (HLE calls entered {} returned {}, {} at the wake, last import 0x{:08X})",
+                name, id, WAKE_GATE_CAP_NS / 1'000'000, waker->name, waker_id, gate_kind ? gate_kind : "?", gate_uid,
+                waker->hle_enters.load(), waker->hle_returns.load(), h0, waker->last_import_nid);
+    }
+}
+
 thread_local ThreadState *g_tls_guest_thread = nullptr;
 
 void ThreadState::run_loop() {
@@ -531,6 +1483,8 @@ void ThreadState::run_loop() {
     std::unique_lock<std::mutex> lock(mutex);
     ++call_level;
     const bool top_level = call_level == 1;
+    if (top_level)
+        capture_host_cpu_clock();
 
     auto run_thread_end_callback = [&]() {
         if (!run_end_callback)
@@ -542,6 +1496,10 @@ void ThreadState::run_loop() {
 
         const ThreadStatus old_status = status;
         const uint32_t old_returned_value = returned_value;
+        const bool old_exit_requested = exit_requested;
+        const bool old_delete_requested = delete_requested;
+        exit_requested = false;
+        delete_requested = false;
         status = ThreadStatus::run;
 
         lock.unlock();
@@ -550,6 +1508,8 @@ void ThreadState::run_loop() {
             LOG_WARN("Thread end event handler returned {}", log_hex(ret));
         lock.lock();
 
+        exit_requested = exit_requested || old_exit_requested;
+        delete_requested = delete_requested || old_delete_requested;
         status = old_status;
         returned_value = old_returned_value;
     };
@@ -600,15 +1560,25 @@ void ThreadState::run_loop() {
                 continue;
             }
 
+            if (stopped_for_process_exit && top_level) {
+                guest_sched_release_for_block();
+                update_status(ThreadStatus::suspend);
+                continue;
+            }
+
             const bool do_step = single_stepping;
             if (do_step)
                 single_stepping = false;
 
             lock.unlock();
 
+            if (gate_waker.load(std::memory_order_relaxed) != 0)
+                wait_wake_gate();
+
             // Take the guest execution gate before running any guest code
             const bool gated = kernel.accurate_thread_scheduling;
             sched_acquire(priority, affinity_mask, gated, cpu.get(), name, id);
+            core_lock_before_guest(*this);
 
             // Single step or run
             const int res = do_step ? step(*cpu) : run(*cpu);
@@ -619,16 +1589,21 @@ void ThreadState::run_loop() {
                 // breadcrumbs for the hang dump: free here, a global lock inside call_import
                 last_import_nid = nid;
                 last_import_lr = read_lr(*cpu);
-                push_import_ring(nid);
+                push_import_ring(nid, last_import_lr);
+                hle_enters.store(hle_enters.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
                 kernel.call_import(*cpu, nid, id);
+                hle_returns.store(hle_returns.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+                if (gated_wakees.load() > 0)
+                    wake_gate_notify();
                 clear_exclusive(*cpu);
             }
 
             // hold the token across the HLE call; give it up on timeslice or preemption
             sched_maybe_yield(affinity_mask, gated, cpu.get());
+            core_lock_after_run(*this);
 
             // handle pending abort (exception handler from page fault)
-            if (cpu->abort_pending.exchange(false))
+            if (cpu->abort_pending.load(std::memory_order_relaxed) && cpu->abort_pending.exchange(false))
                 dispatch_abort(*cpu);
 
             // Cue Probe
@@ -664,8 +1639,12 @@ void ThreadState::run_loop() {
                     const uint32_t nid = *Ptr<uint32_t>(read_pc(*cpu) + 4).get(mem);
                     last_import_nid = nid;
                     last_import_lr = read_lr(*cpu);
-                    push_import_ring(nid);
+                    push_import_ring(nid, last_import_lr);
+                    hle_enters.store(hle_enters.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
                     kernel.call_import(*cpu, nid, id);
+                    hle_returns.store(hle_returns.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+                    if (gated_wakees.load() > 0)
+                        wake_gate_notify();
                     clear_exclusive(*cpu);
                 }
                 probe_handled = true;
@@ -792,6 +1771,29 @@ uint32_t ThreadState::run_guest_function(Address callback_address, SceSize args,
     return returned_value;
 }
 
+uint32_t ThreadState::run_guest_callback(Address callback_address, const std::vector<uint32_t> &args) {
+    {
+        const std::lock_guard<std::mutex> thread_lock(mutex);
+        if (status != ThreadStatus::dormant || delete_requested)
+            return 0;
+
+        run_start_callback = false;
+        load_context(*cpu, init_cpu_ctx);
+        write_pc(*cpu, callback_address);
+        write_lr(*cpu, kernel.halt_instruction_pc);
+        if (args.size() > 4 && (args.size() - 4) % 2)
+            write_sp(*cpu, read_sp(*cpu) - 4);
+        push_arguments(args);
+        status = ThreadStatus::run;
+        status_cond.notify_one();
+    }
+    guest_sched_release_for_block();
+    std::unique_lock<std::mutex> lock(mutex);
+    while (!status_cond.wait_for(lock, std::chrono::milliseconds(100), [&]() { return status == ThreadStatus::dormant || delete_requested; })) {
+    }
+    return returned_value;
+}
+
 ThreadState::ThreadState(SceUID id, KernelState &kernel, MemState &mem)
     : id(id)
     , kernel(kernel)
@@ -799,14 +1801,19 @@ ThreadState::ThreadState(SceUID id, KernelState &kernel, MemState &mem)
 }
 
 ThreadState::~ThreadState() {
+    core_lock_forget(this);
     guest_sched_forget_cpu(cpu.get());
+#ifdef _WIN32
+    if (host_cpu_handle)
+        CloseHandle(static_cast<HANDLE>(host_cpu_handle));
+#endif
 }
 
 void ThreadState::update_status(ThreadStatus status, std::optional<ThreadStatus> expected) {
     if (expected)
         assert(expected.value() == this->status);
 
-    if (status == ThreadStatus::wait && cpu && cpu.get() == guest_sched_token_cpu())
+    if (status == ThreadStatus::wait && cpu && (cpu.get() == guest_sched_token_cpu() || core_lock_held_by(this)))
         guest_sched_release_for_block();
 
     // Don't apply the requested wait transition if being removed to not block deletion
@@ -816,8 +1823,14 @@ void ThreadState::update_status(ThreadStatus status, std::optional<ThreadStatus>
     if (status == ThreadStatus::run)
         kernel.thread_wake_counter.fetch_add(1, std::memory_order_relaxed);
 
+    if (status == ThreadStatus::run && expected && *expected == ThreadStatus::wait)
+        arm_wake_gate();
+
     this->status = status;
     status_cond.notify_all();
+
+    if (status != ThreadStatus::run && gated_wakees.load() > 0)
+        wake_gate_notify();
 
     if (status == ThreadStatus::dormant) {
         raise_waiting_threads();
@@ -879,6 +1892,15 @@ void ThreadState::resume_if_suspended() {
         update_status(ThreadStatus::run);
 }
 
+void ThreadState::release_pause() {
+    const std::lock_guard<std::mutex> lock(mutex);
+    // clear the pause request whether or not the thread parked and never touch a VM or world-stop suspension
+    suspend_requested = false;
+    external_suspend = false;
+    if (status == ThreadStatus::suspend && !vm_suspended && !world_stopped)
+        update_status(ThreadStatus::run);
+}
+
 void ThreadState::request_world_stop() {
     std::unique_lock<std::mutex> lock(mutex);
     world_stop_requested = true;
@@ -930,6 +1952,7 @@ bool ThreadState::resume_from_world() {
 // A retail game never executes a breakpoint on purpose. When one fires it is a library trapping on a broken invariant it found.
 void ThreadState::report_guest_breakpoint(uint32_t pc) {
     guest_breakpoints++;
+    note_guest_assert(fmt::format("thread '{}' ({}) trapped at 0x{:08X}", name, id, pc));
     static std::atomic<uint32_t> total{ 0 };
     static std::atomic<int64_t> last_verbose_us{ 0 };
     const uint32_t n = total.fetch_add(1, std::memory_order_relaxed) + 1;

@@ -21,7 +21,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
+#include <future>
 #include <mutex>
+#include <vector>
 
 #include <dialog/state.h>
 #include <overlay/common_dialog.h>
@@ -35,9 +38,55 @@
 #include <renderer/vulkan/functions.h>
 
 #include <gxm/functions.h>
+#include <mem/functions.h>
 #include <util/log.h>
 
 namespace renderer {
+
+void State::run_render_thread_tasks() {
+    std::vector<std::function<void()>> tasks;
+    {
+        const std::lock_guard<std::mutex> lock(render_thread_tasks_mutex);
+        tasks.swap(render_thread_tasks);
+    }
+    for (auto &task : tasks)
+        task();
+}
+
+std::vector<uint32_t> State::dump_frame_on_render_thread(DisplayState &display, uint32_t &width, uint32_t &height) {
+    if (!render_thread || render_thread->get_id() == std::this_thread::get_id())
+        return dump_frame(display, width, height);
+
+    struct Frame {
+        std::vector<uint32_t> pixels;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+    auto task = std::make_shared<std::packaged_task<Frame()>>([this, &display]() {
+        Frame frame;
+        frame.pixels = dump_frame(display, frame.width, frame.height);
+        return frame;
+    });
+    std::future<Frame> result = task->get_future();
+    {
+        const std::lock_guard<std::mutex> lock(render_thread_tasks_mutex);
+        render_thread_tasks.emplace_back([task]() { (*task)(); });
+    }
+
+    if (result.wait_for(std::chrono::seconds(3)) != std::future_status::ready) {
+        LOG_ERROR("The render thread did not capture the frame in time");
+        return {};
+    }
+    try {
+        Frame frame = result.get();
+        width = frame.width;
+        height = frame.height;
+        return std::move(frame.pixels);
+    } catch (const std::exception &e) {
+        LOG_ERROR("Frame capture failed: {}", e.what());
+        return {};
+    }
+}
 
 void State::update_overlays() {
     if (!overlay_manager)
@@ -218,12 +267,166 @@ void set_context(State &state, Context *ctx, RenderTarget *target, SceGxmColorSu
     renderer::add_command(ctx, renderer::CommandOpcode::SetContext, nullptr, target, color_surface, depth_stencil_surface);
 }
 
+namespace {
+constexpr bool GUEST_STREAM_SNAPSHOT = true;
+constexpr bool GUEST_INDEX_SNAPSHOT = true;
+constexpr size_t SNAP_RING_SIZE = 64u * 1024u * 1024u;
+// only a small stream is copied (every stream a game has been seen to recycle is a small per-draw block)
+// a game that indexes deep into a large shared buffer which would overlap the ring every frame
+constexpr uint32_t SNAP_MAX_BYTES = 16u * 1024u;
+
+struct SnapHeader {
+    uint64_t handle;
+    uint32_t size;
+    uint32_t reserved;
+};
+
+std::mutex g_snap_mutex;
+std::vector<uint8_t> g_snap_ring;
+uint64_t g_snap_cursor = 0;
+uint64_t g_snap_copied = 0;
+uint64_t g_snap_bound = 0;
+uint64_t g_snap_stale = 0;
+uint64_t g_snap_mismatch = 0;
+int64_t g_snap_next_report = 0;
+std::atomic<bool> g_snap_disabled{ false };
+
+uint32_t snap_align(const uint32_t size) {
+    return (size + 63u) & ~63u;
+}
+
+// copies one stream into a new slot of the ring and returns its handle
+uint64_t snap_copy_locked(MemState &mem, const uint32_t addr, const uint32_t size) {
+    if (!addr || !size || !is_valid_addr_range(mem, addr, addr + size))
+        return ~0ull;
+    if (g_snap_ring.empty())
+        g_snap_ring.resize(SNAP_RING_SIZE);
+
+    const uint32_t slot = snap_align(static_cast<uint32_t>(sizeof(SnapHeader)) + size);
+    uint64_t handle = g_snap_cursor;
+    size_t offset = static_cast<size_t>(handle % SNAP_RING_SIZE);
+    if (offset + slot > SNAP_RING_SIZE) {
+        // never let a slot straddle the end of the ring
+        handle += SNAP_RING_SIZE - offset;
+        offset = 0;
+    }
+    g_snap_cursor = handle + slot;
+
+    uint8_t *const at = g_snap_ring.data() + offset;
+    const SnapHeader header = { handle, size, 0 };
+    memcpy(at, &header, sizeof(header));
+    memcpy_from_guest(mem, at + sizeof(SnapHeader), addr, size);
+    g_snap_copied++;
+    return handle;
+}
+} // namespace
+
+void stream_snapshot_kick(MemState &mem, CommandList &list) {
+    if ((!GUEST_STREAM_SNAPSHOT && !GUEST_INDEX_SNAPSHOT) || g_snap_disabled.load(std::memory_order_relaxed) || !list.first)
+        return;
+
+    Command *from = list.first;
+    for (Command *cmd = list.first; cmd; cmd = cmd == list.last ? nullptr : cmd->next) {
+        if (cmd->opcode == CommandOpcode::MidSceneFlush)
+            from = cmd == list.last ? nullptr : cmd->next;
+    }
+
+    const std::lock_guard<std::mutex> lock(g_snap_mutex);
+    if (g_snap_disabled.load(std::memory_order_relaxed))
+        return;
+    for (Command *cmd = from; cmd; cmd = cmd == list.last ? nullptr : cmd->next) {
+        if (cmd->opcode == CommandOpcode::Draw) {
+            if (!GUEST_INDEX_SNAPSHOT)
+                continue;
+            CommandHelper helper(cmd);
+            helper.pop<SceGxmPrimitiveType>();
+            const SceGxmIndexFormat format = helper.pop<SceGxmIndexFormat>();
+            const Ptr<const void> indices = helper.pop<Ptr<const void>>();
+            const uint32_t count = helper.pop<uint32_t>();
+            helper.pop<uint32_t>();
+            const uint64_t length = static_cast<uint64_t>(count) * (format == SCE_GXM_INDEX_FORMAT_U16 ? 2 : 4);
+            uint64_t handle = length <= SNAP_MAX_BYTES ? snap_copy_locked(mem, indices.address(), static_cast<uint32_t>(length)) : ~0ull;
+            helper.push(handle);
+            continue;
+        }
+        if (!GUEST_STREAM_SNAPSHOT || cmd->opcode != CommandOpcode::SetState)
+            continue;
+        CommandHelper helper(cmd);
+        if (helper.pop<GXMState>() != GXMState::VertexStream)
+            continue;
+        const Ptr<const uint8_t> stream = helper.pop<Ptr<const uint8_t>>();
+        helper.pop<std::size_t>();
+        const std::size_t length = helper.pop<std::size_t>();
+        uint64_t handle = length <= SNAP_MAX_BYTES ? snap_copy_locked(mem, stream.address(), static_cast<uint32_t>(length)) : ~0ull;
+        helper.push(handle);
+    }
+}
+
+int64_t coarse_now_ms() {
+#ifdef __linux__
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+#else
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+#endif
+}
+
+const uint8_t *stream_snapshot_get(const uint64_t handle, const uint32_t size) {
+    if ((!GUEST_STREAM_SNAPSHOT && !GUEST_INDEX_SNAPSHOT) || handle == ~0ull || !size)
+        return nullptr;
+
+    const std::lock_guard<std::mutex> lock(g_snap_mutex);
+    const int64_t now_ms = coarse_now_ms();
+    if (now_ms >= g_snap_next_report) {
+        g_snap_next_report = now_ms + 10000;
+        LOG_INFO("[SNAPSHOT] copied {} bound {} stale {} mismatch {}", g_snap_copied, g_snap_bound, g_snap_stale, g_snap_mismatch);
+    }
+
+    if (g_snap_ring.empty() || g_snap_cursor < handle || g_snap_cursor - handle > SNAP_RING_SIZE) {
+        g_snap_stale++;
+        return nullptr;
+    }
+    const uint8_t *const at = g_snap_ring.data() + static_cast<size_t>(handle % SNAP_RING_SIZE);
+    SnapHeader header;
+    memcpy(&header, at, sizeof(header));
+    if (header.handle != handle || size > header.size) {
+        g_snap_mismatch++;
+        return nullptr;
+    }
+    g_snap_bound++;
+
+    thread_local std::vector<uint8_t> scratch;
+    scratch.assign(at + sizeof(SnapHeader), at + sizeof(SnapHeader) + size);
+    return scratch.data();
+}
+
+void stream_snapshot_reset() {
+    const std::lock_guard<std::mutex> lock(g_snap_mutex);
+    g_snap_disabled = false;
+    std::vector<uint8_t>().swap(g_snap_ring);
+    g_snap_copied = 0;
+    g_snap_bound = 0;
+    g_snap_stale = 0;
+    g_snap_mismatch = 0;
+}
+
+void stream_snapshot_disable_for_program(const uint32_t program_addr, const uint32_t program_flags) {
+    if (g_snap_disabled.exchange(true))
+        return;
+    {
+        const std::lock_guard<std::mutex> lock(g_snap_mutex);
+        std::vector<uint8_t>().swap(g_snap_ring);
+    }
+    LOG_INFO("[SNAPSHOT] disabled for this game: the program at 0x{:08X} (flags 0x{:X}) writes memory from the GPU, so a copy of a vertex stream taken on the guest thread could miss what the GPU writes into it later", program_addr, program_flags);
+}
+
 void set_vertex_stream(State &state, Context *ctx, const std::size_t index, const std::size_t data_len, const Ptr<const void> stream) {
-    renderer::add_state_set_command(ctx, renderer::GXMState::VertexStream, stream, index, data_len);
+    renderer::add_state_set_command(ctx, renderer::GXMState::VertexStream, stream, index, data_len, static_cast<uint64_t>(~0ull));
 }
 
 void draw(State &state, Context *ctx, SceGxmPrimitiveType prim_type, SceGxmIndexFormat index_type, Ptr<const void> index_data, const std::uint32_t index_count, const std::uint32_t instance_count) {
-    renderer::add_command(ctx, renderer::CommandOpcode::Draw, nullptr, prim_type, index_type, index_data, index_count, instance_count);
+    renderer::add_command(ctx, renderer::CommandOpcode::Draw, nullptr, prim_type, index_type, index_data, index_count, instance_count, static_cast<uint64_t>(~0ull));
 }
 
 void transfer_copy(State &state, uint32_t colorKeyValue, uint32_t colorKeyMask, SceGxmTransferColorKeyMode colorKeyMode, const SceGxmTransferImage *images, SceGxmTransferType srcType, SceGxmTransferType destType) {
@@ -242,6 +445,10 @@ void sync_surface_data(State &state, Context *ctx, const SceGxmNotification vert
     renderer::add_command(ctx, renderer::CommandOpcode::SyncSurfaceData, nullptr, vertex_notification, fragment_notification);
 }
 
+int sync_guest_range(State &state, Address address, uint32_t size) {
+    return renderer::send_single_command(state, nullptr, renderer::CommandOpcode::SyncGuestRange, true, address, size);
+}
+
 bool create_context(State &state, std::unique_ptr<Context> &context) {
     return renderer::send_single_command(state, nullptr, renderer::CommandOpcode::CreateContext, true, &context) > CommandErrorCodeNone;
 }
@@ -257,8 +464,9 @@ void destroy_context_during_shutdown(State &state, std::unique_ptr<Context> &con
         state.set_current();
     }
 
+    std::erase(state.live_contexts, context.get());
     if (state.context == context.get()) {
-        state.context = nullptr;
+        state.context = state.live_contexts.empty() ? nullptr : state.live_contexts.back();
     }
 
     context.reset();

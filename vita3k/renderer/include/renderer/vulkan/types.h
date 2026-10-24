@@ -19,9 +19,12 @@
 
 #include <renderer/texture_cache.h>
 
+#include <chrono>
+#include <deque>
 #include <renderer/types.h>
 #include <shader/uniform_block.h>
 #include <unordered_map>
+#include <utility>
 #include <vkutil/objects.h>
 
 struct MemState;
@@ -53,12 +56,27 @@ struct TextureCacheEntry {
     bool is_cube;
     uint16_t mip_count;
     uint32_t memory_needed;
+    vk::DeviceSize image_bytes = 0;
 };
 
 struct VKTextureCache : public TextureCache {
     VKState &state;
 
     uint64_t release_all_cached_textures();
+
+    vk::DeviceSize memory_budget = 0;
+    // the budget the memory pressure check grows back to
+    vk::DeviceSize default_budget = 0;
+    vk::DeviceSize cached_bytes = 0;
+    std::chrono::steady_clock::time_point next_memory_check{};
+    void release_image(TextureCacheEntry &entry);
+    void create_image(const vk::ImageCreateInfo &image_info);
+    // evicts the least recently used images until the cached bytes plus incoming fit the budget, returns how many and their bytes
+    std::pair<uint32_t, vk::DeviceSize> evict_to_budget(vk::DeviceSize incoming);
+    // evict down to three quarters of what is cached lower the budget to it and free what earlier frames released
+    void recover_texture_memory();
+    // once a second shrink the budget when the system's available memory is under an eighth of its RAM
+    void relieve_memory_pressure();
 
     TextureStagingBuffer staging_buffers[NB_TEXTURE_STAGING_BUFFERS];
     uint32_t staging_idx = 0;
@@ -85,6 +103,7 @@ struct VKTextureCache : public TextureCache {
     void configure_sampler(size_t index, const SceGxmTexture &texture, bool no_linear) override;
 
     bool format_supports_linear_filter(vk::Format format);
+    bool texture_supports_linear_filter() override;
     std::unordered_map<VkFormat, bool> linear_filter_support_cache;
 
     bool format_supports_sampled_image(vk::Format format);
@@ -198,8 +217,11 @@ struct NotificationRequest {
     SceGxmNotification notifications[2];
 };
 
+struct VKContext;
+
 struct FrameDoneRequest {
     uint64_t frame_timestamp;
+    VKContext *context;
 };
 
 struct SyncSignalRequest {
@@ -209,7 +231,16 @@ struct SyncSignalRequest {
 struct ColorSurfaceCacheInfo;
 
 struct PostSurfaceSyncRequest {
+    // snapshots the surface when the write-back is queued since the surface can be destroyed before it runs
+    explicit PostSurfaceSyncRequest(ColorSurfaceCacheInfo &surface);
+
     ColorSurfaceCacheInfo *cache_info;
+    uint32_t generation;
+    // the part of the surface the copy wrote
+    int32_t x0;
+    int32_t y0;
+    uint32_t width;
+    uint32_t height;
 };
 
 using CallbackRequestFunction = std::function<void()>;
@@ -256,11 +287,6 @@ struct VKContext : public renderer::Context {
 
     bool scene_wrote_depth = false;
     bool scene_has_drawn = false;
-    // Draw calls and the host start time of the current recording, for the
-    // perf-log "scenes" channel. The counter is incremented on every draw
-    // call, also when the setting is off.
-    uint32_t scene_draw_calls = 0;
-    int64_t scene_start_us = 0;
     bool gxmscene_viewport_logged = false;
     float surface_downscale = 1.0f;
     bool scene_macroblock_flushed = false;
@@ -269,6 +295,7 @@ struct VKContext : public renderer::Context {
     uint32_t current_fb_height = 0;
 
     vk::ImageView current_color_raw_view = nullptr;
+    vkutil::Image *current_color_raw_image = nullptr;
 
     vkutil::HostRingBuffer vertex_stream_ring_buffer;
     vkutil::HostRingBuffer index_stream_ring_buffer;
@@ -285,6 +312,15 @@ struct VKContext : public renderer::Context {
 
     vk::Buffer vertex_stream_buffers[SCE_GXM_MAX_VERTEX_STREAMS];
     vk::DeviceSize vertex_stream_offsets[SCE_GXM_MAX_VERTEX_STREAMS] = {};
+
+    struct VertexRingMark {
+        uint64_t end;
+        vk::Fence fence;
+        uint64_t frame;
+    };
+    std::deque<VertexRingMark> vertex_ring_marks;
+    uint64_t vertex_ring_free = 0;
+    std::vector<vkutil::Buffer> vertex_ring_retired;
 
     shader::RenderVertUniformBlock prev_vert_ublock;
     shader::RenderFragUniformBlock prev_frag_ublock;
@@ -339,7 +375,11 @@ struct VKContext : public renderer::Context {
     bool is_recording = false;
     bool in_renderpass = false;
     bool refresh_pipeline = false;
+    bool pipeline_stops_lrz_write = false;
+    bool stencil_compare_mask_zeroed = false;
     bool is_first_scene_draw = false;
+    // pipeline of the previous draw kept across render passes
+    vk::Pipeline last_draw_pipeline = nullptr;
     // command buffer used to record the current scene
     vk::CommandBuffer render_cmd{};
     // command buffer used for commands that need to be executed before render_cmd (mostly because they can't be done during a render pass)
@@ -353,6 +393,12 @@ struct VKContext : public renderer::Context {
     uint16_t last_macroblock_y = ~0;
     // special case where we can't determine the current macroblock
     bool ignore_macroblock = false;
+    struct TextureUnitRange {
+        uint32_t begin = 0;
+        uint32_t end = 0;
+    };
+    std::array<TextureUnitRange, 32> texture_unit_ranges{};
+    uint64_t recording_serial = 0;
 
     // used to clamp perform_surface_sync for macrotile targets so that only the rendered macroblocks are written back to guest memory
     int32_t rendered_rect_x0 = INT32_MAX;
@@ -366,6 +412,14 @@ struct VKContext : public renderer::Context {
     int32_t draw_rect_x1 = 0;
     int32_t draw_rect_y1 = 0;
 
+    // image lines an upscaled viewport starting inside the first native pixel leaves unrasterized
+    uint32_t half_pixel_fill_cols = 0;
+    uint32_t half_pixel_fill_rows = 0;
+    int32_t half_pixel_col_y0 = INT32_MAX;
+    int32_t half_pixel_col_y1 = 0;
+    int32_t half_pixel_row_x0 = INT32_MAX;
+    int32_t half_pixel_row_x1 = 0;
+
     // used if necessary to restart easily the render pass
     vk::RenderPassBeginInfo curr_renderpass_info;
     // only useful if shader interlock is enabled, to know if we need to transition
@@ -374,7 +428,6 @@ struct VKContext : public renderer::Context {
     // only used if memory mapping is enabled
     std::mutex new_frame_mutex;
     std::condition_variable new_frame_condv;
-    std::thread gpu_request_wait_thread;
     uint64_t last_frame_waited = 0;
 
     explicit VKContext(VKState &state, MemState &mem);
@@ -387,10 +440,17 @@ struct VKContext : public renderer::Context {
     void stop_recording(const SceGxmNotification &notif1, const SceGxmNotification &notif2, bool submit = true);
 
     // check (when the render target has macroblock set) if we are drawing to another block
-    void check_for_macroblock_change(bool is_draw);
+    void check_for_macroblock_change(bool is_draw, bool draw_reads_target = true);
+    // whether a texture unit the current programs use overlaps the render target's colour or depth memory
+    void find_render_target_reads(bool &reads_color, bool &reads_depth) const;
+    // whether a draw that reads its render target needs the recording restarted first
+    bool read_needs_restart(bool reads_color, bool reads_depth) const;
 
-private:
-    void wait_thread_function(const MemState &mem);
+    // waits for the GPU until size bytes can be copied without overwriting what a submission still reads
+    void vertex_ring_make_room(uint32_t size);
+
+    void note_half_pixel_origin(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
+    void fill_half_pixel_strips();
 };
 
 struct VKRenderTarget : public renderer::RenderTarget {

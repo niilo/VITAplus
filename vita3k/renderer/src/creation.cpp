@@ -79,6 +79,7 @@ COMMAND(handle_create_context) {
     }
 
     renderer.context = ctx->get();
+    renderer.live_contexts.push_back(ctx->get());
 
     // fill with default values
     renderer.context->shader_hints = {
@@ -95,8 +96,10 @@ COMMAND(handle_destroy_context) {
     TRACY_FUNC_COMMANDS(handle_destroy_context);
     std::unique_ptr<Context> *ctx = helper.pop<std::unique_ptr<Context> *>();
 
+    std::erase(renderer.live_contexts, ctx->get());
+    if (renderer.context == ctx->get())
+        renderer.context = renderer.live_contexts.empty() ? nullptr : renderer.live_contexts.back();
     ctx->reset();
-    renderer.context = nullptr;
 
     complete_command(renderer, helper, 0);
 }
@@ -370,10 +373,16 @@ bool create(std::unique_ptr<FragmentProgram> &fp, State &state, const SceGxmProg
 
     fp->buffer_count = shader::usse::get_uniform_buffer_sizes(program, fp->uniform_buffer_sizes);
     layout_ssbo_offset_from_uniform_buffer_sizes(fp->uniform_buffer_sizes, fp->uniform_buffer_data_offsets, fp->max_total_uniform_buffer_storage);
+    fp->dynamic_uniform_buffers = shader::usse::get_dynamic_uniform_buffers(program);
     fp->textures_used = gxp::get_textures_used(program);
     fp->texture_count = std::bit_width(fp->textures_used.to_ulong());
 
     return true;
+}
+
+void warm_pipeline(State &state, const std::shared_ptr<ProgramBinding> &vertex, const std::shared_ptr<ProgramBinding> &fragment) {
+    if (state.current_backend == Backend::Vulkan)
+        dynamic_cast<vulkan::VKState &>(state).pipeline_cache.warm_program_pair(vertex, fragment);
 }
 
 bool create(std::unique_ptr<VertexProgram> &vp, State &state, const SceGxmProgram &program, GXPPtrMap &gxp_ptr_map, const std::vector<SceGxmVertexAttribute> &attributes) {
@@ -398,6 +407,7 @@ bool create(std::unique_ptr<VertexProgram> &vp, State &state, const SceGxmProgra
     vp->buffer_count = shader::usse::get_uniform_buffer_sizes(program, vp->uniform_buffer_sizes);
     shader::usse::get_attribute_informations(program, vp->attribute_infos);
     layout_ssbo_offset_from_uniform_buffer_sizes(vp->uniform_buffer_sizes, vp->uniform_buffer_data_offsets, vp->max_total_uniform_buffer_storage);
+    vp->dynamic_uniform_buffers = shader::usse::get_dynamic_uniform_buffers(program);
     vp->textures_used = gxp::get_textures_used(program);
     vp->texture_count = std::bit_width(vp->textures_used.to_ulong());
 

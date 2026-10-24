@@ -19,6 +19,7 @@
 #include "io/io.h"
 
 #include <boost/filesystem/operations.hpp>
+#include <modules/guest_code_fixes.h>
 #include <modules/module_parent.h>
 
 #include <cpu/functions.h>
@@ -33,12 +34,10 @@
 #include <packages/license.h>
 #include <packages/sce_types.h>
 #include <util/find.h>
-#include <util/hotpath.h>
 #include <util/lock_and_find.h>
 #include <util/log.h>
 #include <util/string_utils.h>
 
-#include <chrono>
 #include <unordered_set>
 
 static constexpr bool LOG_UNK_NIDS_ALWAYS = false;
@@ -164,17 +163,6 @@ void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread
     }
     set_last_import_call(nid, read_lr(cpu));
 
-    hotpath::count_hle_call(nid);
-    // Read the clock only when the timing flag is on. See the spec: ticket 32
-    // measured clock_gettime at 5.28% and named it a cost to remove, so the
-    // default mode is counts only.
-    const bool time_this_call = hotpath::time_enabled();
-    const uint64_t hle_start_ns = time_this_call
-        ? static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-              std::chrono::steady_clock::now().time_since_epoch())
-                  .count())
-        : 0;
-
     const ImportFn *fn = resolve_import(nid);
     if (fn) {
         (*fn)(emuenv, cpu, thread_id);
@@ -195,14 +183,6 @@ void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread
             if (!LOG_UNK_NIDS_ALWAYS)
                 emuenv.missing_nids.insert(nid);
         }
-    }
-
-    if (time_this_call) {
-        const uint64_t elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                     std::chrono::steady_clock::now().time_since_epoch())
-                                         .count())
-            - hle_start_ns;
-        hotpath::add_hle_time(nid, elapsed);
     }
 }
 
@@ -265,6 +245,7 @@ SceUID load_module(EmuEnvState &emuenv, const std::string &module_path) {
         if (module_id >= 0) {
             const auto module = lock_and_find(module_id, emuenv.kernel.loaded_modules, emuenv.kernel.mutex);
             LOG_INFO("Module {} (at \"{}\") loaded", module->info.module_name, module_path);
+            apply_guest_code_fixes(emuenv, module->info);
         } else {
             LOG_ERROR("Failed to load module {}", module_path);
         }

@@ -147,10 +147,7 @@ struct PCMFrameQueue {
 };
 
 struct ModuleData {
-    // Guest address, not a host pointer. See the note on Voice::rack. This is
-    // the first hop every module reads, so a stale value here would fault before
-    // the rack is even reached.
-    Ptr<Voice> parent;
+    Voice *parent;
     uint32_t index;
 
     Ptr<void> callback;
@@ -241,7 +238,7 @@ public:
     virtual void on_key_on(const MemState &mem, ModuleData &data) {}
     virtual void cleanup_voice_state(ModuleData &data) {}
 
-    virtual void initialize_voice_data(const MemState &mem, ModuleData &data) const {
+    virtual void initialize_voice_data(ModuleData &data) const {
         const uint32_t guest_state_size = get_guest_state_size();
         if (guest_state_size != 0) {
             data.guest_state_data.assign(guest_state_size, 0);
@@ -284,16 +281,7 @@ struct VoiceInputManager {
 };
 
 struct Voice {
-    // The rack this voice belongs to, as a guest address.
-    //
-    // This was a host pointer, resolved once when the voice was created. An
-    // external GPU mapping over the arena moves the guest data into a buffer
-    // and releases the arena page, so a host pointer resolved before that keeps
-    // its value and names memory where the guest data is gone. The read returned
-    // zero, a live rack looked released, and every later routing call became a
-    // no-op. Storing the guest address and calling get(mem) resolves it through
-    // the page table on every read, which is where the guest data now lives.
-    Ptr<Rack> rack;
+    Rack *rack;
 
     std::vector<ModuleData> datas;
     VoiceState state;
@@ -301,6 +289,7 @@ struct Voice {
     bool is_paused;
     bool is_keyed_off;
     uint32_t frame_count;
+    uint32_t play_count = 0;
 
     using Patches = std::vector<Ptr<Patch>>;
 
@@ -311,16 +300,10 @@ struct Voice {
     std::unique_ptr<std::mutex> voice_mutex;
     VoiceProduct products[MAX_VOICE_OUTPUT];
 
-    float implicit_volume_matrix[2][2] = { { 1.0f, 0.0f }, { 0.0f, 1.0f } };
-
     Ptr<void> finished_callback;
     Ptr<void> finished_callback_user_data;
 
-    void init(const MemState &mem, Ptr<Rack> mama);
-
-    // The system this voice belongs to, or null when its rack is gone.
-    // Defined below, where Rack is complete.
-    System *system(const MemState &mem) const;
+    void init(Rack *mama);
 
     ModuleData *module_storage(const uint32_t index);
 
@@ -340,9 +323,8 @@ struct Voice {
 struct System;
 
 struct Rack : public MempoolObject {
-    // Guest addresses, not host pointers. See the note on Voice::rack.
-    Ptr<System> system;
-    Ptr<VoiceDefinition> vdef;
+    System *system;
+    VoiceDefinition *vdef;
 
     int32_t channels_per_voice;
     int32_t max_patches_per_input;
@@ -350,27 +332,16 @@ struct Rack : public MempoolObject {
 
     std::vector<Ptr<Voice>> voices;
     std::vector<std::unique_ptr<Module>> modules;
+    Ptr<void> user_data;
 
-    explicit Rack(Ptr<System> mama, const Ptr<void> memspace, const uint32_t memspace_size);
+    explicit Rack(System *mama, const Ptr<void> memspace, const uint32_t memspace_size);
 
+    SceNgsCallbackInfo release_callback_info(const MemState &mem);
     static uint32_t get_required_memspace_size(MemState &mem, SceNgsRackDescription *description);
 };
 
-// sceNgsRackRelease destroys the voices and then the rack, and a game can still
-// hold a voice handle afterwards, so reading voice->rack->system can reach a
-// rack that is gone. PCSA00080 crashed twice this way, in sceNgsSystemUpdate and
-// in sceNgsPatchCreateRouting.
-//
-// Each hop is a get(mem), so a rack that only moved in the page table is still
-// found, and a rack that was really released still reads as gone.
-inline System *Voice::system(const MemState &mem) const {
-    Rack *const live = rack.get(mem);
-    return live ? live->system.get(mem) : nullptr;
-}
-
 struct System : public MempoolObject {
-    // Guest addresses, not host pointers. See the note on Voice::rack.
-    std::vector<Ptr<Rack>> racks;
+    std::vector<Rack *> racks;
     int32_t max_voices;
     int32_t granularity;
     int32_t sample_rate;
@@ -381,35 +352,20 @@ struct System : public MempoolObject {
     static uint32_t get_required_memspace_size(SceNgsSystemInitParams *parameters);
 };
 
-bool deliver_data(const MemState &mem, const std::vector<Ptr<Voice>> &voice_queue, Voice *source, const uint8_t output_port, const VoiceProduct &data_to_deliver);
-bool deliver_data_to_master(const MemState &mem, Voice *master, Voice *source, const VoiceProduct &data_to_deliver);
+bool deliver_data(const MemState &mem, const std::vector<Voice *> &voice_queue, Voice *source, const uint8_t output_port, const VoiceProduct &data_to_deliver);
 
 inline constexpr bool default_patch_volume_is_unity = true;
-inline constexpr bool use_implicit_master_routing = true;
 
-// Which of our NGS effects run (settings ngs-effects and ngs-effects-mask). A
-// module that does not run passes the sound through with no change. The
-// envelope and compressor bits are not used: those modules are the Plus ones.
-enum EffectBit : uint32_t {
-    EFFECT_FILTER = 1 << 3,
-    EFFECT_EQUALIZER = 1 << 4,
-    EFFECT_REVERB = 1 << 5,
-};
-extern uint32_t effects_mask;
-inline bool effect_enabled(const EffectBit bit) {
-    return (effects_mask & bit) != 0;
-}
-
-// Wet level of the reverb in percent of the I3DL2 level (setting ngs-reverb-level).
-extern float reverb_level;
-
-bool init_system(State &ngs, const MemState &mem, SceNgsSystemInitParams *parameters, Ptr<void> memspace, const uint32_t memspace_size);
-void release_system(State &ngs, const MemState &mem, System *system);
-bool init_rack(State &ngs, const MemState &mem, Ptr<System> system, SceNgsBufferInfo *init_info, const SceNgsRackDescription *description);
-void release_rack(State &ngs, const MemState &mem, System *system, Rack *rack);
+bool init_system(State &ngs, MemState &mem, SceNgsSystemInitParams *parameters, Ptr<void> memspace, const uint32_t memspace_size);
+void release_system(State &ngs, MemState &mem, System *system);
+bool init_rack(State &ngs, MemState &mem, System *system, SceNgsBufferInfo *init_info, const SceNgsRackDescription *description);
+void release_rack(State &ngs, MemState &mem, System *system, Rack *rack);
+void invoke_callback(KernelState &kernel, const MemState &mem, const SceUID thread_id, Ptr<void> callback, const SceNgsCallbackInfo &info);
 
 void voice_definition_init(State &ngs, MemState &mem);
 Ptr<VoiceDefinition> get_voice_definition(State &ngs, MemState &mem, ngs::BussType type);
 void apply_voice_definition(VoiceDefinition *definition, std::vector<std::unique_ptr<ngs::Module>> &mods);
 uint32_t get_voice_definition_size(VoiceDefinition *definition);
+
+inline constexpr bool null_buffer_ends_stream = true;
 } // namespace ngs

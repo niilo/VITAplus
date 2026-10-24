@@ -94,9 +94,18 @@ void sync_stencil_func(VKContext &context, const bool is_back) {
         state = is_back ? &context.record.back_stencil_state_values : &context.record.front_stencil_state_values;
     }
 
-    context.render_cmd.setStencilCompareMask(face, state->compare_mask);
+    context.render_cmd.setStencilCompareMask(face, (context.stencil_compare_mask_zeroed && !is_back) ? 0 : state->compare_mask);
     context.render_cmd.setStencilReference(face, state->ref);
     context.render_cmd.setStencilWriteMask(face, state->write_mask);
+}
+
+// Turnip decides LRZ writes from the blend state alone
+bool fetch_draw_stops_lrz_write(const VKState &state, const GxmRecordState &record, const SceGxmProgram &fragment_program) {
+    return state.is_mesa_turnip && state.features.direct_fragcolor && fragment_program.is_frag_color_used() && !fragment_program.has_no_effect()
+        && record.front_side_fragment_program_mode != SCE_GXM_FRAGMENT_PROGRAM_DISABLED
+        && record.front_depth_write_mode == SCE_GXM_DEPTH_WRITE_ENABLED
+        && record.front_stencil_state_op.func == SCE_GXM_STENCIL_FUNC_ALWAYS
+        && (record.two_sided != SCE_GXM_TWO_SIDED_ENABLED || record.back_stencil_state_op.func == SCE_GXM_STENCIL_FUNC_ALWAYS);
 }
 
 void sync_depth_bias(VKContext &context) {
@@ -242,13 +251,6 @@ void sync_visibility_buffer(VKContext &context, Ptr<uint32_t> buffer, uint32_t s
     }
 
     context.current_visibility_buffer = &ite->second;
-
-    // sync_visibility_index does not check the index while no buffer is set.
-    // An open query belongs to the old buffer, so leave its index alone.
-    if (!context.is_in_query && context.current_query_idx >= static_cast<int>(ite->second.size)) {
-        LOG_WARN_ONCE("Using visibility index {} which is too big for the buffer", context.current_query_idx);
-        context.current_query_idx = 0;
-    }
 }
 
 void sync_visibility_index(VKContext &context, bool enable, uint32_t index, bool is_increment) {

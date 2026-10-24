@@ -23,9 +23,11 @@
 #include <util/containers.h>
 #include <vkutil/objects.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <mutex>
 #include <optional>
 
 struct SwsContext;
@@ -36,15 +38,8 @@ struct VKContext;
 struct VKRenderTarget;
 struct VKState;
 struct Viewport;
+struct PostSurfaceSyncRequest;
 using CallbackRequestFunction = std::function<void()>;
-
-// Enqueues a cleanup callback on the request queue, or runs it inline when the
-// queue refuses. A refused push means the wait thread is gone and every pending
-// request was dropped without being called, so a callback that owns a fence or
-// a command buffer has to still run or those leak for the life of the process.
-// VKState::cleanup aborts the queue and then resets it, which is when the drops
-// happen.
-void push_cleanup_request(VKState &state, CallbackRequestFunction callback);
 
 // used for in-shader texture viewport
 struct TextureViewport {
@@ -96,6 +91,7 @@ struct CastedTexture {
     uint32_t cropped_width = 0;
     uint32_t cropped_height = 0;
     SceGxmColorBaseFormat format;
+    uint64_t copy_recording = 0;
 };
 
 struct ColorSurfaceCacheInfo : public SurfaceCacheInfo {
@@ -106,12 +102,22 @@ struct ColorSurfaceCacheInfo : public SurfaceCacheInfo {
     uint32_t stride_bytes;
     uint64_t last_frame_rendered;
     uint64_t last_scene_rendered = 0;
+    uint64_t last_frame_cpu_written = 0;
+    uint64_t written_back_scene = 0;
     uint16_t rendered_w = 0;
     uint16_t rendered_h = 0;
+    uint16_t bound_width = 0;
+    uint16_t bound_height = 0;
     int32_t written_x0 = INT32_MAX;
     int32_t written_y0 = INT32_MAX;
     int32_t written_x1 = 0;
     int32_t written_y1 = 0;
+    // unscaled bounds of the last scene's draws (the only pixels a partial write-back may copy)
+    int32_t scene_x0 = 0;
+    int32_t scene_y0 = 0;
+    int32_t scene_x1 = 0;
+    int32_t scene_y1 = 0;
+    bool partial_write_back = false;
 
     SceGxmColorBaseFormat format;
     vk::ComponentMapping swizzle;
@@ -157,6 +163,13 @@ struct ColorSurfaceCacheInfo : public SurfaceCacheInfo {
 
     // do we need some CPU convert/unswizzling part for surface sync
     bool need_post_surface_sync = false;
+    // the part of the surface the last write-back copied (the only part its post-sync may convert)
+    int32_t post_sync_x0 = 0;
+    int32_t post_sync_y0 = 0;
+    uint32_t post_sync_width = 0;
+    uint32_t post_sync_height = 0;
+    // bumped when the surface is destroyed so a post-sync queued before that drops itself
+    uint32_t generation = 0;
 
     // repack-format surfaces (CPU-converted writeback) sync at most once per throttle window
     std::chrono::steady_clock::time_point last_repack_sync_time{};
@@ -174,6 +187,14 @@ struct ColorSurfaceCacheInfo : public SurfaceCacheInfo {
     ~ColorSurfaceCacheInfo();
 };
 
+struct CubeSurfaceTexture {
+    vkutil::Image texture;
+    std::array<ColorSurfaceCacheInfo *, 6> faces{};
+    vk::Format view_format = vk::Format::eUndefined;
+    vk::ComponentMapping swizzle;
+    uint64_t copied_scene = 0;
+};
+
 // set while the emulator itself writes surface data back to guest memory, so the
 // surface write traps can tell emulator write-backs apart from genuine guest writes
 extern thread_local bool surface_sync_internal_write;
@@ -186,6 +207,8 @@ struct DepthSurfaceView {
     uint64_t scene_timestamp;
     uint32_t delta_col;
     uint32_t delta_row;
+    // U8U8U8U8 texture format of a S8D24 colour alias (0 = a depth/stencil copy)
+    uint32_t rgba_alias_format = 0;
 };
 
 struct DepthStencilSurfaceCacheInfo : public SurfaceCacheInfo {
@@ -196,9 +219,13 @@ struct DepthStencilSurfaceCacheInfo : public SurfaceCacheInfo {
     // stride in samples
     uint32_t stride_samples;
     SceGxmMultisampleMode multisample_mode;
+    // memory samples per image texel on each axis
+    uint32_t samples_per_texel_x = 1;
+    uint32_t samples_per_texel_y = 1;
 
     bool depth_content_stored = true;
     Address last_scene_color_addr = 0;
+    uint64_t last_attached_frame = 0;
 
     // used when reading from this depth stencil in a shader with texture viewport enabled
     vk::ImageView depth_view = nullptr;
@@ -219,6 +246,7 @@ struct TextureLookupResult {
     bool is_typeless_cast = false;
     bool cast_phase_hi = false;
     bool is_raw_bits = false;
+    bool is_cast_phase_view = false;
 };
 
 // result when trying to retrieve a surface from the surface cache
@@ -249,6 +277,9 @@ private:
 
     std::map<Address, ColorSurfaceCacheInfo *> color_address_lookup;
 
+    // cube textures sampled from face surfaces keyed by the cube's data address
+    std::map<Address, CubeSurfaceTexture> cube_textures;
+
     std::map<Address, DepthStencilSurfaceCacheInfo *> depth_address_lookup;
     std::map<Address, DepthStencilSurfaceCacheInfo *> stencil_address_lookup;
 
@@ -275,8 +306,12 @@ private:
         vk::ImageView alt_view;
         ColorSurfaceCacheInfo *info;
         std::function<void(vk::CommandBuffer)> record;
+        uint32_t casted_index = UINT32_MAX;
     };
     std::vector<PendingCast> pending_casts;
+
+    // a post-sync holds this while it runs
+    std::mutex post_sync_mutex;
 
     void record_pending_cast(PendingCast &cast, VKContext &context);
 
@@ -308,6 +343,21 @@ private:
     // lazily build the reinterpret compute pipeline (no-op once built)
     void ensure_reinterpret_pipeline();
 
+    // rebuilds the S8D24 words of a depth/stencil surface for a U8U8U8U8 texture over it
+    vk::ShaderModule depth_alias_shader = nullptr;
+    vk::DescriptorSetLayout depth_alias_desc_layout = nullptr;
+    vk::PipelineLayout depth_alias_pipeline_layout = nullptr;
+    vk::Pipeline depth_alias_pipeline = nullptr;
+    vk::DescriptorPool depth_alias_desc_pool = nullptr;
+    vk::DescriptorSet depth_alias_desc_set = nullptr;
+    vkutil::Buffer depth_alias_scratch;
+    bool depth_alias_unavailable = false;
+
+    bool ensure_depth_alias_pipeline();
+    bool ensure_depth_alias_scratch(vk::DeviceSize size);
+    std::optional<TextureLookupResult> retrieve_depth_as_rgba_alias(const SceGxmTexture &texture, TextureViewport *texture_viewport, DepthStencilSurfaceCacheInfo &cached_info,
+        uint32_t offset_bytes, SurfaceTiling tiling, uint32_t stride_samples, uint32_t width, uint32_t height);
+
     // record and submit a one-off command buffer that copies the surface image into the
     // mapped memory buffer at its guest address (shared by check_for_surface and
     // sync_surface_for_gpu_read). If mem is non-null, the whole sync (fence wait, guest RAM
@@ -335,6 +385,7 @@ public:
 
     SurfaceRetrieveResult retrieve_color_surface_for_framebuffer(MemState &mem, SceGxmColorSurface *color);
     std::optional<TextureLookupResult> retrieve_color_surface_as_texture(const SceGxmTexture &texture, const SceGxmColorBaseFormat base_format, TextureViewport *texture_viewport);
+    std::optional<TextureLookupResult> retrieve_color_surfaces_as_cube(const SceGxmTexture &texture, const SceGxmColorBaseFormat base_format);
 
     SurfaceRetrieveResult retrieve_depth_stencil_for_framebuffer(SceGxmDepthStencilSurface *depth_stencil, const uint32_t width, const uint32_t height);
 
@@ -345,10 +396,20 @@ public:
 
     void perform_pending_casts(VKContext &context, uint16_t vert_texture_count, uint16_t frag_texture_count);
     void flush_all_pending_casts();
+    void refresh_casts_drawn_over(uint64_t scene_timestamp, int32_t x0, int32_t y0, int32_t x1, int32_t y1, bool exact_coordinates);
+    void note_cpu_write(Address address);
 
     void mark_current_surface_blended() {
         if (last_written_surface)
             last_written_surface->content_is_blended = true;
+    }
+
+    // a submitting mid-scene flush syncs the surface which forgets it and then hands it back as the scene keeps drawing
+    ColorSurfaceCacheInfo *get_last_written_surface() const {
+        return last_written_surface;
+    }
+    void restore_last_written_surface(ColorSurfaceCacheInfo *surface) {
+        last_written_surface = surface;
     }
 
     bool current_surface_raw_is_valid() const {
@@ -368,6 +429,7 @@ public:
     // so that subsequent calls to check_for_surface with the target destination also get delayed
     bool check_for_surface(MemState &mem, Address source_address, CallbackRequestFunction &callback, Address target_address, uint32_t source_size = 0);
     std::map<Address, ColorSurfaceCacheInfo *>::iterator find_color_surface_containing(Address address, uint32_t size);
+    bool has_newer_overlapping_surface(const ColorSurfaceCacheInfo &surface) const;
     // Called when a guest address is about to be read by the GPU through raw buffer
     // accesses (e.g. a uniform buffer aliasing a rendered surface, like Killzone Mercenary's
     // bloom chain reading its HDR render target). If the address lies inside a
@@ -375,12 +437,15 @@ public:
     // mapped memory buffer so the shader reads up-to-date data. Returns true if the address
     // belongs to such a surface.
     bool sync_surface_for_gpu_read(Address address, uint32_t size);
+    // how far guest data can be copied from address before reaching a colour surface
+    Address color_surface_limit(Address address) const;
+    int sync_surfaces_for_cpu_read(MemState &mem, Address address, uint32_t size);
 
     // If non-null, the return value must be sent as a PostSurfaceSyncRequest
     ColorSurfaceCacheInfo *perform_surface_sync();
 
     // Called after the render has been done
-    void perform_post_surface_sync(const MemState &mem, ColorSurfaceCacheInfo *surface);
+    void perform_post_surface_sync(const MemState &mem, const PostSurfaceSyncRequest &request);
 
     // destroy all framebuffers associated with render_target
     // (meaning their color or depth-stencil surface is not backed by memory)

@@ -41,9 +41,7 @@
 
 #include <modules/module_parent.h>
 #include <string>
-#include <util/hotpath.h>
 #include <util/log.h>
-#include <util/perf_log.h>
 #include <util/string_utils.h>
 #include <util/vector_utils.h>
 #include <util/vita_theme_utils.h>
@@ -58,8 +56,10 @@
 
 #include "patch/patch.h"
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
+#include <numeric>
 #include <regex>
 
 typedef std::shared_ptr<mz_zip_archive> ZipPtr;
@@ -95,6 +95,21 @@ static std::string fallback_theme_root_name(const std::string &content_path) {
     return (separator == std::string::npos) ? trimmed : trimmed.substr(separator + 1);
 }
 
+// an archive entry must stay inside the folder its content installs into
+static bool is_safe_archive_path(std::string_view relative) {
+    if (relative.starts_with('/') || relative.starts_with('\\') || relative.find(':') != std::string_view::npos)
+        return false;
+    while (!relative.empty()) {
+        const size_t separator = relative.find_first_of("/\\");
+        if (relative.substr(0, separator) == "..")
+            return false;
+        if (separator == std::string_view::npos)
+            break;
+        relative.remove_prefix(separator + 1);
+    }
+    return true;
+}
+
 static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
     const auto app_license_path{ emuenv.vita_fs_path / "ux0/license" / emuenv.app_info.app_title_id / fmt::format("{}.rif", emuenv.app_info.app_content_id) };
     const auto is_patch_found_app_license = (emuenv.app_info.app_category == "gp") && fs::exists(app_license_path);
@@ -113,13 +128,27 @@ static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
 }
 
 static bool set_content_path(EmuEnvState &emuenv, const bool is_theme, fs::path &dest_path) {
+    // these ids name folders a reinstall removes so an empty or path-like id must never reach them
+    const bool is_theme_content = emuenv.app_info.app_category == "ac" && is_theme;
+    if (!is_theme_content && !sfo::is_safe_folder_name(emuenv.app_info.app_title_id)) {
+        LOG_ERROR("Rejecting content with an unusable title id '{}'", emuenv.app_info.app_title_id);
+        return false;
+    }
     const auto app_path = dest_path / "app" / emuenv.app_info.app_title_id;
 
     if (emuenv.app_info.app_category == "ac") {
         if (is_theme) {
+            if (!sfo::is_safe_folder_name(emuenv.app_info.app_content_id)) {
+                LOG_ERROR("Rejecting a theme with an unusable content id '{}'", emuenv.app_info.app_content_id);
+                return false;
+            }
             dest_path /= fs::path("theme") / emuenv.app_info.app_content_id;
             emuenv.app_info.app_title += " (Theme)";
         } else {
+            if (emuenv.app_info.app_content_id.size() <= 20 || !sfo::is_safe_folder_name(emuenv.app_info.app_content_id.substr(20))) {
+                LOG_ERROR("Rejecting DLC with an unusable content id '{}'", emuenv.app_info.app_content_id);
+                return false;
+            }
             emuenv.app_info.app_content_id = emuenv.app_info.app_content_id.substr(20);
             dest_path /= fs::path("addcont") / emuenv.app_info.app_title_id / emuenv.app_info.app_content_id;
             emuenv.app_info.app_title += " (DLC)";
@@ -198,6 +227,18 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
 
     LOG_INFO("Content {} [{}] installs to {}", emuenv.app_info.app_title, emuenv.app_info.app_title_id, output_path);
 
+    // every destination is checked before a previous install is removed or anything is written
+    for (mz_uint i = 0, count = mz_zip_reader_get_num_files(zip.get()); i < count; i++) {
+        mz_zip_archive_file_stat file_stat;
+        if (!mz_zip_reader_file_stat(zip.get(), i, &file_stat))
+            continue;
+        const std::string_view entry_name = file_stat.m_filename;
+        if (entry_name.starts_with(content_path) && !is_safe_archive_path(entry_name.substr(content_path.size()))) {
+            LOG_ERROR("Rejecting content '{}': archive entry '{}' would extract outside its folder", content_path, entry_name);
+            return false;
+        }
+    }
+
     const auto created = fs::create_directories(output_path);
     if (!created) {
         if (reinstall_callback) {
@@ -228,7 +269,7 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
             continue;
         }
         const std::string m_filename = file_stat.m_filename;
-        if (m_filename.contains(content_path)) {
+        if (m_filename.starts_with(content_path)) {
             file_progress = static_cast<float>(i) / num_files * 100.0f;
             update_progress();
 
@@ -239,7 +280,10 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
             } else {
                 fs::create_directories(file_output.parent_path());
                 LOG_INFO("Extracting {}", file_output);
-                mz_zip_reader_extract_to_file(zip.get(), i, fs_utils::path_to_utf8(file_output).c_str(), 0);
+                if (!mz_zip_reader_extract_to_file(zip.get(), i, fs_utils::path_to_utf8(file_output).c_str(), 0)) {
+                    LOG_ERROR("Failed to extract {}: {}", file_output, miniz_get_error(zip));
+                    return false;
+                }
             }
         }
     }
@@ -293,6 +337,41 @@ static std::vector<std::string> get_archive_contents_path(const ZipPtr &zip) {
     return content_path;
 }
 
+static bool archive_content_is_patch(const ZipPtr &zip, const std::string &content_path) {
+    vfs::FileBuffer buffer;
+    if (!mz_zip_reader_extract_file_to_callback(zip.get(), (content_path + "sce_sys/param.sfo").c_str(), &write_to_buffer, &buffer, 0))
+        return false;
+    sfo::SfoAppInfo info;
+    return sfo::get_param_info(info, buffer, 0) && info.app_category.contains("gp");
+}
+
+static bool archive_holds_only_patches(const fs::path &archive_path) {
+    FILE *fp = FOPEN(archive_path.c_str(), "rb");
+    if (!fp)
+        return false;
+    bool only_patches = false;
+    {
+        const ZipPtr zip(new mz_zip_archive, delete_zip);
+        std::memset(zip.get(), 0, sizeof(*zip));
+        if (mz_zip_reader_init_cfile(zip.get(), fp, 0, 0)) {
+            const auto contents = get_archive_contents_path(zip);
+            only_patches = !contents.empty() && std::all_of(contents.begin(), contents.end(), [&](const std::string &content) { return archive_content_is_patch(zip, content); });
+        }
+    }
+    fclose(fp);
+    return only_patches;
+}
+
+std::vector<size_t> archive_install_order(const std::vector<fs::path> &archives) {
+    std::vector<bool> only_patches(archives.size());
+    for (size_t i = 0; i < archives.size(); i++)
+        only_patches[i] = archive_holds_only_patches(archives[i]);
+    std::vector<size_t> order(archives.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_partition(order.begin(), order.end(), [&](size_t index) { return !only_patches[index]; });
+    return order;
+}
+
 std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &archive_path, const std::function<void(ArchiveContents)> &progress_callback, const ReinstallCallback &reinstall_callback) {
     FILE *vpk_fp = FOPEN(archive_path.c_str(), "rb");
     if (!vpk_fp) {
@@ -310,7 +389,7 @@ std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &ar
     }
 
     const mz_uint archive_num_files = mz_zip_reader_get_num_files(zip.get());
-    const auto content_path = get_archive_contents_path(zip);
+    auto content_path = get_archive_contents_path(zip);
     LOG_INFO("Archive {}: {} file(s), {} content(s) found", fs_utils::path_to_utf8(archive_path.filename()), archive_num_files, content_path.size());
     if (content_path.empty()) {
         for (mz_uint i = 0; i < std::min<mz_uint>(archive_num_files, 8); i++) {
@@ -321,6 +400,8 @@ std::vector<ContentInfo> install_archive(EmuEnvState &emuenv, const fs::path &ar
         fclose(vpk_fp);
         return {};
     }
+
+    std::stable_partition(content_path.begin(), content_path.end(), [&](const std::string &path) { return !archive_content_is_patch(zip, path); });
 
     const auto count = static_cast<float>(content_path.size());
     float current = 0.f;
@@ -367,7 +448,10 @@ static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
     const auto is_theme = fs::exists(theme_path);
     auto dst_path{ emuenv.vita_fs_path / "ux0" };
     if (fs_utils::read_data(sfo_path, buffer)) {
-        sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang);
+        if (!sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang)) {
+            LOG_ERROR("Rejecting content at {}: param.sfo failed to parse", content_path);
+            return false;
+        }
         if (!set_content_path(emuenv, is_theme, dst_path))
             return false;
 
@@ -441,17 +525,22 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
         emuenv.post_app_launch_request(relaunch.value_or(AppLaunchRequest{ .reason = AppLaunchReason::ProcessExit }));
     };
     emuenv.kernel.accurate_thread_scheduling = emuenv.cfg.current_config.accurate_thread_scheduling;
-    emuenv.kernel.preempt_on_wake = emuenv.cfg.current_config.preempt_on_wake;
+    // preempt-on-wake goes with accurate thread scheduling on every platform
+    emuenv.kernel.preempt_on_wake = emuenv.cfg.current_config.accurate_thread_scheduling;
     emuenv.kernel.preempt_on_wake_us = emuenv.cfg.current_config.preempt_on_wake_us;
     LOG_INFO("CONFIG (applied): memory_mapping={} accurate_thread_scheduling={} preempt_on_wake={} high_accuracy={} res_multiplier={} guest_cores={}",
         emuenv.cfg.current_config.memory_mapping, emuenv.cfg.current_config.accurate_thread_scheduling,
-        emuenv.cfg.current_config.preempt_on_wake,
+        emuenv.kernel.preempt_on_wake,
         emuenv.cfg.current_config.high_accuracy, emuenv.cfg.current_config.resolution_multiplier, emuenv.cfg.current_config.guest_cores);
     guest_sched_set_cores(emuenv.cfg.current_config.guest_cores);
     if (emuenv.kernel.accurate_thread_scheduling)
         LOG_INFO("Accurate thread scheduling enabled: default-affinity guest threads run one at a time, by priority");
     if (emuenv.kernel.preempt_on_wake)
-        LOG_INFO("Preempt-on-wake enabled ({}us window): a thread that wakes a higher-priority thread yields the host CPU so the woken thread runs first", emuenv.kernel.preempt_on_wake_us);
+        LOG_INFO("Preempt-on-wake enabled ({}us window): a thread that wakes a higher-priority thread waits for it only when the woken thread has no free core to run on", emuenv.kernel.preempt_on_wake_us);
+    static uint32_t game_boots = 0;
+    game_boots++;
+    core_lock_begin_boot(game_boots);
+    guest_assert_begin_boot();
 
     if (!emuenv.kernel.init(emuenv.mem, call_import, emuenv.cfg.current_config.cpu_opt)) {
         LOG_WARN("Failed to init kernel!");
@@ -528,18 +617,6 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
     // get list of preload modules
     SceUInt32 process_preload_disabled = 0;
     auto process_param = emuenv.kernel.process_param.get(emuenv.mem);
-
-    // Each start of a game truncates the perf-log files.
-    if (emuenv.cfg.perf_log)
-        perf_log::start(emuenv.log_path / "perf");
-    else
-        perf_log::stop();
-
-    // Counters go here so a session never carries the previous game's totals.
-    // They need perf-log for the files, so they stay off without it.
-    hotpath::set_enabled(emuenv.cfg.hle_counters && emuenv.cfg.perf_log, emuenv.cfg.hle_counters_time);
-    hotpath::reset();
-
     if (process_param) {
         auto preload_disabled_ptr = Ptr<SceUInt32>(process_param->process_preload_disabled);
         if (preload_disabled_ptr) {
@@ -594,7 +671,7 @@ void toggle_texture_replacement(EmuEnvState &emuenv) {
 
 static std::vector<uint32_t> get_current_app_frame(EmuEnvState &emuenv, uint32_t &width, uint32_t &height) {
     // Dump the current frame from the emulator display
-    std::vector<uint32_t> frame = emuenv.renderer->dump_frame(emuenv.display, width, height);
+    std::vector<uint32_t> frame = emuenv.renderer->dump_frame_on_render_thread(emuenv.display, width, height);
     if (frame.empty() || (frame.size() != (width * height))) {
         return {};
     }

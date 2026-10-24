@@ -559,6 +559,16 @@ private fun GpuSettingsSection(
                     ),
                     onShowHelp = onShowHelp
                 )
+                val guestCoresTitle = stringResource(R.string.settings_gpu_guest_cores)
+                SettingsChoiceField(
+                    title = guestCoresTitle,
+                    options = listOf("1", "2", "3"),
+                    selectedIndex = cfg.guestCores.coerceIn(1, 3) - 1,
+                    onSelect = { index -> onUpdate { guestCores = index + 1 } },
+                    enabled = cfg.accurateThreadScheduling,
+                    help = helpEntry(guestCoresTitle, stringResource(R.string.settings_gpu_guest_cores_desc)),
+                    onShowHelp = onShowHelp
+                )
                 val hasSupportedMemoryMapping = supportedMemoryMappingMask > 1
                 val memoryMappingTitle = stringResource(R.string.settings_gpu_memory_mapping)
                 val memoryMappingHelp = helpEntry(memoryMappingTitle, stringResource(R.string.settings_gpu_memory_mapping_desc))
@@ -1710,17 +1720,6 @@ private fun EmulatorSettingsSection(
                 help = SettingsHelpEntry(
                     title = stringResource(R.string.settings_emulator_log_compat_warn),
                     body = stringResource(R.string.settings_emulator_log_compat_warn_desc),
-                    scope = SettingsScope.Global
-                ),
-                onShowHelp = onShowHelp
-            )
-            SettingsToggleRow(
-                title = stringResource(R.string.settings_emulator_perf_log),
-                checked = cfg.perfLog,
-                onCheckedChange = { onUpdate { perfLog = it } },
-                help = SettingsHelpEntry(
-                    title = stringResource(R.string.settings_emulator_perf_log),
-                    body = stringResource(R.string.settings_emulator_perf_log_desc),
                     scope = SettingsScope.Global
                 ),
                 onShowHelp = onShowHelp

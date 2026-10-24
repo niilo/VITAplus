@@ -44,17 +44,6 @@ public:
     vk::SurfaceCapabilitiesKHR surface_capabilities;
     vk::SurfaceFormatKHR surface_format;
     vk::PresentModeKHR present_mode{};
-    // Ticket 09: on Android, v-sync on uses FIFO and v-sync off uses MAILBOX
-    // when the surface offers it. See select_present_mode().
-    bool vsync = true;
-    // Ticket 09: images added to minImageCount, so the A/B can use the minimum.
-    uint32_t extra_images = 1;
-    // Ticket 28: multiplier on the output surface extent, 1.0 is the panel
-    // resolution. Lowering it shrinks the swapchain and its images, which is
-    // what resolution-multiplier does not do. The display scales it up.
-    float scale = 1.0f;
-    // Ticket 28: the extent is rounded to a whole number of these.
-    static constexpr uint32_t kTilePixels = 8;
     vk::Extent2D extent;
     uint32_t swapchain_size{};
     std::vector<vk::Image> swapchain_images;
@@ -65,6 +54,8 @@ public:
     std::vector<vk::Semaphore> image_acquired_semaphores;
     std::vector<vk::Semaphore> image_ready_semaphores;
     bool swapchain_has_storage = false;
+    // FSR can write this swapchain directly or through its blit
+    bool swapchain_supports_fsr = false;
 
     // renderpass used when no effect is done previously (clear the swapchain content)
     vk::RenderPass default_render_pass;
@@ -90,6 +81,11 @@ public:
     bool need_rebuild = false;
     // a size disagreement that lasts one frame should not cause a swapchain rebuild
     int size_mismatch_frames = 0;
+    // a window size that disagrees with the swapchain extent while the surface itself agrees with it
+    vk::Extent2D confirmed_window_size{};
+    // the surface size the swapchain was built for
+    vk::Extent2D swapchain_surface_extent{};
+    int surface_check_countdown = 0;
     // why the last rebuild happened, for the log
     const char *rebuild_reason = "initial";
     // the swapchain images were created with eTransferDst (required by render_transfer)
@@ -114,12 +110,7 @@ public:
 private:
     void create_render_pass();
     void create_layout_sync();
-    void select_present_mode();
     void create_swapchain();
-    // Ticket 28: the extent that the current scale produces. create_swapchain()
-    // uses it to build the surface and surface_matches_window_size() uses it to
-    // compare, so the two cannot disagree.
-    vk::Extent2D scaled_extent(const vk::Extent2D &in) const;
     bool note_size_mismatch(bool mismatched);
     vk::Pipeline create_graphics_pipeline_impl(std::array<vk::PipelineShaderStageCreateInfo, 2> &shader_stages);
     bool create_graphics_pipelines();
@@ -129,5 +120,6 @@ private:
     bool ensure_swapchain();
     bool rebuild_swapchain_if_visible();
     bool surface_matches_window_size();
+    bool android_surface_changed();
 };
 } // namespace renderer::vulkan

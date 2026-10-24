@@ -16,91 +16,85 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <ngs/modules/equalizer.h>
+#include <util/log.h>
+
+#include <cstring>
 
 namespace ngs {
 
-// The units are the same as for the filter module (filter.cpp).
-
-std::unique_ptr<ModuleLogicalState> EqualizerModule::create_logical_state() const {
-    return std::make_unique<EqualizerLogicalState>();
-}
-
 void EqualizerModule::on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) {
-    if (data.parent.get(mem)->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE) {
-        for (FilterStage &stage : data.get_logical_state<EqualizerLogicalState>()->stages)
-            stage = {};
+    if (data.parent->state == VOICE_STATE_ACTIVE && previous == VOICE_STATE_AVAILABLE) {
+        EqualizerLogicalState *logical = data.get_logical_state<EqualizerLogicalState>();
+        logical->history = {};
+        logical->processed_last_tick = false;
     }
 }
 
 bool EqualizerModule::process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) {
-    Voice *voice = data.parent.get(mem);
-
-    // The first equalizer of a voice comes before the split into outputs, and
-    // all outputs get its result. Some definitions (ATRAC9, template 1) have
-    // one more equalizer for each output after it. Equalizer n + 1 acts on
-    // output n.
-    uint32_t position, equalizers;
-    module_position<EqualizerModule>(mem, data, position, equalizers);
-    const bool per_output = position > 0 && equalizers == voice->rack.get(mem)->vdef.get(mem)->output_count + 1;
-    const uint32_t output = per_output ? position - 1 : 0;
-
-    const auto split_outputs = [&]() {
-        if (!per_output) {
-            voice->products[1] = voice->products[0];
-            voice->products[2] = voice->products[0];
-            voice->products[3] = voice->products[0];
-        }
-    };
+    share_main_signal(data);
 
     EqualizerLogicalState *logical = data.get_logical_state<EqualizerLogicalState>();
-    const auto stop_all = [&]() {
-        for (FilterStage &stage : logical->stages)
-            stage.active = false;
-    };
-
-    if (data.is_bypassed || !effect_enabled(EFFECT_EQUALIZER)) {
-        stop_all();
-        split_outputs();
+    const SceNgsParamsDescriptor *desc = data.get_parameters<SceNgsParamsDescriptor>(mem);
+    const bool coefficient_form = desc && desc->id == SCE_NGS_PARAM_EQ_COEFF_STRUCT_ID;
+    if (data.is_bypassed || !desc || (!coefficient_form && desc->id != SCE_NGS_PARAM_EQ_STRUCT_ID)) {
+        logical->processed_last_tick = false;
         return false;
     }
 
-    const SceNgsParamsDescriptor *desc = data.get_parameters<SceNgsParamsDescriptor>(mem);
-    dsp::BiquadCoeffs coeffs[SCE_NGS_MAX_EQ_FILTERS];
-    bool enabled[SCE_NGS_MAX_EQ_FILTERS] = {};
-    if (desc && desc->id == SCE_NGS_PARAM_EQ_STRUCT_ID) {
-        const auto *params = reinterpret_cast<const SceNgsParamEqParams *>(desc);
-        for (uint32_t i = 0; i < SCE_NGS_MAX_EQ_FILTERS; i++) {
-            enabled[i] = !filter_is_off(params->filter[i]);
-            if (enabled[i])
-                coeffs[i] = filter_coeffs(params->filter[i], voice->rack.get(mem)->system.get(mem)->sample_rate);
-        }
-    } else if (desc && desc->id == SCE_NGS_PARAM_EQ_COEFF_STRUCT_ID) {
-        const auto *params = reinterpret_cast<const SceNgsParamEqParamsCoEff *>(desc);
-        for (uint32_t i = 0; i < SCE_NGS_MAX_EQ_FILTERS; i++) {
-            coeffs[i] = filter_coeffs(params->filterCoEff[i]);
-            enabled[i] = true;
-        }
-    }
-
-    bool any = false;
-    for (uint32_t i = 0; i < SCE_NGS_MAX_EQ_FILTERS; i++) {
-        any |= enabled[i];
-        if (!enabled[i])
-            logical->stages[i].active = false;
-    }
-
-    if (any) {
-        float *signal = per_output ? own_product(mem, data, output) : reinterpret_cast<float *>(voice->products[0].data);
-        if (signal) {
-            // The 4 filters run in series.
-            for (uint32_t i = 0; i < SCE_NGS_MAX_EQ_FILTERS; i++) {
-                if (enabled[i])
-                    logical->stages[i].run(signal, voice->rack.get(mem)->system.get(mem)->granularity, coeffs[i]);
+    const size_t size = coefficient_form ? sizeof(SceNgsParamEqParamsCoEff) : sizeof(SceNgsParamEqParams);
+    if (!logical->have_params || std::memcmp(logical->last_params.data(), desc, size) != 0) {
+        logical->last_params.fill(0);
+        std::memcpy(logical->last_params.data(), desc, size);
+        logical->have_params = true;
+        logical->active_bands = 0;
+        bool silences = false;
+        for (uint32_t band = 0; band < SCE_NGS_MAX_EQ_FILTERS; band++) {
+            if (coefficient_form) {
+                const SceNgsParamCoEff &raw = reinterpret_cast<const SceNgsParamEqParamsCoEff *>(desc)->filterCoEff[band];
+                const BiquadUse use = classify_biquad(raw, logical->coefficients[band]);
+                if (use == BiquadUse::Apply)
+                    logical->active_bands |= 1u << band;
+                silences = silences || use == BiquadUse::Silence;
+            } else {
+                const SceNgsParamFilter &filter = reinterpret_cast<const SceNgsParamEqParams *>(desc)->filter[band];
+                if (design_biquad(filter, data.parent->rack->system->sample_rate, logical->coefficients[band]))
+                    logical->active_bands |= 1u << band;
             }
         }
+        if (silences)
+            logical->active_bands = 0;
+    }
+    if (!logical->active_bands) {
+        logical->processed_last_tick = false;
+        return false;
     }
 
-    split_outputs();
+    const int send = send_output_of(data);
+    float *input = send >= 0 ? reinterpret_cast<float *>(data.parent->products[send].data) : main_signal_of(data);
+    const int32_t granularity = data.parent->rack->system->granularity;
+    if (!input || granularity <= 0)
+        return false;
+
+    const size_t bytes = static_cast<size_t>(granularity) * 2 * sizeof(float);
+    data.ensure_scratch_size(bytes);
+    float *output = reinterpret_cast<float *>(data.scratch_data.data());
+    std::memcpy(output, input, bytes);
+    if (!logical->processed_last_tick)
+        logical->history = {};
+    for (uint32_t band = 0; band < SCE_NGS_MAX_EQ_FILTERS; band++) {
+        if (!(logical->active_bands & (1u << band)))
+            continue;
+        if (!run_biquad(logical->coefficients[band], logical->history[band], output, output, granularity)) {
+            logical->history = {};
+            logical->processed_last_tick = false;
+            return false;
+        }
+    }
+    logical->processed_last_tick = true;
+    if (send >= 0)
+        data.parent->products[send].data = reinterpret_cast<uint8_t *>(output);
+    else
+        std::memcpy(input, output, bytes);
     return false;
 }
 } // namespace ngs

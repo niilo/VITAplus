@@ -87,7 +87,8 @@ enum class CommandOpcode : std::uint8_t {
     DestroyRenderTarget,
     DestroyContext,
 
-    MemoryUnmapFlush
+    MemoryUnmapFlush,
+    SyncGuestRange
 };
 
 enum CommandErrorCode {
@@ -115,6 +116,10 @@ struct Command {
     std::shared_ptr<int> status_keepalive;
 
     Command *next = nullptr;
+};
+
+struct alignas(Command) CommandSlot {
+    std::uint8_t storage[sizeof(Command)];
 };
 
 using CommandPool = std::vector<Command>;
@@ -180,8 +185,10 @@ bool do_command_push_data(CommandHelper &helper, Head arg1, Args... args2) {
 }
 
 template <typename... Args>
-Command *make_command(CommandAllocFunc alloc_func, CommandFreeFunc free_func, const CommandOpcode opcode, int *status, Args... arguments) {
+Command *make_command(const CommandAllocFunc &alloc_func, const CommandFreeFunc &free_func, const CommandOpcode opcode, int *status, Args... arguments) {
     Command *new_command = alloc_func();
+    if (!new_command)
+        return nullptr;
 
     new_command->opcode = opcode;
     new_command->magic = Command::MAGIC_LIVE;

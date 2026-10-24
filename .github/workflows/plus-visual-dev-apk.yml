@@ -1,0 +1,22 @@
+name: VITAdev APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['master', 'dev/**', 'feat/**', 'fix/**']
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vitadev-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/android-apk.yml
+    with:
+      channel: dev
+    secrets: inherit

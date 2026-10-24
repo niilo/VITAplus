@@ -97,6 +97,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(PhysicalKeyCode, "keyboard-button-psbutton", PhysicalKeyCode::KeyP, keyboard_button_psbutton)                                 \
     code(PhysicalKeyCode, "keyboard-gui-fullscreen", PhysicalKeyCode::F11, keyboard_gui_fullscreen)                                    \
     code(PhysicalKeyCode, "keyboard-gui-toggle-touch", PhysicalKeyCode::KeyT, keyboard_gui_toggle_touch)                               \
+    code(PhysicalKeyCode, "keyboard-gui-tilt", PhysicalKeyCode::Unbound, keyboard_gui_tilt)                                            \
     code(PhysicalKeyCode, "keyboard-toggle-texture-replacement", PhysicalKeyCode::Unbound, keyboard_toggle_texture_replacement)        \
     code(PhysicalKeyCode, "keyboard-take-screenshot", PhysicalKeyCode::Unbound, keyboard_take_screenshot)                              \
     code(PhysicalKeyCode, "keyboard-pinch-modifier", PhysicalKeyCode::Unbound, keyboard_pinch_modifier)                                \
@@ -129,6 +130,7 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(PhysicalKeyCode, "keyboard-button-psbutton-alt", PhysicalKeyCode::Unbound, keyboard_button_psbutton_alt)                      \
     code(PhysicalKeyCode, "keyboard-gui-fullscreen-alt", PhysicalKeyCode::Unbound, keyboard_gui_fullscreen_alt)                        \
     code(PhysicalKeyCode, "keyboard-gui-toggle-touch-alt", PhysicalKeyCode::Unbound, keyboard_gui_toggle_touch_alt)                    \
+    code(PhysicalKeyCode, "keyboard-gui-tilt-alt", PhysicalKeyCode::Unbound, keyboard_gui_tilt_alt)                                    \
     code(PhysicalKeyCode, "keyboard-toggle-texture-replacement-alt", PhysicalKeyCode::Unbound, keyboard_toggle_texture_replacement_alt)\
     code(PhysicalKeyCode, "keyboard-take-screenshot-alt", PhysicalKeyCode::Unbound, keyboard_take_screenshot_alt)                      \
     code(PhysicalKeyCode, "keyboard-pinch-modifier-alt", PhysicalKeyCode::Unbound, keyboard_pinch_modifier_alt)                        \
@@ -141,9 +143,6 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "log-active-shaders", false, log_active_shaders)                                         \
     code(bool, "log-uniforms", false, log_uniforms)                                                     \
     code(bool, "log-compat-warn", false, log_compat_warn)                                               \
-    code(bool, "perf-log", false, perf_log)                                                             \
-    code(bool, "hle-counters", false, hle_counters)                                                     \
-    code(bool, "hle-counters-time", false, hle_counters_time)                                           \
     code(bool, "validation-layer", false, validation_layer)                                              \
     code(bool, "pstv-mode", false, pstv_mode)                                                           \
     code(bool, "show-mode", false, show_mode)                                                           \
@@ -167,15 +166,10 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(bool, "surface-sync-clamp-rt", true, surface_sync_clamp_rt)                               \
     code(std::string, "screen-filter", "Bilinear", screen_filter)                                       \
     code(bool, "v-sync", true, v_sync)                                                                  \
-    code(int, "vblank-period-us", 16666, vblank_period_us)                                            \
-    code(int, "swapchain-extra-images", 1, swapchain_extra_images)                                 \
-    code(float, "swapchain-scale", 1.0f, swapchain_scale)                                           \
-    code(bool, "adpf", false, adpf)                                                            \
     code(int, "anisotropic-filtering", 1, anisotropic_filtering)                                        \
     code(bool, "texture-cache", true, texture_cache)                                                    \
     code(bool, "async-pipeline-compilation", false, async_pipeline_compilation)                          \
     code(bool, "accurate-thread-scheduling", true, accurate_thread_scheduling)                          \
-    code(bool, "preempt-on-wake", false, preempt_on_wake)                                               \
     code(int, "preempt-on-wake-us", 1000, preempt_on_wake_us)                                             \
     code(int, "guest-cores", 3, guest_cores)  /* the Vita gives an application three of its four cores */ \
     code(bool, "show-compile-shaders", true, show_compile_shaders)                                      \
@@ -189,9 +183,6 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(std::string, "audio-backend", "SDL", audio_backend)                                            \
     code(int, "audio-volume", 100, audio_volume)                                                        \
     code(bool, "ngs-enable", true, ngs_enable)                                                          \
-    code(bool, "ngs-effects", true, ngs_effects)                                                        \
-    code(int, "ngs-effects-mask", 63, ngs_effects_mask)                                                 \
-    code(int, "ngs-reverb-level", 50, ngs_reverb_level)                                                 \
     code(int, "sys-button", static_cast<int>(SCE_SYSTEM_PARAM_ENTER_BUTTON_CROSS), sys_button)          \
     code(int, "sys-lang", static_cast<int>(SCE_SYSTEM_PARAM_LANG_ENGLISH_US), sys_lang)                 \
     code(int, "sys-date-format", (int)SCE_SYSTEM_PARAM_DATE_FORMAT_MMDDYYYY, sys_date_format)           \
@@ -202,7 +193,6 @@ using PhysicalKeyCode = input::PhysicalKeyCode;
     code(int, "delay-start", 30, delay_start)                                                           \
     code(float, "background-alpha", .300f, background_alpha)                                            \
     code(int, "log-level", 2 /*SPDLOG_LEVEL_INFO*/, log_level)                                          \
-    code(int, "thread-nice-renderer", 0, thread_nice_renderer)                                            \
     code(bool, "cpu-opt", true, cpu_opt)                                                                \
     code(std::string, "pref-path", std::string{}, vita_fs_path)                                         \
     code(bool, "discord-rich-presence", true, discord_rich_presence)                                    \

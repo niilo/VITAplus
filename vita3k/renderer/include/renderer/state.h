@@ -100,6 +100,7 @@ struct State {
     bool fullscreen = false;
 
     Context *context;
+    std::vector<Context *> live_contexts;
 
     GXPPtrMap gxp_ptr_map;
     Queue<CommandList> command_buffer_queue;
@@ -136,15 +137,11 @@ struct State {
 
     std::unique_ptr<std::thread> render_thread;
     std::atomic<bool> render_abort{ false };
-    // The nice value the renderer thread sets for itself at start. It lives
-    // here because a thread may only change its own priority, and the thread
-    // is created in one place and started in another.
-    int render_thread_nice = 0;
 
-    // Ticket 13: thread ids for the ADPF hint, so it names the threads a frame
-    // depends on. Zero until the thread publishes its own id.
-    std::atomic<int> gpu_wait_thread_id{ 0 };
-    std::atomic<int> vblank_thread_id{ 0 };
+    std::mutex render_thread_tasks_mutex;
+    std::vector<std::function<void()>> render_thread_tasks;
+    void run_render_thread_tasks();
+    std::vector<uint32_t> dump_frame_on_render_thread(DisplayState &display, uint32_t &width, uint32_t &height);
 
     std::vector<ShadersHash> precompile_queue;
     bool precompile_requested = false;

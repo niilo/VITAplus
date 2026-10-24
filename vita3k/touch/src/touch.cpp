@@ -29,11 +29,68 @@
 
 #include <SDL3/SDL_events.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstring>
+#include <mutex>
 
 void set_touch_mode(TouchState &state, int mode) {
     state.touchscreen_port = (mode == 1) ? SCE_TOUCH_PORT_BACK : SCE_TOUCH_PORT_FRONT;
     state.touchscreen_both = (mode == 2);
+    state.touchscreen_tilt = (mode == 3);
+}
+
+static void set_tilt_target(TouchState &state, const float x, const float y) {
+    if (!std::isfinite(x) || !std::isfinite(y))
+        return;
+    state.tilt_active = true;
+    state.tilt_x = std::clamp(x * 2.0f - 1.0f, -1.0f, 1.0f);
+    state.tilt_y = std::clamp(y * 2.0f - 1.0f, -1.0f, 1.0f);
+}
+
+constexpr uint64_t TOUCH_LATCH_US = 100000;
+
+static uint64_t touch_now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+static void remove_finger(TouchState &state, const int index) {
+    for (int i = index; i + 1 < state.finger_count; i++) {
+        state.finger_buffer[i] = state.finger_buffer[i + 1];
+        state.finger_first_seq[i] = state.finger_first_seq[i + 1];
+        state.finger_down_us[i] = state.finger_down_us[i + 1];
+        state.finger_lifted[i] = state.finger_lifted[i + 1];
+    }
+    state.finger_count--;
+}
+
+static bool finger_read_by_game(const TouchState &state, const int index) {
+    const uint64_t first_seq = state.finger_first_seq[index];
+    if (!first_seq)
+        return false;
+    for (int port = 0; port < 2; port++) {
+        if (!state.touchscreen_both && port != state.touchscreen_port)
+            continue;
+        if (state.last_read_seq[port].load(std::memory_order_acquire) >= first_seq)
+            return true;
+    }
+    return false;
+}
+
+static void drop_lifted_fingers(TouchState &state, const uint64_t now_us, const bool all) {
+    for (int i = state.finger_count - 1; i >= 0; i--) {
+        if (state.finger_lifted[i] && (all || finger_read_by_game(state, i) || now_us - state.finger_down_us[i] >= TOUCH_LATCH_US))
+            remove_finger(state, i);
+    }
+}
+
+static int find_down_finger(const TouchState &state, const SDL_FingerID finger_id) {
+    for (int i = 0; i < state.finger_count; i++) {
+        if (!state.finger_lifted[i] && state.finger_buffer[i].fingerID == finger_id)
+            return i;
+    }
+    return -1;
 }
 
 static void reset_pinch(TouchState &state) {
@@ -96,6 +153,13 @@ void touch_vsync_update(EmuEnvState &emuenv) {
     auto &touch = emuenv.touch;
     std::chrono::time_point<std::chrono::steady_clock> ts = std::chrono::steady_clock::now();
     uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(ts.time_since_epoch()).count();
+    const std::lock_guard<std::mutex> lock(touch.finger_mutex);
+    drop_lifted_fingers(touch, timestamp, false);
+    const uint64_t seq = touch.sample_seq.load(std::memory_order_relaxed) + 1;
+    for (int i = 0; i < touch.finger_count; i++) {
+        if (!touch.finger_first_seq[i])
+            touch.finger_first_seq[i] = seq;
+    }
 
     // disable mouse support on android because the touchscreen is considered as a mouse, and this creates a mess
 #ifdef __ANDROID__
@@ -103,7 +167,19 @@ void touch_vsync_update(EmuEnvState &emuenv) {
 #else
     constexpr bool on_android = false;
 #endif
+    touch.tilt_active = false;
     if (touch.finger_count > 0 || touch.touchpad_finger_count > 0 || on_android) {
+        const bool fingers_tilt = touch.touchscreen_tilt && !touch.is_touchpad;
+        if (fingers_tilt) {
+            for (int i = 0; i < touch.finger_count; i++) {
+                if (touch.finger_lifted[i])
+                    continue;
+                set_tilt_target(touch,
+                    (touch.finger_buffer[i].x * emuenv.display.viewport_drawable_w - emuenv.display.viewport_x) / emuenv.display.viewport_w,
+                    (touch.finger_buffer[i].y * emuenv.display.viewport_drawable_h - emuenv.display.viewport_y) / emuenv.display.viewport_h);
+                break;
+            }
+        }
         SceTouchData *buffers = touch.touch_buffers[(touch.touch_buffer_idx + 1) % MAX_TOUCH_BUFFER_SAVED];
         for (int port = 0; port < 2; port++) {
             buffers[port].status = 0;
@@ -111,7 +187,7 @@ void touch_vsync_update(EmuEnvState &emuenv) {
             buffers[port].timeStamp = timestamp;
         }
         for (int port = 0; port < 2; port++) {
-            if (!touch.touchscreen_both && port != touch.touchscreen_port)
+            if (fingers_tilt || (!touch.touchscreen_both && port != touch.touchscreen_port))
                 continue;
             SceTouchData touch_data = touch.is_touchpad ? recover_touchpad_events(emuenv, port) : recover_touch_events(emuenv, port);
             touch_data.timeStamp = timestamp;
@@ -127,6 +203,10 @@ void touch_vsync_update(EmuEnvState &emuenv) {
         bool left = ts.mouse_button_left;
         bool right = ts.mouse_button_right;
         left = left || touch.pinch_modifier_enabled;
+
+        if ((ts.mouse_button_middle || ts.tilt_key_held) && allow_mouse_touch)
+            set_tilt_target(touch, (mouse_x - emuenv.display.viewport_x) / emuenv.display.viewport_w,
+                (mouse_y - emuenv.display.viewport_y) / emuenv.display.viewport_h);
 
         for (int port = 0; port < 2; port++) {
             // do it for both the front and the back touchscreen
@@ -189,6 +269,7 @@ void touch_vsync_update(EmuEnvState &emuenv) {
 
     touch.touch_buffer_idx++;
     touch.touch_buffer_idx %= MAX_TOUCH_BUFFER_SAVED;
+    touch.sample_seq.store(seq, std::memory_order_release);
 }
 
 void pinch_modifier(TouchState &state, bool isHold) {
@@ -209,40 +290,43 @@ void pinch_automove(TouchState &state, float velocity) {
 }
 
 int handle_touch_event(TouchState &state, SDL_TouchFingerEvent &finger) {
+    const std::lock_guard<std::mutex> lock(state.finger_mutex);
     switch (finger.type) {
     case SDL_EVENT_FINGER_DOWN: {
+        if (state.finger_count >= 8)
+            drop_lifted_fingers(state, 0, true);
         if (state.finger_count >= 8)
             // best we can do is clean everything
             state.finger_count = 0;
 
-        state.finger_buffer[state.finger_count] = finger;
-        state.finger_buffer[state.finger_count].touchID = state.next_touch_id;
+        const int index = state.finger_count;
+        state.finger_buffer[index] = finger;
+        state.finger_buffer[index].touchID = state.next_touch_id;
+        state.finger_first_seq[index] = 0;
+        state.finger_down_us[index] = touch_now_us();
+        state.finger_lifted[index] = false;
         state.next_touch_id = (state.next_touch_id + 1) % 128;
         state.finger_count++;
         break;
     }
-    case SDL_EVENT_FINGER_UP: {
-        int finger_index = -1;
-        for (int i = 0; i < state.finger_count; i++) {
-            if (finger.fingerID == state.finger_buffer[i].fingerID) {
-                finger_index = i;
-            }
-            if ((finger_index != -1) && ((i + 1) < state.finger_count)) {
-                state.finger_buffer[i] = state.finger_buffer[i + 1];
-            }
-        }
-        if (state.finger_count > 0)
-            state.finger_count--;
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED: {
+        const int index = find_down_finger(state, finger.fingerID);
+        if (index < 0)
+            break;
+        if (finger_read_by_game(state, index))
+            remove_finger(state, index);
+        else
+            state.finger_lifted[index] = true;
         break;
     }
 
     case SDL_EVENT_FINGER_MOTION: {
-        for (int i = 0; i < state.finger_count; i++) {
-            if (finger.fingerID == state.finger_buffer[i].fingerID) {
-                SDL_TouchID touch_id = state.finger_buffer[i].touchID;
-                state.finger_buffer[i] = finger;
-                state.finger_buffer[i].touchID = touch_id;
-            }
+        const int index = find_down_finger(state, finger.fingerID);
+        if (index >= 0) {
+            const SDL_TouchID touch_id = state.finger_buffer[index].touchID;
+            state.finger_buffer[index] = finger;
+            state.finger_buffer[index].touchID = touch_id;
         }
         break;
     }
@@ -252,6 +336,7 @@ int handle_touch_event(TouchState &state, SDL_TouchFingerEvent &finger) {
 }
 
 int handle_touchpad_event(TouchState &state, SDL_GamepadTouchpadEvent &touchpad) {
+    const std::lock_guard<std::mutex> lock(state.finger_mutex);
     switch (touchpad.type) {
     case SDL_EVENT_GAMEPAD_TOUCHPAD_DOWN:
         if (state.touchpad_finger_count >= 8) // best we can do is clean everything
@@ -262,16 +347,21 @@ int handle_touchpad_event(TouchState &state, SDL_GamepadTouchpadEvent &touchpad)
         state.next_touch_id = (state.next_touch_id + 1) % 128;
         state.touchpad_finger_count++;
         break;
-    case SDL_EVENT_GAMEPAD_TOUCHPAD_UP:
-        for (uint32_t i = 0; i < state.touchpad_finger_count; i++) {
+    case SDL_EVENT_GAMEPAD_TOUCHPAD_UP: {
+        int index = -1;
+        for (int i = 0; i < state.touchpad_finger_count; i++) {
             if (touchpad.finger == state.touchpad_buffer[i].finger) {
-                if (i < (state.touchpad_finger_count - 1))
-                    state.touchpad_buffer[i] = state.touchpad_buffer[i + 1];
+                index = i;
+                break;
             }
         }
-        if (state.touchpad_finger_count > 0)
-            state.touchpad_finger_count--;
+        if (index < 0)
+            break;
+        for (int i = index; i + 1 < state.touchpad_finger_count; i++)
+            state.touchpad_buffer[i] = state.touchpad_buffer[i + 1];
+        state.touchpad_finger_count--;
         break;
+    }
     case SDL_EVENT_GAMEPAD_TOUCHPAD_MOTION:
         for (int i = 0; i < state.touchpad_finger_count; i++) {
             if (touchpad.finger == state.touchpad_buffer[i].finger) {
@@ -314,9 +404,10 @@ int toggle_touchscreen(TouchState &state) {
 }
 
 int touch_get(const SceUID thread_id, EmuEnvState &emuenv, const SceUInt32 &port, SceTouchData *pData, SceUInt32 count, bool is_peek) {
+    emuenv.display.guest_input_reads.fetch_add(1, std::memory_order_relaxed);
     memset(pData, 0, sizeof(SceTouchData) * count);
 
-    const bool input_blocked = emuenv.drop_inputs || emuenv.ctrl.overlay_input_intercepted.load(std::memory_order_relaxed);
+    const bool input_blocked = emuenv.drop_inputs || emuenv.ctrl.input_intercepted();
 
     const int port_idx = static_cast<int>(port);
 
@@ -346,6 +437,7 @@ int touch_get(const SceUID thread_id, EmuEnvState &emuenv, const SceUInt32 &port
     if (input_blocked)
         return nb_returned_data;
 
+    const uint64_t read_seq = emuenv.touch.sample_seq.load(std::memory_order_acquire);
     int corr_buffer_idx;
     if (is_peek) {
         corr_buffer_idx = emuenv.touch.touch_buffer_idx;
@@ -366,6 +458,8 @@ int touch_get(const SceUID thread_id, EmuEnvState &emuenv, const SceUInt32 &port
             corr_buffer_idx %= MAX_TOUCH_BUFFER_SAVED;
         }
     }
+    if (nb_returned_data > 0)
+        emuenv.touch.last_read_seq[port_idx].store(read_seq, std::memory_order_release);
 
     return nb_returned_data;
 }

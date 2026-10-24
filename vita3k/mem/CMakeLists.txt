@@ -23,14 +23,10 @@ if(NOT ANDROID)
 	add_executable(
 		mem-tests
 		tests/allocator_tests.cpp
-		tests/external_mapping_tests.cpp
-		tests/hotpath_tests.cpp
-		tests/perf_log_tests.cpp
-		tests/sysmem_block_tests.cpp
-		tests/thread_priority_tests.cpp
+		tests/mempool_tests.cpp
 	)
 
-	target_include_directories(mem-tests PRIVATE include ../modules/include ../kernel/include ../rtc/include)
+	target_include_directories(mem-tests PRIVATE include)
 	target_link_libraries(mem-tests PRIVATE mem googletest util)
 	add_test(NAME mem COMMAND mem-tests)
 endif()

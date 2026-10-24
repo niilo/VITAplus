@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <vector>
 
 static thread_local bool g_refused_guest_access = false;
@@ -44,6 +45,10 @@ static std::atomic<bool> g_emulate_refused_jit_access{ false };
 #include <sys/mman.h>
 #include <unistd.h>
 #include <unwind.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
+#include <cstdio>
 #endif
 
 constexpr uint32_t STANDARD_PAGE_SIZE = KiB(4);
@@ -134,9 +139,6 @@ bool init(MemState &state, const bool use_page_table) {
         state.page_table = PageTable(new PagePtr[TOTAL_MEM_SIZE / KiB(4)]);
         // we use an absolute offset (it is faster), so each entry is the same
         std::fill_n(state.page_table.get(), TOTAL_MEM_SIZE / KiB(4), state.memory.get());
-        // Nothing is allocated yet, except the null guard page, so every entry is null.
-        state.jit_page_table = PageTable(new PagePtr[TOTAL_MEM_SIZE / KiB(4)]);
-        std::fill_n(state.jit_page_table.get(), TOTAL_MEM_SIZE / KiB(4), nullptr);
     }
 
     return true;
@@ -167,8 +169,10 @@ bool is_valid_addr_synced(MemState &state, Address addr) {
 }
 
 bool is_valid_addr_range(const MemState &state, Address start, Address end) {
+    if (end < start)
+        return false;
     const uint32_t start_page = start / STANDARD_PAGE_SIZE;
-    const uint32_t end_page = (end + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE;
+    const uint32_t end_page = static_cast<uint32_t>((static_cast<uint64_t>(end) + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE);
     return state.allocator.free_slot_count(start_page, end_page) == 0;
 }
 
@@ -263,13 +267,6 @@ static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_c
     page.allocated = 1;
     page.size = page_count;
 
-    if (state.use_page_table) {
-        std::atomic_thread_fence(std::memory_order_release);
-        static_assert(STANDARD_PAGE_SIZE == KiB(4), "a page table entry covers one allocation page");
-        for (uint32_t i = page_num; i < page_num + page_count; i++)
-            state.jit_page_table[i] = state.page_table[i];
-    }
-
     if (PAGE_NAME_TRACKING) {
         state.page_name_map.emplace(page_num, name);
     }
@@ -277,30 +274,96 @@ static Address alloc_inner(MemState &state, uint32_t start_page, uint32_t page_c
     return addr;
 }
 
+static void decommit_free_host_pages(MemState &state, Address region_start, Address region_end) {
+    if (!state.preserve_freed_pages) {
+        Address host_page = align_down(region_start, state.host_page_size);
+        Address batch_start = 0;
+        uint32_t batch_size = 0;
+
+        while (host_page < region_end) {
+            Address host_page_end = host_page + state.host_page_size;
+            uint32_t first_guest = host_page / STANDARD_PAGE_SIZE;
+            uint32_t last_guest = host_page_end / STANDARD_PAGE_SIZE;
+
+            if (state.allocator.free_slot_count(first_guest, last_guest) == (last_guest - first_guest)) {
+                if (batch_size == 0)
+                    batch_start = host_page;
+                batch_size += state.host_page_size;
+            } else if (batch_size > 0) {
+                uint8_t *memory = &state.memory[batch_start];
+#ifdef _WIN32
+                const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
+                LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
+#else
+                int ret = mprotect(memory, batch_size, PROT_NONE);
+                LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
+                ret = madvise(memory, batch_size, MADV_DONTNEED);
+                LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
+#endif
+                batch_size = 0;
+            }
+            host_page = host_page_end;
+        }
+
+        if (batch_size > 0) {
+            uint8_t *memory = &state.memory[batch_start];
+#ifdef _WIN32
+            const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
+            LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
+#else
+            int ret = mprotect(memory, batch_size, PROT_NONE);
+            LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
+            ret = madvise(memory, batch_size, MADV_DONTNEED);
+            LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
+#endif
+        }
+    }
+}
+
 Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned int alignment, Address start_addr) {
     if (alignment == 0)
         return alloc(state, size, name, start_addr);
+
+    if (alignment > (1u << 31))
+        return 0;
+    alignment = std::bit_ceil(alignment);
+
+    const uint64_t requested_pages = (static_cast<uint64_t>(size) + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE;
+    const uint64_t alignment_pages = std::max<uint64_t>(1, (static_cast<uint64_t>(alignment) + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE);
+    if (requested_pages == 0 || requested_pages + alignment_pages - 1 > UINT32_MAX)
+        return 0;
+
     const std::lock_guard<std::mutex> lock(state.generation_mutex);
-    size += alignment;
-    const uint32_t page_count = align(size, STANDARD_PAGE_SIZE) / STANDARD_PAGE_SIZE;
+    // just enough pages that the aligned start still has the requested size after it
+    const uint32_t page_count = static_cast<uint32_t>(requested_pages + alignment_pages - 1);
     const Address addr = alloc_inner(state, start_addr / STANDARD_PAGE_SIZE, page_count, name, false);
+    if (!addr)
+        return 0;
+
     const Address align_addr = align(addr, alignment);
     const uint32_t page_num = addr / STANDARD_PAGE_SIZE;
     const uint32_t align_page_num = align_addr / STANDARD_PAGE_SIZE;
+    const uint32_t remnant_front = align_page_num - page_num;
+    const uint32_t remnant_back = page_count - remnant_front - static_cast<uint32_t>(requested_pages);
 
-    if (page_num != align_page_num) {
-        AllocMemPage &page = state.alloc_table[page_num];
-        AllocMemPage &align_page = state.alloc_table[align_page_num];
-        const uint32_t remnant_front = align_page_num - page_num;
+    if (remnant_front) {
         state.allocator.free(page_num, remnant_front);
-        if (state.use_page_table) {
-            for (uint32_t i = page_num; i < align_page_num; i++)
-                state.jit_page_table[i] = nullptr;
+        state.alloc_table[page_num].allocated = 0;
+        if (PAGE_NAME_TRACKING) {
+            state.page_name_map.erase(page_num);
+            state.page_name_map.emplace(align_page_num, name);
         }
-        page.allocated = 0;
-        align_page.allocated = 1;
-        align_page.size = page.size - remnant_front;
     }
+    if (remnant_back)
+        state.allocator.free(align_page_num + static_cast<uint32_t>(requested_pages), remnant_back);
+
+    AllocMemPage &align_page = state.alloc_table[align_page_num];
+    align_page.allocated = 1;
+    align_page.size = static_cast<uint32_t>(requested_pages);
+
+    // alloc_inner committed the remnants along with the block
+    decommit_free_host_pages(state, addr, align_addr);
+    decommit_free_host_pages(state, align_addr + static_cast<Address>(requested_pages * STANDARD_PAGE_SIZE), addr + page_count * STANDARD_PAGE_SIZE);
 
     return align_addr;
 }
@@ -686,6 +749,21 @@ static void note_transition(MemState &mem, bool recopied_any) {
         LOG_INFO("[VERIFY] {} page-table transitions, {} had a concurrent-writer re-copy, {} of those with the world fully parked", mem.transition_count, mem.transition_recopy_events, mem.transition_recopy_events_fully_parked);
 }
 
+static bool is_arena_pinned(const MemState &mem, const uint64_t page_addr) {
+    for (const MemArenaPin &pin : mem.arena_pins) {
+        if (align_down(static_cast<uint64_t>(pin.address), KiB(4)) <= page_addr && page_addr < align(static_cast<uint64_t>(pin.address) + pin.size, KiB(4)))
+            return true;
+    }
+    return false;
+}
+
+static void protect_host_pages_inside(uint8_t *target, size_t size, const MemPerm perm, size_t host_page_size) {
+    uint8_t *const start = reinterpret_cast<uint8_t *>(align(reinterpret_cast<uintptr_t>(target), host_page_size));
+    uint8_t *const end = reinterpret_cast<uint8_t *>(align_down(reinterpret_cast<uintptr_t>(target + size), host_page_size));
+    if (end > start)
+        apply_host_protect(start, end - start, perm, host_page_size);
+}
+
 void add_external_mapping(MemState &mem, Address addr, uint32_t size, uint8_t *addr_ptr) {
     assert((size & 4095) == 0);
     if (!mem.use_page_table)
@@ -696,6 +774,8 @@ void add_external_mapping(MemState &mem, Address addr, uint32_t size, uint8_t *a
     uint8_t *original_address = &mem.memory[addr];
 
     const std::unique_lock<std::shared_mutex> transition_lock(mem.external_transition_mutex);
+
+    apply_host_protect(addr_ptr, size, MemPerm::ReadWrite, mem.host_page_size);
 
     // Copy every page from its live backing
     bool recopied_any = false;
@@ -708,13 +788,30 @@ void add_external_mapping(MemState &mem, Address addr, uint32_t size, uint8_t *a
     note_transition(mem, recopied_any);
 
     std::atomic_thread_fence(std::memory_order_release);
+    bool pinned = false;
     for (uint32_t block = 0; block < size / KiB(4); block++) {
+        if (!mem.arena_pins.empty() && is_arena_pinned(mem, static_cast<uint64_t>(addr) + block * KiB(4))) {
+            pinned = true;
+            continue;
+        }
         mem.page_table[addr / KiB(4) + block] = page_table_entry;
-        mem.jit_page_table[addr / KiB(4) + block] = page_table_entry;
     }
 
-    apply_host_protect(original_address, size, MemPerm::None, mem.host_page_size);
-    release_external_shadow_pages(original_address, size, mem.host_page_size);
+    if (!pinned) {
+        apply_host_protect(original_address, size, MemPerm::None, mem.host_page_size);
+        release_external_shadow_pages(original_address, size, mem.host_page_size);
+    } else {
+        uint32_t run_begin = 0;
+        for (uint32_t off = 0; off <= size; off += KiB(4)) {
+            if (off < size && !is_arena_pinned(mem, static_cast<uint64_t>(addr) + off))
+                continue;
+            if (off > run_begin) {
+                protect_host_pages_inside(original_address + run_begin, off - run_begin, MemPerm::None, mem.host_page_size);
+                release_external_shadow_pages(original_address + run_begin, off - run_begin, mem.host_page_size);
+            }
+            run_begin = off + KiB(4);
+        }
+    }
 
     const std::unique_lock<std::mutex> lock(mem.protect_mutex);
     const std::lock_guard<std::mutex> ext_lock(mem.external_mapping_mutex);
@@ -758,7 +855,7 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
     {
         const std::unique_lock<std::mutex> lock(mem.protect_mutex);
         auto prot_it = mem.protect_tree.lower_bound(mapping.address);
-        if (prot_it->first + prot_it->second.size <= mapping.address) {
+        if (prot_it == mem.protect_tree.end() || prot_it->first + prot_it->second.size <= mapping.address) {
             if (prot_it == mem.protect_tree.begin())
                 prot_it = mem.protect_tree.end();
             else
@@ -792,10 +889,8 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
                 recopied_any |= verify_page(mem, arena + (off - run_begin), addr_ptr + off, "remove_external_mapping", mapping.address + off);
             }
             std::atomic_thread_fence(std::memory_order_release);
-            for (uint32_t off = run_begin; off < run_end; off += KiB(4)) {
+            for (uint32_t off = run_begin; off < run_end; off += KiB(4))
                 mem.page_table[(mapping.address + off) / KiB(4)] = mem.memory.get();
-                mem.jit_page_table[(mapping.address + off) / KiB(4)] = mem.memory.get();
-            }
             run_begin = run_end;
         };
 
@@ -828,10 +923,48 @@ void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size) {
             recopied_any |= verify_page(mem, dst, addr_ptr + off, "remove_external_mapping(hand-over)", page_addr);
             std::atomic_thread_fence(std::memory_order_release);
             mem.page_table[index] = heir->base - heir->address;
-            mem.jit_page_table[index] = heir->base - heir->address;
         }
         flush_run();
         note_transition(mem, recopied_any);
+    }
+}
+
+void pin_to_arena(MemState &mem, Address addr, uint32_t size) {
+    if (!mem.use_page_table || size == 0)
+        return;
+    const uint64_t begin = align_down(static_cast<uint64_t>(addr), KiB(4));
+    const uint64_t end = align(static_cast<uint64_t>(addr) + size, KiB(4));
+    const std::unique_lock<std::shared_mutex> transition_lock(mem.external_transition_mutex);
+    for (uint64_t page = begin; page < end; page += KiB(4)) {
+        if (mem.page_table[page / KiB(4)] != mem.memory.get())
+            return;
+    }
+    mem.arena_pins.push_back({ addr, size });
+}
+
+void unpin_from_arena(MemState &mem, Address addr) {
+    if (!mem.use_page_table)
+        return;
+    const std::unique_lock<std::shared_mutex> transition_lock(mem.external_transition_mutex);
+    const auto pin = std::find_if(mem.arena_pins.begin(), mem.arena_pins.end(), [addr](const MemArenaPin &p) { return p.address == addr; });
+    if (pin == mem.arena_pins.end())
+        return;
+    const uint64_t begin = align_down(static_cast<uint64_t>(pin->address), KiB(4));
+    const uint64_t end = align(static_cast<uint64_t>(pin->address) + pin->size, KiB(4));
+    mem.arena_pins.erase(pin);
+    const std::lock_guard<std::mutex> ext_lock(mem.external_mapping_mutex);
+    for (uint64_t page = begin; page < end; page += KiB(4)) {
+        if (mem.page_table[page / KiB(4)] != mem.memory.get() || is_arena_pinned(mem, page))
+            continue;
+        for (const auto &[host, mapping] : mem.external_mapping) {
+            if (mapping.address <= page && page < static_cast<uint64_t>(mapping.address) + mapping.size) {
+                uint8_t *const buffer = std::bit_cast<uint8_t *>(host);
+                memcpy(buffer + (page - mapping.address), &mem.memory[page], KiB(4));
+                std::atomic_thread_fence(std::memory_order_release);
+                mem.page_table[page / KiB(4)] = buffer - mapping.address;
+                break;
+            }
+        }
     }
 }
 
@@ -888,57 +1021,10 @@ void free(MemState &state, Address address) {
     }
 
     assert(!state.use_page_table || state.page_table[address / KiB(4)] == state.memory.get());
-    if (state.use_page_table && !state.preserve_freed_pages) {
-        // Unpublish the pages before they lose their host protection below.
-        for (uint32_t i = page_num; i < page_num + page.size; i++)
-            state.jit_page_table[i] = nullptr;
-    }
     const Address region_start = page_num * STANDARD_PAGE_SIZE;
     const Address region_end = region_start + page.size * STANDARD_PAGE_SIZE;
 
-    if (!state.preserve_freed_pages) {
-        Address host_page = align_down(region_start, state.host_page_size);
-        Address batch_start = 0;
-        uint32_t batch_size = 0;
-
-        while (host_page < region_end) {
-            Address host_page_end = host_page + state.host_page_size;
-            uint32_t first_guest = host_page / STANDARD_PAGE_SIZE;
-            uint32_t last_guest = host_page_end / STANDARD_PAGE_SIZE;
-
-            if (state.allocator.free_slot_count(first_guest, last_guest) == (last_guest - first_guest)) {
-                if (batch_size == 0)
-                    batch_start = host_page;
-                batch_size += state.host_page_size;
-            } else if (batch_size > 0) {
-                uint8_t *memory = &state.memory[batch_start];
-#ifdef _WIN32
-                const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
-                LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
-#else
-                int ret = mprotect(memory, batch_size, PROT_NONE);
-                LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
-                ret = madvise(memory, batch_size, MADV_DONTNEED);
-                LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
-#endif
-                batch_size = 0;
-            }
-            host_page = host_page_end;
-        }
-
-        if (batch_size > 0) {
-            uint8_t *memory = &state.memory[batch_start];
-#ifdef _WIN32
-            const BOOL ret = VirtualFree(memory, batch_size, MEM_DECOMMIT);
-            LOG_CRITICAL_IF(!ret, "VirtualFree failed: {}", get_error_msg());
-#else
-            int ret = mprotect(memory, batch_size, PROT_NONE);
-            LOG_CRITICAL_IF(ret == -1, "mprotect failed: {}", get_error_msg());
-            ret = madvise(memory, batch_size, MADV_DONTNEED);
-            LOG_CRITICAL_IF(ret == -1, "madvise failed: {}", get_error_msg());
-#endif
-        }
-    }
+    decommit_free_host_pages(state, region_start, region_end);
 }
 
 uint32_t mem_available(MemState &state) {
@@ -963,6 +1049,14 @@ std::string fault_context() {
     return g_fault_context_provider ? g_fault_context_provider() : std::string();
 }
 
+void unprotect_external_mappings(MemState &mem) {
+    if (!mem.use_page_table)
+        return;
+    const std::lock_guard<std::mutex> ext_lock(mem.external_mapping_mutex);
+    for (const auto &[host, mapping] : mem.external_mapping)
+        apply_host_protect(std::bit_cast<uint8_t *>(host), mapping.size, MemPerm::ReadWrite, mem.host_page_size);
+}
+
 void deinit_mem(MemState &state) {
     const std::lock_guard<std::mutex> gen_lock(state.generation_mutex);
 
@@ -976,7 +1070,6 @@ void deinit_mem(MemState &state) {
     state.allocator.reset();
     state.page_name_map.clear();
     state.page_table.reset();
-    state.jit_page_table.reset();
     state.external_mapping.clear();
     state.use_page_table = false;
     state.host_page_size = 0;
@@ -1098,10 +1191,6 @@ static void register_access_violation_handler(const AccessViolationHandler &hand
     }
 }
 
-void prioritize_fault_handler(MemState &) {
-    // The vectored exception handler already runs first.
-}
-
 #else
 
 static thread_local sigjmp_buf t_fault_probe_jmp;
@@ -1139,31 +1228,22 @@ static uintptr_t extract_fault_lr(ucontext_t *context) {
 #endif
 }
 
-static struct sigaction g_dynarmic_segv;
-static std::atomic<bool> g_forward_to_dynarmic{ false };
+static thread_local int t_first_fault_sig = 0;
+static thread_local uintptr_t t_first_fault_addr = 0;
+static thread_local uintptr_t t_first_fault_pc = 0;
+static thread_local uintptr_t t_first_fault_lr = 0;
+static uintptr_t g_self_base = 0;
 
-static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept;
-
-void prioritize_fault_handler(MemState &state) {
-    // Dynarmic installs its SIGSEGV handler when the first JIT is made, after ours. In page-table mode its
-    // handler sees every fault in JIT code first. A fault on a page that the emulator protects (for example
-    // a write to an external mapping) is not at a fastmem patch location, so Dynarmic terminates the process.
-    // Install our handler again, so that it runs first, and forward what it cannot handle to Dynarmic's.
-    if (!state.use_page_table || g_forward_to_dynarmic.load(std::memory_order_acquire))
-        return;
-    struct sigaction current;
-    if (sigaction(SIGSEGV, nullptr, &current) != 0 || current.sa_sigaction == signal_handler)
-        return;
-    struct sigaction sa;
-    sa.sa_flags = SA_SIGINFO;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_sigaction = signal_handler;
-    if (sigaction(SIGSEGV, &sa, &g_dynarmic_segv) != 0) {
-        LOG_CRITICAL("Failed to take the priority of the SIGSEGV handler");
-        return;
-    }
-    g_forward_to_dynarmic.store(true, std::memory_order_release);
-    LOG_INFO("The SIGSEGV handler runs before the handler of Dynarmic");
+static void report_nested_fault(int sig, siginfo_t *info, ucontext_t *context) {
+    char buf[400];
+    snprintf(buf, sizeof(buf), "[CRASH] nested fault: signal %d at address 0x%zx pc 0x%zx lr 0x%zx while handling signal %d at address 0x%zx pc 0x%zx lr 0x%zx (libVita3K base 0x%zx)\n",
+        sig, static_cast<size_t>(reinterpret_cast<uintptr_t>(info->si_addr)), static_cast<size_t>(extract_fault_pc(context)), static_cast<size_t>(extract_fault_lr(context)),
+        t_first_fault_sig, static_cast<size_t>(t_first_fault_addr), static_cast<size_t>(t_first_fault_pc), static_cast<size_t>(t_first_fault_lr), static_cast<size_t>(g_self_base));
+#ifdef __ANDROID__
+    __android_log_write(ANDROID_LOG_FATAL, "Vita3K", buf);
+#endif
+    const ssize_t written = write(STDERR_FILENO, buf, strlen(buf));
+    (void)written;
 }
 
 static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
@@ -1174,10 +1254,15 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
 
     static thread_local int handler_depth = 0;
     if (handler_depth >= 1) {
+        report_nested_fault(sig, info, context);
         signal(sig, SIG_DFL);
         return;
     }
     handler_depth++;
+    t_first_fault_sig = sig;
+    t_first_fault_addr = reinterpret_cast<uintptr_t>(info->si_addr);
+    t_first_fault_pc = extract_fault_pc(context);
+    t_first_fault_lr = extract_fault_lr(context);
     struct DepthGuard {
         int &depth;
         ~DepthGuard() { --depth; }
@@ -1242,15 +1327,6 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
         }
     }
 
-    // Dynarmic recovers from faults at its fastmem patch locations. See prioritize_fault_handler.
-    if (sig == SIGSEGV && g_forward_to_dynarmic.load(std::memory_order_acquire)
-        && (g_dynarmic_segv.sa_flags & SA_SIGINFO) && g_dynarmic_segv.sa_sigaction != signal_handler) {
-        const uintptr_t pc_before = extract_fault_pc(context);
-        g_dynarmic_segv.sa_sigaction(sig, info, uct);
-        if (extract_fault_pc(context) != pc_before)
-            return; // it recovered: the faulting instruction is skipped or redirected
-    }
-
     // Genuine crash so record it in our log and flush as users can rarely logcat.
     uintptr_t crash_pc = 0;
 #if defined(__aarch64__)
@@ -1274,25 +1350,6 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
     crash_lr = static_cast<uintptr_t>(context->uc_mcontext->__ss.__lr);
 #endif
 
-#if defined(__aarch64__) && defined(__ANDROID__)
-    // With pointer authentication the saved lr and the return addresses on the stack carry a
-    // signature in their upper bits. Strip it, or the address cannot be matched to a module.
-    // hint #7 is xpaclri. It works on x30 only and is a no-op without pointer authentication.
-    auto strip_pac = [](uint64_t value) -> uint64_t {
-        uint64_t stripped;
-        asm volatile("mov x16, x30\n\t"
-                     "mov x30, %1\n\t"
-                     "hint #7\n\t"
-                     "mov %0, x30\n\t"
-                     "mov x30, x16"
-            : "=&r"(stripped)
-            : "r"(value)
-            : "x16", "x30");
-        return stripped;
-    };
-    crash_lr = static_cast<uintptr_t>(strip_pac(crash_lr));
-#endif
-
     auto describe = [](uintptr_t addr) -> std::string {
         if (addr == 0)
             return "null";
@@ -1307,21 +1364,6 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
 
     LOG_CRITICAL("[CRASH] fatal signal {} (si_code {}) at address 0x{:X} - pc {} - lr {} - flushing log and aborting",
         sig, info->si_code, reinterpret_cast<uintptr_t>(info->si_addr), describe(crash_pc), describe(crash_lr));
-#if defined(__aarch64__) && defined(__ANDROID__)
-    {
-        // Walk the frame pointer chain. It does not use the unwinder, which can fault on a damaged stack.
-        const uintptr_t sp = static_cast<uintptr_t>(context->uc_mcontext.sp);
-        uintptr_t fp = static_cast<uintptr_t>(context->uc_mcontext.regs[29]);
-        for (int i = 0; i < 16 && fp != 0 && (fp & 0xF) == 0 && fp >= sp && fp - sp < (8u << 20); i++) {
-            const uint64_t *frame = reinterpret_cast<const uint64_t *>(fp);
-            const uintptr_t next_fp = static_cast<uintptr_t>(frame[0]);
-            LOG_CRITICAL("[CRASH] fp frame #{:02}: {}", i, describe(static_cast<uintptr_t>(strip_pac(frame[1]))));
-            if (next_fp <= fp)
-                break;
-            fp = next_fp;
-        }
-    }
-#endif
 #ifndef _WIN32
     {
         struct Bt {
@@ -1348,6 +1390,9 @@ static void signal_handler(int sig, siginfo_t *info, void *uct) noexcept {
 
 static void register_access_violation_handler(const AccessViolationHandler &handler) {
     access_violation_handler = handler;
+    Dl_info self{};
+    if (dladdr(reinterpret_cast<void *>(&signal_handler), &self) != 0)
+        g_self_base = reinterpret_cast<uintptr_t>(self.dli_fbase);
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);

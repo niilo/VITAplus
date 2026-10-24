@@ -22,6 +22,7 @@
 #include <threads/queue.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -61,6 +62,8 @@ struct GxmState {
     Queue<DisplayCallback> display_queue;
     std::atomic<int> display_worker_state{ 0 };
     std::atomic<uint32_t> display_entries_done{ 0 };
+    std::atomic<uint32_t> display_entries_pushed{ 0 };
+    bool display_queue_early_release = false;
     SceUID display_queue_thread;
     std::thread display_host_thread;
 
@@ -76,9 +79,19 @@ struct GxmState {
 
     std::map<Address, MemoryMapInfo> memory_mapped_regions;
     std::mutex callback_lock;
-    Address immediate_context = 0;
+    std::unordered_map<SceGxmContext *, Address> immediate_contexts;
+    Address last_immediate_context = 0;
     std::unordered_map<SceGxmContext *, Address> deferred_contexts;
     std::unordered_map<SceGxmRenderTarget *, Address> render_targets;
+
+    struct OpenScene {
+        SceUID thread;
+        uint64_t serial;
+    };
+    std::mutex open_scenes_mutex;
+    std::condition_variable open_scenes_cond;
+    std::unordered_map<SceGxmContext *, OpenScene> open_scenes;
+    uint64_t open_scene_serial = 0;
 
     void deinit() {
         if (display_host_thread.joinable())
@@ -96,8 +109,14 @@ struct GxmState {
         global_timestamp = 1;
         last_display_global = 0;
         notification_region = Ptr<uint32_t>(0);
-        immediate_context = 0;
+        immediate_contexts.clear();
+        last_immediate_context = 0;
         deferred_contexts.clear();
         render_targets.clear();
+        {
+            const std::lock_guard<std::mutex> lock(open_scenes_mutex);
+            open_scenes.clear();
+        }
+        open_scenes_cond.notify_all();
     }
 };

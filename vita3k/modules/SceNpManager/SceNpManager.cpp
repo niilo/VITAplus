@@ -79,21 +79,6 @@ EXPORT(int, sceNpCheckCallback) {
         thread->run_callback(np_callback.pc, { static_cast<uint32_t>(state), 0, np_callback.data });
     }
 
-    std::vector<SceNpMatching2ContextEvent> events;
-    Address context_cb_pc = 0;
-    Address context_cb_arg = 0;
-    {
-        NpMatching2State &matching2 = emuenv.np.matching2;
-        std::lock_guard<std::mutex> lock(matching2.mutex);
-        if (matching2.context_cb_pc && !matching2.pending.empty()) {
-            events.swap(matching2.pending);
-            context_cb_pc = matching2.context_cb_pc;
-            context_cb_arg = matching2.context_cb_arg;
-        }
-    }
-    for (const SceNpMatching2ContextEvent &event : events)
-        thread->run_callback(context_cb_pc, { event.ctx_id, event.event, event.cause, event.error_code, context_cb_arg });
-
     return STUBBED("Stub");
 }
 
@@ -124,9 +109,28 @@ EXPORT(int, sceNpManagerGetAccountRegion) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, sceNpManagerGetCachedParam) {
-    TRACY_FUNC(sceNpManagerGetCachedParam);
-    return UNIMPLEMENTED();
+constexpr size_t SCE_NP_AVATAR_URL_MAX_LENGTH = 127;
+
+struct SceNpAvatarUrl {
+    char data[SCE_NP_AVATAR_URL_MAX_LENGTH];
+    char term;
+};
+
+struct SceNpManagerCacheParam {
+    np::SceNpId npId;
+    SceNpAvatarUrl avatarUrl;
+};
+static_assert(sizeof(SceNpManagerCacheParam) == 0xA4, "SceNpManagerCacheParam is an invalid size");
+
+EXPORT(int, sceNpManagerGetCachedParam, Ptr<SceNpManagerCacheParam> param) {
+    TRACY_FUNC(sceNpManagerGetCachedParam, param);
+    if (!param || !param.valid(emuenv.mem))
+        return RET_ERROR(SCE_NP_MANAGER_ERROR_INVALID_ARGUMENT);
+
+    // the NP ID and avatar URL the system cached in flash at the last sign-in
+    SceNpManagerCacheParam *const cache = param.get(emuenv.mem);
+    memset(cache, 0, sizeof(*cache));
+    return CALL_EXPORT(sceNpManagerGetNpId, &cache->npId);
 }
 
 EXPORT(int, sceNpManagerGetChatRestrictionFlag, SceInt *isRestricted) {

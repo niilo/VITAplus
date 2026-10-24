@@ -455,9 +455,10 @@ EXPORT(int, sceClibVdprintf) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, sceClibVprintf, const char *fmt, module::vargs args) {
-    TRACY_FUNC(sceClibVprintf, fmt);
+EXPORT(int, sceClibVprintf, const char *fmt, Address list) {
+    TRACY_FUNC(sceClibVprintf, fmt, list);
     const ThreadStatePtr thread = emuenv.kernel.get_thread(thread_id);
+    module::vargs args(list);
     if (!thread) {
         return SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID;
     }
@@ -635,8 +636,9 @@ EXPORT(SceUID, sceIoOpen, const char *file, const int flags, const SceMode mode)
         guest_sched_release_for_block();
     std::this_thread::sleep_for(std::chrono::milliseconds(emuenv.cfg.current_config.file_loading_delay));
 
+    core_lock_release_for_block();
     const SceUID opened_fd = open_file(emuenv.io, file, flags, emuenv.vita_fs_path, export_name);
-    LOG_INFO("Opening file: {} flags=0x{:X} -> {}", file, flags, opened_fd < 0 ? fmt::format("FAILED {}", log_hex(static_cast<uint32_t>(opened_fd))) : fmt::format("fd {}", opened_fd));
+    LOG_TRACE("Opening file: {} flags=0x{:X} -> {}", file, flags, opened_fd < 0 ? fmt::format("FAILED {}", log_hex(static_cast<uint32_t>(opened_fd))) : fmt::format("fd {}", opened_fd));
     return opened_fd;
 }
 
@@ -647,12 +649,15 @@ EXPORT(int, sceIoOpenAsync) {
 
 EXPORT(SceSSize, sceIoPread, SceUID fd, Ptr<void> buf, SceSize nbyte, SceOff offset) {
     TRACY_FUNC(sceIoPread, fd, buf, nbyte, offset);
+    if (offset < 0)
+        return RET_ERROR(SCE_ERROR_ERRNO_EINVAL);
 
     if (emuenv.cfg.current_config.file_loading_delay > 0) {
         const uint32_t delay_us = emuenv.cfg.current_config.file_loading_delay * 1000 + nbyte / 20;
         guest_sched_release_for_block();
         std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
     }
+    core_lock_release_for_block();
     return read_file_into_guest(emuenv.mem, buf.address(), emuenv.io, fd, nbyte, offset, export_name);
 }
 
@@ -663,6 +668,7 @@ EXPORT(int, sceIoPreadAsync) {
 
 EXPORT(SceSSize, sceIoPwrite, SceUID fd, const void *buf, SceSize nbyte, SceOff offset) {
     TRACY_FUNC(sceIoPwrite, fd, buf, nbyte, offset);
+    core_lock_release_for_block();
     return write_file_at(fd, buf, nbyte, offset, emuenv.io, export_name);
 }
 
@@ -1232,6 +1238,8 @@ EXPORT(int, sceKernelCreateLwMutex, Ptr<SceKernelLwMutexWork> workarea, const ch
 
 EXPORT(int, sceKernelCreateMsgPipe, const char *name, uint32_t type, uint32_t attr, SceSize bufSize, const SceKernelCreateMsgPipeOpt *opt) {
     TRACY_FUNC(sceKernelCreateMsgPipe, name, type, attr, bufSize, opt);
+    if (type != SCE_KERNEL_MSG_PIPE_TYPE_USER_MAIN && type != SCE_KERNEL_MSG_PIPE_TYPE_USER_CDRAM)
+        return kernel_refuse(export_name, "message pipe type", SCE_KERNEL_ERROR_ILLEGAL_TYPE);
     return msgpipe_create(emuenv.kernel, export_name, name, thread_id, attr, bufSize);
 }
 
@@ -1783,12 +1791,10 @@ EXPORT(int, sceKernelTryLockLwMutex_16XX, Ptr<SceKernelLwMutexWork> workarea, in
 EXPORT(int, sceKernelTryReceiveMsgPipe, SceUID msgpipe_id, char *recv_buf, SceSize msg_size, SceUInt32 wait_mode, SceSize *result) {
     TRACY_FUNC(sceKernelTryReceiveMsgPipe, msgpipe_id, recv_buf, msg_size, wait_mode, result);
     const auto ret = msgpipe_recv(emuenv.kernel, export_name, thread_id, msgpipe_id, wait_mode | SCE_KERNEL_MSG_PIPE_MODE_DONT_WAIT, recv_buf, msg_size, 0);
-    if (ret == 0) {
-        return SCE_KERNEL_ERROR_MPP_EMPTY;
-    }
-    if (result) {
-        *result = ret;
-    }
+    if (result)
+        *result = static_cast<int>(ret) < 0 ? 0 : ret;
+    if (static_cast<int>(ret) < 0)
+        return ret;
     return SCE_KERNEL_OK;
 }
 
@@ -1799,18 +1805,14 @@ EXPORT(int, sceKernelTryReceiveMsgPipeVector) {
 
 EXPORT(int, sceKernelTrySendMsgPipe, SceUID msgPipeId, const void *pSendBuf, SceSize sendSize, SceUInt32 waitMode, SceSize *pResult) {
     TRACY_FUNC(sceKernelTrySendMsgPipe, msgPipeId, pSendBuf, sendSize, waitMode, pResult);
-    STUBBED("");
     waitMode |= SCE_KERNEL_MSG_PIPE_MODE_DONT_WAIT;
     SceUInt32 pTimeout = 0;
     const auto ret = msgpipe_send(emuenv.kernel, export_name, thread_id, msgPipeId, waitMode, pSendBuf, sendSize, &pTimeout);
-    if (static_cast<int>(ret) < 0) {
+    if (pResult)
+        *pResult = static_cast<int>(ret) < 0 ? 0 : ret;
+    if (static_cast<int>(ret) < 0)
         return ret;
-    }
-    if (pResult) {
-        *pResult = ret;
-    }
     return SCE_KERNEL_OK;
-    // return UNIMPLEMENTED();
 }
 
 EXPORT(int, sceKernelTrySendMsgPipeVector) {
@@ -1891,14 +1893,14 @@ EXPORT(SceInt32, sceKernelWaitLwCondCB, Ptr<SceKernelLwCondWork> pWork, SceUInt3
     return CALL_EXPORT(_sceKernelWaitLwCondCB, pWork, pTimeout);
 }
 
-EXPORT(int, sceKernelWaitMultipleEvents) {
-    TRACY_FUNC(sceKernelWaitMultipleEvents);
-    return UNIMPLEMENTED();
+EXPORT(SceInt32, sceKernelWaitMultipleEvents, SceKernelWaitEvent *pWaitEventList, SceUInt32 numEvents, SceUInt32 waitMode, SceKernelResultEvent *pResultEventList, SceUInt32 *pTimeout) {
+    TRACY_FUNC(sceKernelWaitMultipleEvents, pWaitEventList, numEvents, waitMode, pResultEventList, pTimeout);
+    return simple_event_wait_multiple(emuenv.kernel, export_name, thread_id, pWaitEventList, numEvents, waitMode, pResultEventList, pTimeout, false);
 }
 
-EXPORT(int, sceKernelWaitMultipleEventsCB) {
-    TRACY_FUNC(sceKernelWaitMultipleEventsCB);
-    return UNIMPLEMENTED();
+EXPORT(SceInt32, sceKernelWaitMultipleEventsCB, SceKernelWaitEvent *pWaitEventList, SceUInt32 numEvents, SceUInt32 waitMode, SceKernelResultEvent *pResultEventList, SceUInt32 *pTimeout) {
+    TRACY_FUNC(sceKernelWaitMultipleEventsCB, pWaitEventList, numEvents, waitMode, pResultEventList, pTimeout);
+    return simple_event_wait_multiple(emuenv.kernel, export_name, thread_id, pWaitEventList, numEvents, waitMode, pResultEventList, pTimeout, true);
 }
 
 EXPORT(SceInt32, sceKernelWaitSema, SceUID semaId, SceInt32 needCount, SceUInt32 *pTimeout) {

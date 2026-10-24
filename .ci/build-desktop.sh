@@ -31,6 +31,7 @@ done
 require_arg "$PRESET" "preset"
 require_arg "$CONFIG" "config"
 
+python3 .ci/prepare-plus-build.py
 cmake --preset "$PRESET"
 cmake --build "build/$PRESET" --config "$CONFIG"
 

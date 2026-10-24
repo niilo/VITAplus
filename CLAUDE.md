@@ -82,276 +82,47 @@ public fingerprint if you need to name the key; see below.
 - Keep secrets out of build logs, test fixtures and error messages. A test that
   needs a credential should read it from the environment and skip without it.
 
-## What this repository is
+## Development base and releases
 
-This checkout is `niilo/VITAplus` (`origin`), renamed from `niilo/Vita3K` on
-2026-10-04; GitHub redirects the old name. Since 2026-09-29 the code base
-is Vita3K-Plus (nckstwrt/Vita3K-Plus, read-only remote `plus`, branch
-`plus/all-enhancements`), with our own work on top, on `master`. The reason
-and the plan are in `.scratch/plus-base/`. The old code base (upstream
-Vita3K with picked Plus commits) is the branch `pre-plus-master`.
-`upstream` is `Vita3K/Vita3K`.
+Develop `master` and feature branches from it. The user confirmed the NGS
+experiment worked on 2026-10-24 and requested its promotion and a new release.
+The tested source is `c48f8b20ce61958fa091489e68836c782a85bdaa`, based on
+`nckstwrt/Vita3K-Plus/all-enhancements` at
+`a86b5f93db43e4c4640ad1527e2a4695aad0f35b`.
 
-Plus does not commit `vita3k/util/include/util/fork_build.h`. The build
-generates a default one (`vita3k/util/CMakeLists.txt`).
+The previous master is preserved on
+`archive/master-before-plus-promotion-20261024`. Its history is also a parent
+of the promotion merge. Do not reintroduce its full patch set. Choose focused
+changes with tests and compare rendering changes on the device.
 
-The Android app ID of a release build is `org.vita3k.emulator`, as in
-upstream. A development build adds the `.debug` suffix
-(`org.vita3k.emulator.debug`), so the two install side by side. A development
-build is named `VITAdev` in the launcher and a release build `VITA+`; see
-`android/app/src/reldebug/res/values/strings.xml`.
+`.ci/provenance.json` records the accepted source and previous master.
+`.ci/experiment.json` and the experiment documentation describe historical
+comparisons. Normal development and release packaging use the shared project
+version script instead of the frozen experiment configuration.
 
-An older release used the app ID `org.vita3kplus.emulator`, up to the commit
-`e07fd837`. A device that still has that app installed sees the first build with
-the new ID as a second app, because Android matches on the ID. It has to
-uninstall the old app once. After that, builds with the same ID replace each
-other.
+`tools/release/version-info.sh` is the source of native and Android version
+metadata. `.ci/version-base.txt` declares the next version before tagging.
+Stable `v*` tags produce VITA+ and VITAdev APKs plus the Linux x86_64 AppImage.
+Dashed tags produce a VITAdev pre-release and Linux AppImage. Published releases
+are immutable. Publish a new version rather than replacing their files.
 
-Unmerged Adreno work exists on `feat/ayaneo-pocket-s-performance`,
-`feat/vulkan13-adreno` and `feat/vulkan-device-profiles`. It was merged into
-the old `master`; for this base see `.scratch/plus-base/issues/06`.
+The VITA+ package is `org.vita3k.emulator`. Its production certificate is
+`04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a`.
+VITAdev uses `org.vita3k.emulator.debug` and `DEV_KEYSTORE`, with certificate
+`c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8`.
+Keep both identities and use their existing keys. Never generate replacements.
 
-The Vulkan validation layer is off by default in Plus (`config.h:144`). The
-APK still carries it (`android/prebuilt/`, packaged through `jniLibs`).
-Check for "Enabling vulkan validation layers" in `vita3k.log`. Measure
-speed with release APKs.
+Run `bash .ci/check-tools.sh`, the allocator sanitizer regression, and the
+security checks above before committing build or native changes. Install the
+hooks in each new checkout with `bash tools/release/install-hooks.sh`.
+The release workflow checks signatures, package identities, versions, assets,
+alignment, native revisions, matching symbols and artifact checksums.
 
-`AGENTS.md` points to this file and holds no rules of its own.
-`docs/agents/` configures the engineering skills: issues are Markdown files
-under `.scratch/<feature-slug>/`, and domain docs are `CONTEXT.md` and
-`docs/adr/` when they exist.
+Prepare Plus's required logging header with
+`python3 .ci/prepare-plus-build.py` before a manual native build. CI does this
+for Android and Linux. Native build flags, renderer, shaders, dependencies and
+assets remain those of the tested Plus base unless a focused change says why.
 
-## Containers
-
-Two drivers for the same Containerfiles. Use `container/vita3k.sh` with Apple's
-`container` CLI on macOS, and `container/vita3k-docker.sh` with Docker or Podman
-on Linux x86_64. Both take the same commands and mount the repo at `/src`, so
-output lands in the normal `build/` folder on the host. `vita3k-docker.sh` needs
-no device and no person, so an agent can build, test and format with it.
-`docs/agent-loop.md` has the build, test and review loop for the tickets under
-`.scratch/pocket-s-android13/`.
-
-```sh
-container/vita3k.sh build            # Linux build, preset container-linux
-container/vita3k.sh test             # ctest; extra args go to ctest, e.g. -R mem
-container/vita3k.sh format-check     # the same clang-format 22 check as CI
-container/vita3k.sh format
-container/vita3k.sh android          # debug APK, both ABIs: build/android-apk/app-reldebug.apk
-container/vita3k.sh android release  # small APK, arm64 only, R8 on: build/android-apk/app-release.apk
-container/vita3k.sh shell [android]  # interactive shell
-container/vita3k.sh run <cmd...>     # any command in the Linux container
-```
-
-- `container/linux.Containerfile`: Fedora 44. Fedora is used because it ships
-  Qt 6.11. Ubuntu 26.04 has only 6.10. `vita3k.sh` builds it arm64 for Apple
-  silicon; `vita3k-docker.sh` builds it amd64.
-- `container/android.Containerfile`: Ubuntu 24.04 amd64, because the NDK has
-  x86_64 Linux host tools only. `vita3k.sh` runs it through Rosetta on Apple
-  silicon. Keep its `ANDROID_NDK_VERSION` equal to `ndkVersion` in
-  `android/app/build.gradle`.
-- The reldebug APK is about 100 MB: R8 is off, so the Java code is about
-  64 MB, and it has a second `libVita3K.so` for x86_64. The release APK has
-  neither. `container/build-android.sh` holds both build modes.
-- The image tag is a hash of the Containerfile. An edit to the file builds a
-  new image on the next command. `vita3k-docker.sh` puts `docker` in the tag, so
-  the two drivers never reuse each other's image.
-- ccache, vcpkg binaries and the Gradle cache are kept in the volumes
-  `vita3k-linux-ccache` and `vita3k-android-cache`
-  (`clean-cache` deletes them).
-- `VITA3K_CONTAINER_CPUS` and `VITA3K_CONTAINER_MEMORY` (default 16G) set the
-  container size. The container default of 1 GiB is too small to link.
-- `tools/android/device.sh` runs the test loop on an Android device through
-  adb: install, launch, config changes, logs, thermal data. Run it with
-  `help` for the commands.
-  `device.sh hold <x> <y>` holds a touch for 300 ms. The games take that, but
-  not a plain tap or an adb key event.
-- `tools/android/uncharted_scene.sh <package> <label>` starts Uncharted:
-  Golden Abyss, loads the saved chapter and samples the FPS counter into one
-  picture (`tools/android/fps_sample.py`). Use it to compare a build, a Vulkan
-  driver or a setting in the same scene. Needs an unlocked device. Results go
-  to `tmp/uncharted-scene/<label>/`. Check `custom-driver-name` before a run.
-
-- `tools/android/touch_record.sh <package> <title_id> <label>` and
-  `tools/android/touch_replay.sh <package> <title_id> <label>` reach gameplay in
-  any title. `gameplay_scene.sh` is hardcoded to Uncharted; these two are not.
-  Record the walk once by hand, then replay it. The touches are recorded as the
-  numbers the touchscreen reported and are replayed unchanged, so a recording
-  does not depend on the screen orientation. The gaps are timed on the device, so
-  a replay runs at the recorded speed rather than at the speed of one adb call
-  per event. Results go to `tmp/touch/<label>/`. Read `scene.png` after a replay:
-  a walk that ends on a menu is a stale recording, not a broken game. See
-  `.scratch/cpu-hotpath-counters/issues/10-record-and-replay-touch-walks.md`.
-- `tools/android/gameplay_scene.sh <package> <label>` is the one to use for a
-  real number. It walks the Uncharted menus into the saved chapter, then holds
-  the right stick and the movement keys so the camera turns and the game has to
-  render new data. The title screen barely touches the renderer, so a frame rate
-  measured there is not a result. Read it with `perf_summary.py --warmup 120`,
-  which skips the boot and the menu walk. See
-  `.scratch/pocket-s-android13/issues/00-driver-and-power.md`.
-  On the Pocket S, gameplay is **5.8 FPS on the stock Qualcomm driver and 30 FPS
-  on Turnip** at resolution 2, with the same draws per scene. **The stock driver
-  cannot be made to close that gap.** It does not advertise
-  `VK_EXT_`/`VK_ARM_rasterization_order_attachment_access` at all — 113
-  extensions, neither name among them — so it stays on `direct_fragcolor`, which
-  puts a pipeline barrier on the colour attachment before every
-  programmable-blending draw. Turnip advertises both and reports
-  `support_rasterized_order_access=true`. Measured over 175 sessions in
-  `tmp/gameplay/`, the flag was true in every `MesaTurnip` session and false in
-  every `QualcommProprietary` one. **Quote the `driverID` line with any
-  driver-dependent claim**: `tmp/gameplay/stock-gameplay/vita3k.log` is named for
-  the stock driver but holds both, because the Balemuni pack injects in some
-  sessions and falls back in others, which is how this question was first
-  answered wrongly. See
-  `.scratch/pocket-s-android13/issues/30-stock-driver-raster-order.md`.
-- A `custom-driver-name` that does not resolve is **not** an error, only a
-  warning: the log says `Failed to load custom driver <name>; falling back to
-  the system Vulkan loader` and the run continues on the stock driver. Drivers
-  live in each package's own `files/driver/`, and `org.vita3k.emulator` and
-  `org.vita3k.emulator.debug` do not share it, so a name read out of one
-  package's `config.yml` may not exist in the other. `summary.txt` records the
-  requested name, not the driver that ran, so it cannot settle this; the
-  `driverID` line can. Check it before believing any run. See
-  `.scratch/pocket-s-android13/issues/04-baseline.md`.
-- The goal is **energy per played frame**, not frame rate: a steady 30 FPS on a
-  game locked to 30, 60 where the rate is unlocked, and the lowest device
-  power that holds both. A change that saves power and misses the frame rate or
-  the steadiness is rejected. See `.scratch/pocket-s-android13/spec.md`.
-- `tools/android/device_power_sample.sh <csv> <secs>` samples device power, the
-  clocks and the thermal status during play. Power is the battery current times
-  the battery voltage from `/sys/class/power_supply/battery`, and it covers the
-  display and Android too, so only the difference between two runs is the
-  emulator's. `power_now` in the same folder read 54450779 on this device,
-  which is not a plausible draw, so it is not used.
-- `tools/android/run_is_valid.sh <gameplay dir> [power csv]` decides whether a
-  run may be quoted. It rejects a run where the emulator's watchdog fired, where
-  the thermal status during the run was 3 or above, or where the samples
-  covered a menu. `vita3k.log` is append-only, so it reads only the last
-  session, after the "Vita3K session start" banner.
-- `.signing/` holds the local signing keys (a dev key and the release key). See
-  the `## Security` section above for the rules on them and for the check that
-  runs on every commit. `container/vita3k.sh android release` uses the dev key
-  from `.signing/dev/` by itself, so an installed APK is always updatable
-  without input. `VITA_SIGN_WITH_RELEASE_KEY=1` uses the release key. See
-  `docs/release.md`.
-- **Run `bash tools/release/install-hooks.sh` once per clone**, before the first
-  commit in a new clone or a new worktree. It points `core.hooksPath` at
-  `tools/release/hooks/`, where `pre-commit` and `commit-msg` live. See the
-  `## Security` section above for what they refuse and why.
-- Test the Python tools with `python3 tools/android/test_fps_sample.py` and
-  `python3 tools/android/test_perf_summary.py`.
-- A container build cannot run the emulator with a GPU. Use a native macOS
-  build (below) to run games.
-
-## Build
-
-After a clone or a branch change, update the submodules. Most dependencies
-are submodules under `external/` (dynarmic, SDL, glslang, SPIRV-Cross, boost,
-ffmpeg, googletest, and others).
-
-```sh
-git submodule update --init --recursive
-```
-
-CMake presets are named `<os>-<generator>-<compiler>`. Each one builds into
-`build/<preset>`. Run `cmake --list-presets` to see the ones for this host.
-The Qt frontend needs Qt 6.11 or newer. Set `Qt6_ROOT` if the system Qt is
-older.
-
-```sh
-# macOS (this machine): brew install git cmake molten-vk openssl qt
-cmake --preset macos-ninja
-cmake --build build/macos-ninja --config RelWithDebInfo
-
-# Linux
-cmake --preset linux-ninja-clang
-cmake --build build/linux-ninja-clang --config RelWithDebInfo
-
-# Windows
-set Qt6_ROOT=C:\Qt\6.11.0\msvc2022_64
-cmake --preset windows-vs2022
-cmake --build build/windows-vs2022 --config RelWithDebInfo
-```
-
-Android uses Gradle, with the native code built through CMake. It needs
-`ANDROID_NDK_HOME`, `VCPKG_ROOT`, and the vcpkg manifest dependencies
-(`vcpkg install --triplet arm64-android` from the repo root).
-
-```sh
-cd android && ./gradlew --stacktrace assembleReldebug
-```
-
-Target devices: Android on the Ayaneo Pocket S (arm64) and Linux on the Steam
-Deck (x86_64). The code for Windows and macOS stays in the repository, but CI
-does not build it and nobody tests it.
-
-CI runs only when a release tag `v*` is pushed (`docs/release.md`). The workflow
-`.github/workflows/c-cpp.yml` builds the Steam Deck AppImage through
-`.ci/build-desktop.sh --preset ci-linux-clang-appimage --config Release` and the
-signed Android APK through `.ci/build-android.sh`, then creates a GitHub release
-with `.ci/release-collect.sh`. CodeQL runs on the same tags. The format check
-(`.github/workflows/format.yml`) still runs on every push and pull request,
-because it is not a build.
-
-## Tests
-
-Tests use googletest and CTest. Two suites exist: `mem-tests`
-(`vita3k/mem/tests/`) and `module-tests` (`vita3k/module/tests/`).
-
-```sh
-ctest --test-dir build/<preset> --build-config RelWithDebInfo --output-on-failure
-ctest --test-dir build/<preset> --build-config RelWithDebInfo -R mem   # one suite
-build/<preset>/bin/<config>/mem-tests --gtest_filter='Suite.Name'      # one test; binary path depends on generator
-```
-
-## Format
-
-CI checks formatting with clang-format on `vita3k/` and `tools/`
-(`.clang-format` at the root). Format before a commit:
-
-```sh
-./format.sh            # CLANG_FORMAT_BIN=<path> to pick a binary
-```
-
-## Architecture
-
-The emulator is under `vita3k/`. Each subdirectory is a CMake static library
-with `include/<name>/` and `src/`. The main pieces and how they connect:
-
-- **`emuenv/`**: `EmuEnvState` holds the state of the whole emulator (memory,
-  kernel, IO, renderer, display, audio, config). Most code takes it as the
-  first argument.
-- **`cpu/`**: guest ARM CPU through dynarmic (`dynarmic_cpu.cpp`).
-- **`mem/`**: the guest address space, a large host reservation with a page
-  allocator. Memory mapping modes (External Host, Page Table, Native Buffer,
-  Double Buffer) decide how the GPU sees guest memory.
-- **`kernel/`**: guest threads, sync objects, waits, callbacks, and the module
-  loader.
-- **`module/`** and **`modules/`**: high-level emulation (HLE) of Vita system
-  libraries. `modules/` has one folder per Vita library (`SceGxm`,
-  `SceAudio`, `SceIofilemgr`, and about 150 more). A function is written as
-  `EXPORT(ret, name, args...)` (`module/include/module/module.h`), and its
-  NID is registered in `nids/include/nids/nids.inc` as
-  `NID(name, 0x...)`. A new export needs both. Some libraries are loaded as
-  the game's or firmware's own LLE (real code) modules instead;
-  `modules/module_parent.cpp` handles loading and import binding.
-- **`gxm/`** and **`renderer/`**: `SceGxm` calls build renderer commands
-  (`renderer/include/renderer/commands.h`, `CommandOpcode`). A separate
-  renderer thread runs them. Backends are `renderer/src/vulkan/` (main;
-  `surface_cache.cpp` maps guest render targets and textures to host images)
-  and `renderer/src/gl/`. `renderer/src/texture/` decodes Vita texture
-  formats.
-- **`shader/`**: translates GXP shader programs (USSE instructions) to SPIR-V
-  (`spirv_recompiler.cpp`, `translator/`), and then to GLSL for OpenGL
-  through SPIRV-Cross.
-- **`io/`**: the virtual filesystem (`ux0:`, `app0:`, `vs0:`, and so on)
-  mapped to host folders.
-- **`display/`**: vblank timing and frame presentation.
-- **`gui-qt/`**: the Qt desktop frontend. **`overlay/`**: the in-game
-  overlay. **`android/jni/`** plus `android/app/` (Kotlin): the Android
-  frontend.
-- **`interface.cpp`** and **`main.cpp`**: boot flow (install or load an app,
-  load modules, start the main thread).
-
-`tools/gen-modules` generates module stubs. `tools/native-tool` and
-`tools/usse-decoder-gen` are developer tools. `vita3k/shaders-builtin/` holds
-the host shaders that the renderer needs at run time.
+Device performance, power and thermals have not been measured in the cloud.
+Use matched scenes and quote the actual Vulkan `driverID` for rendering or
+performance claims. Release instructions are in `docs/release.md`.

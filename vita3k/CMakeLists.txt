@@ -2,7 +2,6 @@ set(VITA3K_ORG_NAME "Vita3K")
 # APP_NAME is the on-disk data folder name, keep it: DISPLAY_NAME is what the user sees
 set(VITA3K_APP_NAME "Vita3K")
 set(VITA3K_DISPLAY_NAME "Vita3K+")
-
 # The version comes from the release tag this checkout is built from, not from a
 # number written here. tools/release/version-info.sh is the one place that
 # decides it, and android/app/build.gradle calls the same script, so the app
@@ -57,6 +56,11 @@ foreach(entry
 endforeach()
 
 message(STATUS "Vita3K version ${VITA3K_APP_VERSION} (base ${VITA3K_BASE_VERSION}, ${VITA3K_COMMITS_SINCE_RELEASE} commits after the tag)")
+
+set(VITA3K_APP_NUMBER ${VITA3K_VERSION_CODE})
+if(DEFINED VITA3K_BUILD_VERSION AND NOT VITA3K_BUILD_VERSION STREQUAL VITA3K_APP_VERSION)
+	message(FATAL_ERROR "Android and native build versions differ")
+endif()
 
 execute_process(
 	COMMAND git rev-list HEAD --count
@@ -118,7 +122,7 @@ file(WRITE ${CMAKE_BINARY_DIR}/vita3k/config/gitver.h
 	"#define APP_VER_HI ${VITA3K_APP_VER_HI}\n"
 	"#define APP_VER_MID ${VITA3K_APP_VER_MID}\n"
 	"#define APP_VER_LO ${VITA3K_APP_VER_LO}\n"
-	"#define APP_BUILD ${VITA3K_APP_BUILD}\n"
+	"#define APP_NUMBER ${VITA3K_APP_NUMBER}\n"
 )
 
 include_directories(${CMAKE_BINARY_DIR}/vita3k/config)

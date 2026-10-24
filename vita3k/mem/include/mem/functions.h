@@ -49,10 +49,6 @@ constexpr MemPerm most_restrictive_perm(MemPerm a, MemPerm b) {
 }
 
 bool init(MemState &state, const bool use_page_table);
-
-// Call it after the first JIT is made. In page-table mode it makes the fault handler of the emulator
-// run before the handler that Dynarmic installs.
-void prioritize_fault_handler(MemState &state);
 void deinit_mem(MemState &state);
 Address alloc(MemState &state, uint32_t size, const char *name, Address start_addr = user_main_memory_start);
 Address alloc_aligned(MemState &state, uint32_t size, const char *name, unsigned int alignment, Address start_addr = user_main_memory_start);
@@ -63,6 +59,9 @@ void open_access_parent_protect_segment(MemState &state, Address addr);
 void close_access_parent_protect_segment(MemState &state, Address addr);
 void add_external_mapping(MemState &mem, Address addr, uint32_t size, uint8_t *addr_ptr);
 void remove_external_mapping(MemState &mem, uint8_t *addr_ptr, uint32_t size);
+void pin_to_arena(MemState &mem, Address addr, uint32_t size);
+void unpin_from_arena(MemState &mem, Address addr);
+void unprotect_external_mappings(MemState &mem);
 bool is_protecting(MemState &state, Address addr, MemPerm *perm = nullptr);
 bool is_valid_addr(const MemState &state, Address addr);
 bool is_valid_addr_synced(MemState &state, Address addr);

@@ -1,36 +1,32 @@
 name: Release build
 
-# Builds run only when a release tag is pushed, for example:
-#   git tag v1.2.0 && git push origin v1.2.0
-# A tag with a dash (v1.2.0-rc1) makes a pre-release.
-# Targets: Android arm64 (Ayaneo Pocket S) and Linux x86_64 (Steam Deck).
-# The code for Windows and macOS stays in the repository, but CI does not build it.
 on:
+  workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
-# The token can only read by default. Only the release job gets write access.
-# Actions are pinned to an exact commit (the tag is in the comment), so a moved tag
-# cannot change the code that sees the signing secrets.
 permissions:
   contents: read
 
 env:
   BUILD_CONFIG: Release
   QT_VERSION: '6.11.0'
-  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_GHA_ENABLED: 'true'
 
 jobs:
   linux-build:
     name: Linux x86_64 (Steam Deck)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           submodules: recursive
+          persist-credentials: false
 
       - name: Set up build environment (Linux)
         run: bash ./.ci/setup-linux.sh x86_64 with-appimage
@@ -71,155 +67,65 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ARTIFACT_DIR }}
 
-  android-build:
-    name: Android arm64 (Ayaneo Pocket S)
-    runs-on: ubuntu-latest
+  android-release:
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/android-apk.yml
+    with:
+      channel: release
+    secrets: inherit
 
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          fetch-depth: 0
-          submodules: recursive
-
-      # A release APK must be signed with the same key every time. Android refuses to update an
-      # app that was signed with another key. See docs/release.md for the key and the secrets.
-      - name: Check the signing secrets
-        env:
-          KEYSTORE: ${{ secrets.KEYSTORE }}
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-        run: |
-          missing=""
-          for name in KEYSTORE SIGNING_STORE_PASSWORD SIGNING_KEY_ALIAS SIGNING_KEY_PASSWORD; do
-            if [ -z "${!name}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing. Add them (see docs/release.md) and push the tag again."
-            exit 1
-          fi
-
-      - name: Restore native dependency cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: |
-            /usr/local/share/vcpkg/installed
-            /usr/local/share/vcpkg/packages
-          key: cache-android-native-${{ hashFiles('CMakeLists.txt', 'cmake/**', '.ci/**', 'android/app/build.gradle', 'vcpkg.json') }}
-          restore-keys: |
-            cache-android-native-
-
-      - name: Set up Java
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
-        with:
-          add-job-summary: on-failure
-          cache-provider: basic
-          validate-wrappers: false
-
-      - name: Set up Android SDK tools
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-
-      - name: Set up Android build environment
-        env:
-          VCPKG_ROOT: /usr/local/share/vcpkg
-        run: bash ./.ci/setup-android.sh
-
-      - uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
-
-      - name: Decode Android keystore
-        env:
-          KEYSTORE_ENCODED: ${{ secrets.KEYSTORE }}
-        run: |
-          umask 077
-          echo "$KEYSTORE_ENCODED" | base64 --decode > /home/runner/keystore.jks
-
-      - name: Compute artifact paths
-        shell: bash
-        run: |
-          echo "GIT_SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME=vita3k-$(git rev-parse --short HEAD)-android" >> "$GITHUB_ENV"
-          echo "ARTIFACT_DIR=artifacts/vita3k-$(git rev-parse --short HEAD)-android" >> "$GITHUB_ENV"
-
-      - name: Build Android target
-        env:
-          SIGNING_STORE_PATH: /home/runner/keystore.jks
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
-          VCPKG_ROOT: /usr/local/share/vcpkg
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-        run: bash ./.ci/build-android.sh "${{ env.ARTIFACT_DIR }}"
-
-      - name: Delete the keystore
-        if: always()
-        run: rm -f /home/runner/keystore.jks
-
-      - name: Print Android ccache statistics
-        run: ccache -s
-
-      - name: Upload Android artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.ARTIFACT_DIR }}
+  android-dev:
+    uses: ./.github/workflows/android-apk.yml
+    with:
+      channel: dev
+    secrets: inherit
 
   create-release:
     name: GitHub release
-    needs: [linux-build, android-build]
-    runs-on: ubuntu-latest
+    needs: [linux-build, android-release, android-dev]
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.linux-build.result == 'success' && needs.android-dev.result == 'success' && (needs.android-release.result == 'success' || needs.android-release.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     concurrency:
-      group: create-release
+      group: release-${{ github.ref_name }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-
-      - name: Download artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-
-      - name: Prepare release assets
-        run: bash ./.ci/release-collect.sh "${{ github.ref_name }}"
-
-      - name: Create or update the release
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: downloaded-artifacts
+      - name: Verify and collect the release assets
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 .ci/collect-release.py "$TAG" downloaded-artifacts release-assets
+      - name: Publish the complete release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: niilo/VITAplus
           TAG: ${{ github.ref_name }}
         run: |
-          # The updater compares this number against the version of the running
-          # build, so it has to be in the release body.
-          version_info="$(bash tools/release/version-info.sh)"
-          build_number="$(sed -n 's/^version_code=//p' <<< "$version_info")"
-          build_version="$(sed -n 's/^version=//p' <<< "$version_info")"
-
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
-            notes_file="$(mktemp)"
-            {
-              echo "Vita3K Build: $build_number"
-              echo
-              echo "Version: $build_version"
-              echo
-              gh release view "$TAG" --json body --jq .body
-            } > "$notes_file"
-            gh release edit "$TAG" --notes-file "$notes_file"
+          set -euo pipefail
+          cd release-assets
+          sha256sum -c SHA256SUMS.txt
+          if gh release view "$TAG" --json isDraft,targetCommitish > "$RUNNER_TEMP/existing-release.json" 2>/dev/null; then
+            python3 - <<'PYCODE'
+          import json, os, pathlib
+          release = json.loads((pathlib.Path(os.environ['RUNNER_TEMP']) / 'existing-release.json').read_text())
+          assert release['isDraft'], 'Published releases are immutable; use a new version'
+          assert release['targetCommitish'] == os.environ['GITHUB_SHA'], 'Draft targets another commit'
+          PYCODE
           else
-            flags=""
-            if [[ "$TAG" == *-* ]]; then flags="--prerelease"; fi
-            notes_file="$(mktemp)"
-            {
-              echo "Vita3K Build: $build_number"
-              echo
-              echo "Version: $build_version"
-            } > "$notes_file"
-            gh release create "$TAG" release-assets/* --title "VITA+ $TAG" \
-              --notes-file "$notes_file" --verify-tag $flags
+            gh release create "$TAG" --target "$GITHUB_SHA" --verify-tag --draft \
+              --title "VITA+ $TAG" --notes-file RELEASE_NOTES.md --latest=false
+          fi
+          gh release upload "$TAG" ./* --clobber
+          if [[ "$TAG" == *-* ]]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false --prerelease=false --latest=true
           fi

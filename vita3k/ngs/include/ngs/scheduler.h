@@ -38,29 +38,32 @@ struct System;
 struct State;
 
 enum class PendingType {
-    ReleaseRack
+    ReleaseRack,
+    VoiceFinished
     // TODO add voice operations during system lock
 };
 
 struct OperationPending {
     PendingType type;
-    // Guest addresses, not host pointers. An operation waits here until the
-    // scheduler reaches it, and by then an external GPU mapping may have moved
-    // the data. See the note on Voice::rack.
-    Ptr<System> system;
-    // ReleaseRack. This was an anonymous union, which has no usable default
-    // constructor once a member is a Ptr rather than a scalar.
-    struct {
-        State *state;
-        Ptr<Rack> rack;
-        Address callback;
-    } release_data;
+    System *system;
+    union {
+        // ReleaseRack
+        struct {
+            State *state;
+            Rack *rack;
+            // can't use a ptr, otherwise the default constructor is deleted
+            Address callback;
+        } release_data;
+        // VoiceFinished: a keyed-off voice whose finished callback is due at the next update
+        struct {
+            Voice *voice;
+            uint32_t play_count;
+        } finished_data;
+    };
 };
 
 struct VoiceScheduler {
-    // Guest addresses, not host pointers. A voice stays queued across frames,
-    // so a host pointer taken when it was played goes stale. See Voice::rack.
-    std::vector<Ptr<Voice>> queue;
+    std::vector<Voice *> queue;
     std::queue<OperationPending> operations_pending;
 
     std::recursive_mutex mutex;
@@ -68,22 +71,23 @@ struct VoiceScheduler {
     bool is_updating = false;
 
 protected:
-    void deque_insert(const MemState &mem, Ptr<Voice> voice);
+    void deque_insert(const MemState &mem, Voice *voice);
 
-    bool resort_to_respect_dependencies(const MemState &mem, Ptr<Voice> source);
+    bool resort_to_respect_dependencies(const MemState &mem, Voice *source);
 
-    std::int32_t get_position(Ptr<Voice> v);
+    std::int32_t get_position(Voice *v);
 
 public:
-    bool deque_voice(Ptr<Voice> voice);
+    bool deque_voice(Voice *voice);
 
     bool play(const MemState &mem, Voice *voice);
     bool pause(const MemState &mem, Voice *voice);
     bool resume(const MemState &mem, Voice *voice);
     bool stop(const MemState &mem, Voice *voice);
     bool off(const MemState &mem, Voice *voice);
+    void cancel_finished_callback(Voice *voice);
 
-    void update(KernelState &kern, const MemState &mem, const SceUID thread_id);
+    void update(KernelState &kern, MemState &mem, const SceUID thread_id);
 
     Ptr<Patch> patch(const MemState &mem, SceNgsPatchSetupInfo *info);
 };

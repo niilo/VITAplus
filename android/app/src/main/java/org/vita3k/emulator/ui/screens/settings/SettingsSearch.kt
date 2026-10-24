@@ -64,6 +64,7 @@ internal fun rememberSettingsSearchEntries(
         }
         add(entry(SettingsCategory.Gpu, R.string.settings_gpu_async_pipeline, R.string.settings_gpu_async_pipeline_desc))
         add(entry(SettingsCategory.Gpu, R.string.settings_gpu_accurate_scheduling, R.string.settings_gpu_accurate_scheduling_desc))
+        add(entry(SettingsCategory.Gpu, R.string.settings_gpu_guest_cores, R.string.settings_gpu_guest_cores_desc))
         add(entry(SettingsCategory.Gpu, R.string.settings_gpu_screen_filter, R.string.settings_gpu_screen_filter_desc))
         add(entry(SettingsCategory.Gpu, R.string.settings_gpu_resolution, R.string.settings_gpu_resolution_desc))
         add(entry(SettingsCategory.Gpu, R.string.settings_gpu_anisotropic, R.string.settings_gpu_anisotropic_desc))
@@ -105,6 +106,7 @@ internal fun rememberSettingsSearchEntries(
         add(entry(SettingsCategory.Controls, R.string.settings_controls_l2r2, R.string.settings_controls_l2r2_desc, scope = SettingsScope.Global, keywords = "touch triggers shoulder buttons"))
         add(entry(SettingsCategory.Controls, R.string.settings_controls_l3r3, R.string.settings_controls_l3r3_desc, scope = SettingsScope.Global, keywords = "touch stick clicks l3 r3"))
         add(entry(SettingsCategory.Controls, R.string.settings_controls_touch_switch, R.string.settings_controls_touch_switch_desc, scope = SettingsScope.Global, keywords = "front rear touchscreen switch"))
+        add(entry(SettingsCategory.Controls, R.string.settings_controls_touch_switch_tilt, R.string.settings_controls_touch_switch_tilt_desc, scope = SettingsScope.Global, keywords = "tilt gyro motion touchscreen switch"))
         add(entry(SettingsCategory.Controls, R.string.settings_controls_hide_toggle, R.string.settings_controls_hide_toggle_desc, scope = SettingsScope.Global, keywords = "hide overlay button toggle"))
         add(entry(SettingsCategory.Controls, R.string.settings_controls_scale, R.string.settings_controls_scale_desc, scope = SettingsScope.Global, keywords = "overlay size"))
         add(entry(SettingsCategory.Controls, R.string.settings_controls_opacity, R.string.settings_controls_opacity_desc, scope = SettingsScope.Global, keywords = "overlay transparency"))
@@ -143,7 +145,6 @@ internal fun rememberSettingsSearchEntries(
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_check_updates, R.string.settings_emulator_check_updates_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_archive_log, R.string.settings_emulator_archive_log_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_log_compat_warn, R.string.settings_emulator_log_compat_warn_desc, scope = SettingsScope.Global))
-            add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_log, R.string.settings_emulator_perf_log_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_log_level, R.string.settings_emulator_log_level_desc, scope = SettingsScope.Global, keywords = "logging trace debug info warning error critical off"))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_overlay, R.string.settings_emulator_perf_overlay_desc, scope = SettingsScope.Global))
             add(entry(SettingsCategory.Emulator, R.string.settings_emulator_perf_overlay_detail, R.string.settings_emulator_perf_overlay_detail_desc, scope = SettingsScope.Global, keywords = "minimum low medium maximum"))

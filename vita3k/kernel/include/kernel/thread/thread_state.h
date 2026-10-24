@@ -23,8 +23,10 @@
 #include <mem/block.h>
 #include <mem/ptr.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -42,6 +44,26 @@ void guest_sched_forget_cpu(CPUState *cpu);
 CPUState *guest_sched_token_cpu();
 struct ThreadParams;
 struct KernelState;
+void note_audio_thread(KernelState &kernel, SceUID thread_id, const char *api);
+void start_preempt_wait(KernelState &kernel, SceUID starter_id, const std::shared_ptr<ThreadState> &started);
+void core_lock_begin_boot(uint32_t boot);
+bool core_lock_shares_core(SceInt32 a, SceInt32 b);
+void core_lock_release_for_block();
+void core_lock_take_current();
+std::string core_lock_report(KernelState &kernel);
+void request_deferred_thread_dump(const std::string &reason);
+bool take_deferred_thread_dump(std::string &reason);
+void note_guest_assert(const std::string &what);
+bool guest_assert_holds_breakers(std::string &first_note);
+void guest_assert_begin_boot();
+enum : uint8_t {
+    SIGNAL_WAIT_ENTER = 0,
+    SIGNAL_WAIT_RETURN = 1,
+    SIGNAL_SEND = 2,
+    SIGNAL_DELETE_WAKE = 3,
+};
+void note_signal_event(uint8_t op, ThreadState *caller, SceUID target, int result);
+std::string signal_event_report(const std::function<std::string(SceUID)> &name_of, size_t max_events);
 
 typedef std::unique_ptr<CPUState, std::function<void(CPUState *)>> CPUStatePtr;
 typedef std::function<void(CPUState &, uint32_t, SceUID)> CallImport;
@@ -58,8 +80,9 @@ struct ThreadSignal {
     ThreadSignal() = default;
     ~ThreadSignal() = default;
 
-    void wait();
+    bool wait();
     bool send();
+    bool pending();
 
 private:
     std::mutex mutex;
@@ -75,18 +98,22 @@ struct ThreadState {
     uint32_t last_import_nid = 0;
     uint32_t last_import_lr = 0;
     uint32_t import_ring[16] = {};
+    uint32_t import_ring_lr[16] = {};
     uint8_t import_ring_pos = 0;
-    void push_import_ring(uint32_t nid) {
+    void push_import_ring(uint32_t nid, uint32_t lr) {
         import_ring[import_ring_pos & 15] = nid;
+        import_ring_lr[import_ring_pos & 15] = lr;
         import_ring_pos++;
     }
     const char *wait_prim_kind = nullptr;
     SceUID wait_prim_uid = 0;
     uint32_t wait_extra = 0;
+    uint32_t wait_seq = 0;
     void set_wait_reason(const char *kind, SceUID uid, uint32_t extra) {
         wait_prim_kind = kind;
         wait_prim_uid = uid;
         wait_extra = extra;
+        wait_seq++;
     }
     Address entry_point;
 
@@ -118,6 +145,7 @@ struct ThreadState {
     int start(SceSize arglen, const Ptr<void> argp, bool run_entry_callback = false);
     void exit(SceInt32 status);
     void exit_delete(bool exit = true);
+    void stop_for_process_exit();
 
     void update_status(ThreadStatus status, std::optional<ThreadStatus> expected = std::nullopt);
     bool is_delete_requested() const { return delete_requested; }
@@ -134,10 +162,14 @@ struct ThreadState {
     // args and argp are passed to thread->start as is
     uint32_t run_guest_function(Address callback_address, SceSize args = 0, const Ptr<void> argp = Ptr<void>{});
 
+    // this is called from another thread when this one is dormant
+    uint32_t run_guest_callback(Address callback_address, const std::vector<uint32_t> &args);
+
     void suspend();
     void suspend_and_wait();
     void resume(bool step = false);
     void resume_if_suspended();
+    void release_pause();
 
     // Stop-the-world support: distinct from suspend()/vm_suspended so they cannot cancel each other
     void request_world_stop();
@@ -149,9 +181,33 @@ struct ThreadState {
     std::string describe_suspend_state() const;
     uint32_t guest_breakpoints = 0;
 
+    void apply_host_priority();
+    void note_audio_work(const char *api);
+    std::atomic<const char *> audio_work_api{ nullptr };
+    bool inside_hle() const { return hle_enters.load(std::memory_order_relaxed) != hle_returns.load(std::memory_order_relaxed); }
+    uint64_t hle_calls_entered() const { return hle_enters.load(std::memory_order_relaxed); }
+    bool leave_requested() const { return delete_requested || suspend_requested || world_stop_requested; }
+
 private:
     void push_arguments(const std::vector<uint32_t> &args);
     void dispatch_abort(CPUState &cpu);
+    void arm_wake_gate();
+    void wait_wake_gate();
+    void capture_host_cpu_clock();
+    int64_t host_cpu_now() const;
+    char host_state() const;
+
+    std::atomic<uint64_t> hle_enters{ 0 };
+    std::atomic<uint64_t> hle_returns{ 0 };
+    std::atomic<int> gated_wakees{ 0 };
+    std::atomic<SceUID> gate_waker{ 0 };
+    uint64_t gate_h0 = 0;
+    const char *gate_kind = nullptr;
+    SceUID gate_uid = 0;
+    void *host_cpu_handle = nullptr;
+    int64_t host_cpu_clock = 0;
+    int host_tid = 0;
+    std::atomic<bool> host_cpu_ready{ false };
 
     KernelState &kernel;
 
@@ -171,6 +227,8 @@ private:
     bool world_stopped = false;
     // Single stepping mode.
     bool single_stepping = false;
+    // Asked for the process to end (sceAppMgrLoadExec, sceKernelExitProcess)
+    bool stopped_for_process_exit = false;
 
     // Number of active run_loop frames. The top-level host thread keeps one
     // frame alive (run_loop()) while parked dormant; callbacks add nested frames.

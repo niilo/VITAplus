@@ -95,8 +95,10 @@ struct Atrac9LogicalState : public ModuleLogicalState {
     uint32_t decoder_config = 0;
     // preserve the decoder's MDCT history so the runtime decoder can be rebuilt
     Atrac9DecoderSavedState saved_state{};
-    int8_t starved_ticks = 0;
-    bool in_underrun_wait = false;
+    bool lead_in_pending = false;
+    uint32_t lead_in_samples_left = 0;
+    uint64_t samples_played = 0;
+    bool reached_data = false;
 };
 
 struct Atrac9RuntimeState : public ModuleRuntimeState {
@@ -121,7 +123,6 @@ public:
     std::unique_ptr<ModuleLogicalState> create_logical_state() const override;
     std::unique_ptr<ModuleRuntimeState> create_runtime_state() const override;
     void on_state_change(const MemState &mem, ModuleData &v, const VoiceState previous) override;
-    void on_param_change(const MemState &mem, ModuleData &data) override;
     void cleanup_voice_state(ModuleData &data) override;
     static void free_swr_contexts();
 

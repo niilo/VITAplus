@@ -16,9 +16,11 @@
 
 #pragma once
 
-#include <ngs/dsp.h>
 #include <ngs/system.h>
 #include <ngs/types.h>
+
+#include <array>
+#include <cstdint>
 
 #define SCE_NGS_FILTER_PARAMS_STRUCT_ID 0x01015CE4
 #define SCE_NGS_FILTER_PARAMS_COEFF_STRUCT_ID 0x02015CE4
@@ -67,47 +69,52 @@ struct SceNgsFilterParamsCoEff {
 
 namespace ngs {
 
-// One biquad and its history, for the filter and equalizer modules.
-struct FilterStage {
-    dsp::BiquadHistory history;
-    bool active = false;
-
-    // Run the filter. A stage that was off starts with an empty history.
-    void run(float *samples, uint32_t frames, const dsp::BiquadCoeffs &coeffs);
+struct BiquadCoefficients {
+    float b0 = 1.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+    float a1 = 0.0f;
+    float a2 = 0.0f;
 };
 
-dsp::BiquadCoeffs filter_coeffs(const SceNgsParamFilter &filter, int32_t sample_rate);
-dsp::BiquadCoeffs filter_coeffs(const SceNgsParamCoEff &coeff);
-bool filter_is_off(const SceNgsParamFilter &filter);
+struct BiquadHistory {
+    float x1 = 0.0f;
+    float x2 = 0.0f;
+    float y1 = 0.0f;
+    float y2 = 0.0f;
+};
 
-// Count the modules of type T in the rack before `data`, and in total.
-template <typename T>
-void module_position(const MemState &mem, const ModuleData &data, uint32_t &before, uint32_t &total) {
-    before = 0;
-    total = 0;
-    const auto &modules = data.parent.get(mem)->rack.get(mem)->modules;
-    for (uint32_t i = 0; i < modules.size(); i++) {
-        if (dynamic_cast<const T *>(modules[i].get())) {
-            if (i < data.index)
-                before++;
-            total++;
-        }
-    }
-}
+using StereoBiquadHistory = std::array<BiquadHistory, 2>;
 
-// Return a buffer for output `index` that the caller can change. If another
-// output uses the same buffer, copy it to the scratch memory of `data` first.
-float *own_product(const MemState &mem, ModuleData &data, uint32_t index);
+enum class BiquadUse {
+    Apply,
+    Identity,
+    Silence,
+    Invalid,
+};
+
+bool design_biquad(const SceNgsParamFilter &band, int32_t sample_rate, BiquadCoefficients &coefficients);
+BiquadUse classify_biquad(const SceNgsParamCoEff &raw, BiquadCoefficients &coefficients);
+bool run_biquad(const BiquadCoefficients &c, StereoBiquadHistory &history, const float *input, float *output, int32_t frames);
+
+int send_output_of(const ModuleData &data);
+float *main_signal_of(ModuleData &data);
+void share_main_signal(ModuleData &data);
 
 struct FilterLogicalState : public ModuleLogicalState {
-    FilterStage stage;
+    std::array<uint8_t, sizeof(SceNgsFilterParamsCoEff)> last_params{};
+    bool have_params = false;
+    bool active = false;
+    bool processed_last_tick = false;
+    BiquadCoefficients coefficients;
+    StereoBiquadHistory history{};
 };
 
 class FilterModule : public Module {
 public:
     bool process(KernelState &kern, const MemState &mem, const SceUID thread_id, ModuleData &data, std::unique_lock<std::recursive_mutex> &scheduler_lock, std::unique_lock<std::mutex> &voice_lock) override;
     uint32_t module_id() const override { return 0x5CE4; }
-    std::unique_ptr<ModuleLogicalState> create_logical_state() const override;
+    std::unique_ptr<ModuleLogicalState> create_logical_state() const override { return std::make_unique<FilterLogicalState>(); }
     void on_state_change(const MemState &mem, ModuleData &data, const VoiceState previous) override;
 
     static constexpr uint32_t get_max_parameter_size() {

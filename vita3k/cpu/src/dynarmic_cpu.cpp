@@ -23,7 +23,6 @@
 #include <cpu/functions.h>
 #include <mem/functions.h>
 #include <mem/ptr.h>
-#include <util/hotpath.h>
 
 #include <dynarmic/frontend/A32/a32_ir_emitter.h>
 #include <dynarmic/interface/A32/coprocessor.h>
@@ -372,9 +371,6 @@ public:
     }
 
     void PreCodeTranslationHook(bool is_thumb, Dynarmic::A32::VAddr pc, Dynarmic::A32::IREmitter &ir) override {
-        // Translation time, not execution time: this runs once per instruction
-        // compiled and stops once the block exists.
-        hotpath::count_translated_instruction();
         if (!is_thumb) {
             if (const MonoLoaderOp op = classify_mono_loader_lock(pc); op != MonoLoaderOp::None) {
                 static std::once_flag announced;
@@ -395,7 +391,6 @@ public:
         if (addr >= parent->mem->host_page_size && is_valid_addr_synced(*parent->mem, static_cast<Address>(addr))) {
             static std::atomic<uint32_t> transient_count{ 0 };
             const uint32_t n = transient_count.fetch_add(1, std::memory_order_relaxed);
-            hotpath::count_invalid_access_recovery();
             if (n < 16)
                 LOG_CRITICAL("TRANSIENT invalid {} at 0x{:X} recovered (PC 0x{:X}, thread {}) — lock-free validity race caught in the act",
                     what, addr, this->cpu->get_pc(), parent->thread_id);
@@ -434,10 +429,7 @@ public:
 
     template <typename T>
     T MemoryRead(Dynarmic::A32::VAddr addr) {
-        // Only a page-table run pays for this: with fastmem the JIT resolves the
-        // address itself and never calls back here.
-        if (parent->mem->use_page_table)
-            hotpath::count_page_table_read();
+        cpu->maybe_exclusive = true;
         Ptr<T> ptr{ addr };
         if (!ptr || !ptr.valid(*parent->mem) || ptr.address() < parent->mem->host_page_size) {
             if (!confirm_invalid_access(addr, "read"))
@@ -485,8 +477,6 @@ public:
 
     template <typename T>
     void MemoryWrite(Dynarmic::A32::VAddr addr, T value) {
-        if (parent->mem->use_page_table)
-            hotpath::count_page_table_write();
         Ptr<T> ptr{ addr };
         if (!ptr || !ptr.valid(*parent->mem) || ptr.address() < parent->mem->host_page_size) {
             if (!confirm_invalid_access(addr, "write")) {
@@ -536,6 +526,7 @@ public:
 
     template <typename T>
     bool MemoryWriteExclusive(Dynarmic::A32::VAddr addr, T value, T expected) {
+        cpu->maybe_exclusive = false;
         Ptr<T> ptr{ addr };
         if (!ptr || !ptr.valid(*parent->mem) || ptr.address() < parent->mem->host_page_size) {
             if (should_log_invalid_access()) {
@@ -655,7 +646,7 @@ std::unique_ptr<Dynarmic::A32::Jit> DynarmicCPU::make_jit() {
     config.arch_version = Dynarmic::A32::ArchVersion::v7;
     config.callbacks = cb.get();
     if (parent->mem->use_page_table) {
-        config.page_table = (log_mem || !cpu_opt) ? nullptr : reinterpret_cast<decltype(config.page_table)>(parent->mem->jit_page_table.get());
+        config.page_table = (log_mem || !cpu_opt) ? nullptr : reinterpret_cast<decltype(config.page_table)>(parent->mem->page_table.get());
         config.absolute_offset_page_table = true;
         // the fast path reads through the first page only (so the page straddling accesses must use the callbacks)
         config.detect_misaligned_access_via_page_table = 16 | 32 | 64;
@@ -685,8 +676,6 @@ DynarmicCPU::DynarmicCPU(CPUState *state, std::size_t processor_id, bool cpu_opt
     , core_id(processor_id)
     , cpu_opt(cpu_opt) {
     jit = make_jit();
-    // Dynarmic installed its fault handler with the first JIT
-    prioritize_fault_handler(*parent->mem);
 }
 
 DynarmicCPU::~DynarmicCPU() = default;
@@ -875,10 +864,14 @@ std::size_t DynarmicCPU::processor_id() const {
 }
 
 void DynarmicCPU::invalidate_jit_cache(Address start, size_t length) {
-    hotpath::count_cache_invalidation(length);
     jit->InvalidateCacheRange(start, length);
 }
 
+static constexpr bool CLEAR_EXCLUSIVE_ONLY_WHEN_RESERVED = true;
+
 void DynarmicCPU::clear_exclusive() {
+    if (CLEAR_EXCLUSIVE_ONLY_WHEN_RESERVED && !maybe_exclusive)
+        return;
+    maybe_exclusive = false;
     shared_monitor.ClearProcessor(core_id);
 }

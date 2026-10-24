@@ -114,6 +114,7 @@ struct SpirvShaderParameters {
     int thread_buffer_sa_offset = -1;
     int thread_buffer_base;
     spv::Id thread_buffer;
+    uint32_t thread_buffer_f32_count = 0;
 
     spv::Id render_info_id;
 
@@ -123,6 +124,8 @@ struct SpirvShaderParameters {
 
     // When using shader interlock, specialization constant telling us if the texture is gamma corrected
     spv::Id is_srgb_constant;
+    // Specialization constant enabling the surface cast texture paths declared by Vulkan fragment shaders
+    spv::Id has_surface_casts_constant = 0;
 };
 
 using Coord = std::pair<spv::Id, int>;

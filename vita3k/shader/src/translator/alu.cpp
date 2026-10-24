@@ -260,7 +260,8 @@ bool USSETranslatorVisitor::vmad2(
     inst.opr.src2.flags = decode_modifier(src2_mod);
 
     // Log the instruction
-    LOG_DISASM("{:016x}: {}{}2 {} {} {} {}", m_instr, disasm::e_predicate_str(static_cast<ExtPredicate>(pred)), disasm::opcode_str(op), disasm::operand_to_str(inst.opr.dest, dest_mask),
+    static constexpr ExtPredicate short_vec_pred[] = { ExtPredicate::NONE, ExtPredicate::P0, ExtPredicate::NEGP0, ExtPredicate::PN };
+    LOG_DISASM("{:016x}: {}{}2 {} {} {} {}", m_instr, disasm::e_predicate_str(short_vec_pred[pred]), disasm::opcode_str(op), disasm::operand_to_str(inst.opr.dest, dest_mask),
         disasm::operand_to_str(inst.opr.src0, dest_mask), disasm::operand_to_str(inst.opr.src1, dest_mask), disasm::operand_to_str(inst.opr.src2, dest_mask));
 
     m_b.setDebugSourceLocation(m_recompiler.cur_pc, nullptr);
@@ -461,13 +462,14 @@ spv::Id USSETranslatorVisitor::do_alu_op(Instruction &inst, const Imm4 source_ma
 
     case Opcode::VMIN:
     case Opcode::VF16MIN: {
-        result = m_b.createBuiltinCall(source_type, std_builtins, GLSLstd450FMin, { vsrc1, vsrc2 });
+        // NMin/NMax rather than FMin/FMax: a NaN operand yields the other operand instead of an undefined result
+        result = m_b.createBuiltinCall(source_type, std_builtins, GLSLstd450NMin, { vsrc1, vsrc2 });
         break;
     }
 
     case Opcode::VMAX:
     case Opcode::VF16MAX: {
-        result = m_b.createBuiltinCall(source_type, std_builtins, GLSLstd450FMax, { vsrc1, vsrc2 });
+        result = m_b.createBuiltinCall(source_type, std_builtins, GLSLstd450NMax, { vsrc1, vsrc2 });
         break;
     }
 
@@ -965,12 +967,12 @@ bool USSETranslatorVisitor::sop2(
 
         case Opcode::FMIN:
         case Opcode::VMIN: {
-            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450FMin, { lhs, rhs });
+            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450NMin, { lhs, rhs });
         }
 
         case Opcode::FMAX:
         case Opcode::VMAX: {
-            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450FMax, { lhs, rhs });
+            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450NMax, { lhs, rhs });
         }
 
         default: {
@@ -1170,12 +1172,12 @@ bool shader::usse::USSETranslatorVisitor::sop2m(Imm2 pred,
 
         case Opcode::FMIN:
         case Opcode::VMIN: {
-            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450FMin, { lhs, rhs });
+            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450NMin, { lhs, rhs });
         }
 
         case Opcode::FMAX:
         case Opcode::VMAX: {
-            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450FMax, { lhs, rhs });
+            return m_b.createBuiltinCall(type, std_builtins, GLSLstd450NMax, { lhs, rhs });
         }
 
         default: {
@@ -1234,6 +1236,10 @@ bool shader::usse::USSETranslatorVisitor::sop2m(Imm2 pred,
     }
 
     result = utils::convert_to_int(m_b, m_util_funcs, result, DataType::UINT8, true);
+
+    const bool lanes_packed_from_x = (wmask & (wmask + 1)) == 0;
+    if (!lanes_packed_from_x)
+        result = utils::finalize(m_b, result, result, SWIZZLE_CHANNEL_4_DEFAULT, m_b.makeIntConstant(0), wmask);
 
     // Final result. Do binary operation and then store
     store(inst.opr.dest, result, wmask, 0);

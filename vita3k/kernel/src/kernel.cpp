@@ -29,15 +29,18 @@
 #include <cstring>
 #include <kernel/sync_primitives.h>
 #include <mem/ptr.h>
+#include <nids/functions.h>
 #include <util/lock_and_find.h>
 #include <util/log.h>
 
+#include <SDL3/SDL_error.h>
 #include <SDL3/SDL_mutex.h>
 #include <SDL3/SDL_thread.h>
 
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <unordered_set>
 
 int CorenumAllocator::new_corenum() {
     const std::lock_guard<std::mutex> guard(lock);
@@ -63,13 +66,12 @@ void clear_current_thread_state();
 struct ThreadParams {
     KernelState *kernel = nullptr;
     SceUID thid = SCE_KERNEL_ERROR_ILLEGAL_THREAD_ID;
-    SDL_Semaphore *host_may_destroy_params = nullptr;
 };
 
 static int SDLCALL thread_function(void *data) {
     assert(data != nullptr);
     const ThreadParams params = *static_cast<const ThreadParams *>(data);
-    SDL_SignalSemaphore(params.host_may_destroy_params);
+    delete static_cast<ThreadParams *>(data);
     const ThreadStatePtr thread = params.kernel->get_thread(params.thid);
     set_current_thread_state(params.thid, thread);
 #ifdef TRACY_ENABLE
@@ -114,6 +116,8 @@ bool KernelState::init(MemState &mem, const CallImportFunc &call_import, bool cp
     halt_ptr[0] = 0xBF00; // NOP
     halt_ptr[1] = 0xBF30; // WFI
     halt_instruction_pc = halt_instruction.get() | 1; // thumb mode pc
+
+    process_exit_requested = false;
 
     return true;
 }
@@ -183,15 +187,24 @@ ThreadStatePtr KernelState::create_thread(MemState &mem, const char *name, Ptr<c
         const std::lock_guard<std::mutex> lock(mutex);
         threads.emplace(thread->id, thread);
     }
+    thread_create_counter.fetch_add(1, std::memory_order_relaxed);
 
-    ThreadParams params;
-    params.kernel = this;
-    params.thid = thread->id;
-
-    params.host_may_destroy_params = SDL_CreateSemaphore(0);
-    SDL_DetachThread(SDL_CreateThread(&thread_function, thread->name.c_str(), &params));
-    SDL_WaitSemaphore(params.host_may_destroy_params);
-    SDL_DestroySemaphore(params.host_may_destroy_params);
+    auto *params = new ThreadParams;
+    params->kernel = this;
+    params->thid = thread->id;
+    SDL_Thread *const host_thread = SDL_CreateThread(&thread_function, thread->name.c_str(), params);
+    if (!host_thread) {
+        LOG_ERROR("Failed to create the host thread for {}: {}", thread->name, SDL_GetError());
+        delete params;
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            threads.erase(thread->id);
+            corenum_allocator.free_corenum(get_processor_id(*thread->cpu));
+            thread_deleted_cond.notify_all();
+        }
+        return nullptr;
+    }
+    SDL_DetachThread(host_thread);
 
     return thread;
 }
@@ -209,21 +222,30 @@ Ptr<Ptr<void>> KernelState::get_thread_tls_addr(MemState &mem, SceUID thread_id,
 }
 
 void KernelState::request_process_exit(int res, std::optional<AppLaunchRequest> relaunch) {
+    if (g_tls_guest_thread)
+        g_tls_guest_thread->stop_for_process_exit();
+
+    if (process_exit_requested.exchange(true))
+        return;
+
     if (process_exit_callback)
         process_exit_callback(res, std::move(relaunch));
 }
 
 void KernelState::process_exit() {
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        for (auto &[_, timer] : timers)
-            timer->condvar.notify_all();
-        for (auto &[_, thread] : threads)
-            thread->exit_delete(false);
-    }
-
     std::unique_lock<std::mutex> lock(mutex);
-    thread_deleted_cond.wait(lock, [this] { return threads.empty(); });
+    for (auto &[_, timer] : timers)
+        timer->condvar.notify_all();
+
+    // a thread created during the exit joins the map after any single pass so keep asking new ones until it is empty
+    std::unordered_set<SceUID> asked;
+    while (!threads.empty()) {
+        for (auto &[id, thread] : threads) {
+            if (asked.insert(id).second)
+                thread->exit_delete(false);
+        }
+        thread_deleted_cond.wait_for(lock, std::chrono::milliseconds(20));
+    }
 }
 
 void KernelState::pause_threads() {
@@ -238,8 +260,9 @@ void KernelState::pause_threads() {
 void KernelState::resume_threads() {
     const std::lock_guard<std::mutex> lock(mutex);
     for (auto &[_, thread] : threads) {
-        if (paused_threads_status[thread->id] == ThreadStatus::run)
-            thread->resume();
+        const auto paused = paused_threads_status.find(thread->id);
+        if (paused != paused_threads_status.end() && paused->second == ThreadStatus::run)
+            thread->release_pause();
     }
     paused_threads_status.clear();
 }
@@ -327,7 +350,42 @@ static std::string describe_wait_target(KernelState &kernel, MemState &mem, cons
         return fmt::format("    [cond #{}] NOT FOUND in either condvar map", uid);
     }
 
+    if (std::strcmp(kind, "rwlock") == 0) {
+        const auto it = kernel.rwlocks.find(uid);
+        if (it == kernel.rwlocks.end())
+            return fmt::format("    [rwlock #{}] NOT FOUND", uid);
+        const RWLockPtr &rw = it->second;
+        std::unique_lock<std::mutex> guard(rw->mutex, std::try_to_lock);
+        if (!guard.owns_lock())
+            return fmt::format("    [rwlock #{} '{}'] ?(busy)", uid, rw->name);
+        std::string queued;
+        for (auto q = rw->waiting_threads->begin(); q != rw->waiting_threads->end(); ++q) {
+            const WaitingThreadData data = *q;
+            queued += fmt::format(" {} {} ({})", data.is_write ? "W" : "R", data.thread->name, data.thread->id);
+        }
+        std::string readers;
+        for (const auto &[tid, n] : rw->read_holds)
+            readers += fmt::format(" {}x{}", tid, n);
+        return fmt::format("    [rwlock #{} '{}'] lock_count={} writer={} queue:{} read holders:{}", uid, rw->name, rw->lock_count,
+            rw->writer ? fmt::format("{} ({})", rw->writer->id, rw->writer->name) : std::string("NONE"),
+            queued.empty() ? " none" : queued, readers.empty() ? " none" : readers);
+    }
+
     return {};
+}
+
+static std::string recent_imports(const ThreadState &t) {
+    std::string out;
+    const uint8_t pos = t.import_ring_pos;
+    for (int k = 0; k < 16; k++) {
+        const uint32_t nid = t.import_ring[(pos + k) & 15];
+        if (!nid)
+            continue;
+        const uint32_t lr = t.import_ring_lr[(pos + k) & 15];
+        const char *name = import_name(nid);
+        out += std::strcmp(name, "UNRECOGNISED") ? fmt::format(" {}@{:X}", name, lr) : fmt::format(" 0x{:08X}@{:X}", nid, lr);
+    }
+    return out.empty() ? std::string(" none") : out;
 }
 
 void KernelState::log_thread_hang_dump() {
@@ -347,7 +405,7 @@ void KernelState::log_thread_hang_dump() {
         std::string line;
         if (status == ThreadStatus::run) {
             const uint32_t run_pc = read_pc(*t->cpu) & ~1u;
-            line = fmt::format("thread {} ({}) status=run pc~0x{:X} lr~0x{:X} last_import_nid=0x{:08X} import_lr=0x{:X}", t->name, t->id, run_pc, read_lr(*t->cpu), t->last_import_nid, t->last_import_lr);
+            line = fmt::format("thread {} ({}) prio={} aff=0x{:X} status=run pc~0x{:X} lr~0x{:X} last_import_nid=0x{:08X} import_lr=0x{:X}", t->name, t->id, t->priority, static_cast<uint32_t>(t->affinity_mask), run_pc, read_lr(*t->cpu), t->last_import_nid, t->last_import_lr);
             for (int ri = 0; ri <= 7; ri++)
                 line += fmt::format(" r{}=0x{:X}", ri, read_reg(*t->cpu, ri));
             uint32_t code[16];
@@ -358,7 +416,7 @@ void KernelState::log_thread_hang_dump() {
             }
             line += "\n" + t->log_stack_traceback();
         } else {
-            line = fmt::format("thread {} ({}) status={} PC=0x{:X} LR=0x{:X} last_import_nid=0x{:08X} import_lr=0x{:X} stack:\n{}", t->name, t->id, status_str, read_pc(*t->cpu), read_lr(*t->cpu), t->last_import_nid, t->last_import_lr, t->log_stack_traceback())
+            line = fmt::format("thread {} ({}) prio={} aff=0x{:X} status={} PC=0x{:X} LR=0x{:X} last_import_nid=0x{:08X} import_lr=0x{:X} stack:\n{}", t->name, t->id, t->priority, static_cast<uint32_t>(t->affinity_mask), status_str, read_pc(*t->cpu), read_lr(*t->cpu), t->last_import_nid, t->last_import_lr, t->log_stack_traceback())
                 + fmt::format(" waiting_on={}#{} extra=0x{:X}", t->wait_prim_kind ? t->wait_prim_kind : "?", t->wait_prim_uid, t->wait_extra);
             if (const std::string target = describe_wait_target(*this, t->get_mem(), t); !target.empty())
                 line += "\n" + target;
@@ -402,6 +460,7 @@ void KernelState::log_thread_hang_dump() {
                 }
             }
         }
+        line += fmt::format("\n    signal pending={} | last HLE calls (name@return address), oldest first:", t->signal.pending() ? 1 : 0) + recent_imports(*t);
         LOG_ERROR("HANG DUMP: {}", line);
         dump += line + "\n";
     }
@@ -440,6 +499,25 @@ void KernelState::log_thread_hang_dump() {
                 cur = next;
             }
         }
+    }
+
+    {
+        const std::string core_lock = core_lock_report(*this);
+        LOG_ERROR("HANG DUMP: CORE LOCK: {}", core_lock);
+        dump += "CORE LOCK: " + core_lock;
+    }
+
+    {
+        std::map<SceUID, std::string> names;
+        for (const auto &t : snapshot)
+            names[t->id] = t->name;
+        const std::string signals = signal_event_report([&](const SceUID id) {
+            const auto it = names.find(id);
+            return it == names.end() ? std::string() : it->second;
+        },
+            256);
+        LOG_ERROR("HANG DUMP: SIGNALS (sceKernelWaitSignal/SendSignal, oldest first):{}", signals);
+        dump += "\nSIGNALS:" + signals;
     }
 
     // vita3k.log is truncated on relaunch, so also persist the dump where a restart cannot eat it

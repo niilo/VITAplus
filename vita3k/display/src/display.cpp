@@ -38,27 +38,23 @@
 #include <display/state.h>
 #include <emuenv/state.h>
 #include <gxm/state.h>
+#include <io/state.h>
 #include <kernel/state.h>
 #include <kernel/sync_primitives.h>
 #include <kernel/thread/thread_state.h>
 #include <mem/functions.h>
 #include <mem/ptr.h>
 #include <renderer/state.h>
-#include <util/hotpath.h>
-#include <util/perf_log.h>
-#include <util/thread_priority.h>
 
-#ifdef __ANDROID__
-#include <unistd.h>
-#endif
-
-#include <atomic>
 #include <chrono>
 #include <motion/functions.h>
 #include <touch/functions.h>
+#include <touch/state.h>
 
 // Code heavily influenced by PPSSSPP's SceDisplay.cpp
 
+static constexpr int TARGET_FPS = 60;
+static constexpr int64_t TARGET_MICRO_PER_FRAME = 1000000LL / TARGET_FPS;
 // how many cycles do we need to see before we start predicting the next frame
 static constexpr int predict_threshold = 3;
 static constexpr int max_expected_swapchain_size = 6;
@@ -101,7 +97,6 @@ static ProcSample sample_process() {
 }
 
 static void freeze_watchdog_thread(EmuEnvState &emuenv) {
-    util::set_thread_name("vita3k-watchdog");
     DisplayState &display = emuenv.display;
     ProcSample prev = sample_process();
     while (!display.abort.load()) {
@@ -128,30 +123,12 @@ static void freeze_watchdog_thread(EmuEnvState &emuenv) {
     }
 }
 
-// The hot-path counters dump once per this many vblanks, which is about one
-// second at 60Hz. It matches the perf log's own one-second flush, so a counter
-// row is never written after the interval it belongs to has been flushed.
-static constexpr uint64_t kHotpathDumpTicks = 60;
-
 static void vblank_sync_thread(EmuEnvState &emuenv) {
-    util::set_thread_name("vita3k-vblank");
     DisplayState &display = emuenv.display;
-#ifdef __ANDROID__
-    // Ticket 13: the ADPF hint names this thread, so it needs its id.
-    emuenv.renderer->vblank_thread_id.store(static_cast<int>(::gettid()), std::memory_order_relaxed);
-#endif
     std::thread watchdog(freeze_watchdog_thread, std::ref(emuenv));
 
-    // Ticket 10: 16666 us is 60.002 Hz, 16683 us is the 59.94 Hz of the Vita.
-    const std::chrono::microseconds period{ std::clamp(emuenv.cfg.vblank_period_us, 1000, 100000) };
-    LOG_INFO("Vblank period: {} us", period.count());
-
-    // Deadline N is start + N * period. The steady clock does not jump, and an
-    // absolute deadline does not add each tick's wake-up delay to the next one.
-    const auto start = std::chrono::steady_clock::now();
-    int64_t tick = 0;
-
     while (!display.abort.load()) {
+        std::vector<ThreadStatePtr> vblank_ready;
         {
             const std::lock_guard<std::mutex> guard(display.mutex);
 
@@ -164,12 +141,15 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                     // only display the UI/common dialog at 30 fps
                     // this is necessary so that the command buffer processing doesn't get starved
                     // with vsync enabled and a screen with a refresh rate of 60Hz or less
-                    if (display.vblank_count % 2 == 0)
+                    if (display.vblank_count % 2 == 0) {
                         emuenv.renderer->should_display = true;
+                        emuenv.renderer->command_buffer_queue.wake();
+                    }
             }
 
             // maybe we should also use a mutex for this part, but it shouldn't be an issue
             touch_vsync_update(emuenv);
+            set_touch_tilt(emuenv.motion, emuenv.ctrl, emuenv.touch.tilt_active, emuenv.touch.tilt_x, emuenv.touch.tilt_y);
             refresh_motion(emuenv.motion, emuenv.ctrl);
 
             // Notify Vblank callback in each VBLANK start
@@ -179,14 +159,16 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             for (std::size_t i = 0; i < display.vblank_wait_infos.size();) {
                 auto &vblank_wait_info = display.vblank_wait_infos[i];
                 if (vblank_wait_info.target_vcount <= display.vblank_count) {
-                    ThreadStatePtr target_wait = vblank_wait_info.target_thread;
-
-                    target_wait->update_status(ThreadStatus::run);
+                    vblank_ready.push_back(vblank_wait_info.target_thread);
                     display.vblank_wait_infos.erase(display.vblank_wait_infos.begin() + i);
                 } else {
                     i++;
                 }
             }
+        }
+        for (const ThreadStatePtr &target_wait : vblank_ready) {
+            const std::lock_guard<std::mutex> target_lock(target_wait->mutex);
+            target_wait->update_status(ThreadStatus::run);
         }
         // Periodic thread dump for diagnosing partial hangs
         if (emuenv.cfg.hang_dump_seconds > 0) {
@@ -196,6 +178,14 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             if (period > 0 && vblanks_now >= next_forced_dump_vblank && !emuenv.kernel.is_threads_paused()) {
                 next_forced_dump_vblank = vblanks_now + period;
                 LOG_ERROR("PERIODIC THREAD DUMP (hang-dump-seconds={}) — vblank {}", emuenv.cfg.hang_dump_seconds, vblanks_now);
+                emuenv.kernel.log_thread_hang_dump();
+            }
+        }
+
+        {
+            std::string deferred_reason;
+            if (!emuenv.kernel.is_threads_paused() && take_deferred_thread_dump(deferred_reason)) {
+                LOG_ERROR("DEFERRED THREAD DUMP: {}", deferred_reason);
                 emuenv.kernel.log_thread_hang_dump();
             }
         }
@@ -220,9 +210,16 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             static uint64_t last_pipes_change_vblank = 0;
             static uint64_t last_stuck_scene_dump_vblank = 0;
             static int stuck_scene_dumps = 0;
+            static uint64_t last_input_value = 0;
+            static uint64_t last_input_change_vblank = 0;
+            static uint64_t last_io_value = 0;
+            static uint64_t last_io_change_vblank = 0;
+            static bool stuck_scene_alive_noted = false;
             static uint64_t last_seen_vblanks = 0;
             static uint64_t last_idle_render_dump_vblank = 0;
             static int idle_render_dumps = 0;
+            static uint64_t last_create_value = 0;
+            static uint64_t last_create_change_vblank = 0;
             const auto renderer_heartbeat = [&]() {
                 if (!emuenv.renderer)
                     return;
@@ -253,8 +250,15 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                 last_pipes_change_vblank = 0;
                 last_stuck_scene_dump_vblank = 0;
                 stuck_scene_dumps = 0;
+                last_input_value = 0;
+                last_input_change_vblank = 0;
+                last_io_value = 0;
+                last_io_change_vblank = 0;
+                stuck_scene_alive_noted = false;
                 last_idle_render_dump_vblank = 0;
                 idle_render_dumps = 0;
+                last_create_value = 0;
+                last_create_change_vblank = 0;
             }
             last_seen_vblanks = vblanks;
             const bool unpaused = !emuenv.kernel.is_threads_paused();
@@ -272,6 +276,14 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             }
             const uint64_t renderer_idle_vblanks = vblanks - last_progress_change_vblank;
             const uint64_t guest_idle_vblanks = vblanks - last_wake_change_vblank;
+            constexpr uint64_t THREAD_CREATE_QUIET_VBLANKS = 300; // ~5s
+            const uint64_t creates_now = emuenv.kernel.thread_create_counter.load(std::memory_order_relaxed);
+            if (creates_now != last_create_value) {
+                last_create_value = creates_now;
+                last_create_change_vblank = vblanks;
+            }
+            const uint64_t create_idle_vblanks = vblanks - last_create_change_vblank;
+            const bool guest_creating_threads = create_idle_vblanks < THREAD_CREATE_QUIET_VBLANKS;
 
             // Flip tracing - only us while chasing a freeze
             constexpr bool log_flip_trace = false;
@@ -306,23 +318,46 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             constexpr uint64_t STUCK_SCENE_FROZEN_VBLANKS = 720;
             constexpr uint64_t STUCK_SCENE_REDUMP_VBLANKS = 600;
             constexpr int STUCK_SCENE_MAX_DUMPS = 3;
+            constexpr uint64_t STUCK_SCENE_PRESENTING_VBLANKS = 120;
             const uint32_t pipes_now = emuenv.renderer ? emuenv.renderer->diag_pipelines_created() : ~0u;
             const bool pipes_tracked = (pipes_now != ~0u);
             if (pipes_now != last_pipes_value) {
                 last_pipes_value = pipes_now;
                 last_pipes_change_vblank = vblanks;
                 stuck_scene_dumps = 0;
+                stuck_scene_alive_noted = false;
             }
             const uint64_t pipes_frozen_vblanks = vblanks - last_pipes_change_vblank;
-            if (pipes_tracked && !never_flipped && unpaused
+            const uint64_t input_now = emuenv.display.guest_input_reads.load(std::memory_order_relaxed);
+            if (input_now != last_input_value) {
+                last_input_value = input_now;
+                last_input_change_vblank = vblanks;
+            }
+            const uint64_t io_now = emuenv.io.guest_io_ops.load(std::memory_order_relaxed);
+            if (io_now != last_io_value) {
+                last_io_value = io_now;
+                last_io_change_vblank = vblanks;
+            }
+            const uint64_t input_idle_vblanks = vblanks - last_input_change_vblank;
+            const uint64_t io_idle_vblanks = vblanks - last_io_change_vblank;
+            const bool dialog_running = emuenv.common_dialog.type != NO_DIALOG && emuenv.common_dialog.status == SCE_COMMON_DIALOG_STATUS_RUNNING;
+            const bool guest_alive = input_idle_vblanks < STUCK_SCENE_FROZEN_VBLANKS || io_idle_vblanks < STUCK_SCENE_FROZEN_VBLANKS || dialog_running;
+            const bool scene_frozen = pipes_tracked && !never_flipped && unpaused
+                && stall_vblanks <= STUCK_SCENE_PRESENTING_VBLANKS
                 && pipes_now <= STUCK_SCENE_MAX_PIPELINES
-                && pipes_frozen_vblanks >= STUCK_SCENE_FROZEN_VBLANKS
+                && pipes_frozen_vblanks >= STUCK_SCENE_FROZEN_VBLANKS;
+            if (scene_frozen && guest_alive && !stuck_scene_alive_noted) {
+                stuck_scene_alive_noted = true;
+                LOG_INFO("STUCK-SCENE check: only {} pipeline(s), none new for {} vblanks, but the game is alive (last input read {} vblanks ago, last file I/O {} vblanks ago, common dialog {}) - no dump",
+                    pipes_now, pipes_frozen_vblanks, input_idle_vblanks, io_idle_vblanks, dialog_running ? "running" : "closed");
+            }
+            if (scene_frozen && !guest_alive
                 && stuck_scene_dumps < STUCK_SCENE_MAX_DUMPS
                 && (stuck_scene_dumps == 0 || vblanks - last_stuck_scene_dump_vblank >= STUCK_SCENE_REDUMP_VBLANKS)) {
                 last_stuck_scene_dump_vblank = vblanks;
                 ++stuck_scene_dumps;
-                LOG_ERROR("STUCK-SCENE WATCHDOG (dump {}/{}): presenting ({} SetFrameBuf accepted, renderer still executing commands) but only {} pipeline(s) ever compiled, frozen for {} vblanks (~{}s) — wedged BEFORE scene render; dumping guest threads",
-                    stuck_scene_dumps, STUCK_SCENE_MAX_DUMPS, emuenv.display.setframe_accept_count.load(), pipes_now, pipes_frozen_vblanks, pipes_frozen_vblanks / 60);
+                LOG_ERROR("STUCK-SCENE WATCHDOG (dump {}/{}): presenting ({} SetFrameBuf accepted, last flip {} vblanks ago) but only {} pipeline(s) ever compiled, frozen for {} vblanks (~{}s), and nothing has read input for {} vblanks or touched a file for {} vblanks — game logic stalled; dumping guest threads",
+                    stuck_scene_dumps, STUCK_SCENE_MAX_DUMPS, emuenv.display.setframe_accept_count.load(), stall_vblanks, pipes_now, pipes_frozen_vblanks, pipes_frozen_vblanks / 60, input_idle_vblanks, io_idle_vblanks);
                 emuenv.kernel.log_thread_hang_dump();
                 renderer_heartbeat();
                 if (stuck_scene_dumps == 1) {
@@ -368,7 +403,7 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                 last_provable_dryrun_setframe = setframe;
                 emuenv.kernel.try_break_provable_evf_cycle(true);
             }
-            if (!never_flipped && stall_vblanks > PROVABLE_BREAK_VBLANKS && unpaused && renderer_idle_vblanks > PROVABLE_BREAK_VBLANKS && world_stop_quiet && mem_transition_quiet && last_provable_break_setframe != setframe) {
+            if (!never_flipped && stall_vblanks > PROVABLE_BREAK_VBLANKS && unpaused && renderer_idle_vblanks > PROVABLE_BREAK_VBLANKS && world_stop_quiet && mem_transition_quiet && !guest_creating_threads && last_provable_break_setframe != setframe) {
 #ifdef _WIN32
                 // if (!IsDebuggerPresent())  // Debug speed can make a normal load look exactly like a wedge hang
 #endif
@@ -378,7 +413,11 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                         provable_handed_over = true;
                         LOG_ERROR("HANG WATCHDOG: the game wedged again {} vblanks after the last provable-cycle release, leaving this wedge to the stall breaker", setframe - last_provable_break_vblank);
                     }
-                    if (!provable_handed_over) {
+                    std::string assert_note;
+                    const bool held_for_assert = guest_assert_holds_breakers(assert_note);
+                    if (!assert_note.empty())
+                        LOG_ERROR("HANG WATCHDOG: breakers held for the rest of this boot - a guest library trapped on a broken invariant: {}", assert_note);
+                    if (!provable_handed_over && !held_for_assert) {
                         const int broken = emuenv.kernel.try_break_provable_evf_cycle();
                         if (broken > 0) {
                             last_provable_break_setframe = setframe;
@@ -399,6 +438,8 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                 const bool partial_wedge = stall_vblanks > BREAK_SLOW_VBLANKS && renderer_idle_vblanks > BREAK_SLOW_VBLANKS;
                 if (!full_wedge && !partial_wedge) {
                     LOG_INFO("HANG WATCHDOG: no flip for {} vblanks but still alive (renderer executed a command {} vblanks ago, a guest thread woke {} vblanks ago) — breaker suppressed", stall_vblanks, renderer_idle_vblanks, guest_idle_vblanks);
+                } else if (guest_creating_threads) {
+                    LOG_INFO("HANG WATCHDOG: no flip for {} vblanks, renderer idle {}, but the guest created a thread {} vblanks ago — loading, breakers held", stall_vblanks, renderer_idle_vblanks, create_idle_vblanks);
                 } else {
                     constexpr int MAX_BREAK_DUMPS_PER_STALL = 3;
                     if (break_dumps_this_stall < MAX_BREAK_DUMPS_PER_STALL) {
@@ -416,8 +457,14 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                         continue;
                     }*/
 #endif
-                    const int nudged = emuenv.kernel.try_break_frame_sync_deadlock(nudged_this_stall);
-                    if (nudged > 0) {
+                    std::string assert_note;
+                    const bool held_for_assert = guest_assert_holds_breakers(assert_note);
+                    if (!assert_note.empty())
+                        LOG_ERROR("HANG WATCHDOG: breakers held for the rest of this boot - a guest library trapped on a broken invariant: {}", assert_note);
+                    const int nudged = held_for_assert ? 0 : emuenv.kernel.try_break_frame_sync_deadlock(nudged_this_stall);
+                    if (held_for_assert) {
+                        LOG_ERROR("HANG WATCHDOG: no flip for {} vblanks after a guest assertion - not forcing event flags or condition variables", stall_vblanks);
+                    } else if (nudged > 0) {
                         LOG_ERROR("HANG WATCHDOG: deadlock breaker nudged {} stuck event flag(s) after {} vblanks stalled", nudged, stall_vblanks);
                     } else {
                         // No stuck event flag to nudge. Try the condvar path.
@@ -434,27 +481,9 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             }
         }
 
-        ++tick;
-        auto deadline = start + tick * period;
-        const auto now = std::chrono::steady_clock::now();
-        if (now >= deadline) {
-            // A whole period has passed. Skip the missed ticks, as real
-            // hardware does not deliver them late.
-            tick = (now - start) / period + 1;
-            deadline = start + tick * period;
-        }
-        std::this_thread::sleep_until(deadline);
-
-        if (perf_log::enabled()) {
-            const auto woke = std::chrono::steady_clock::now();
-            const auto error_us = std::chrono::duration_cast<std::chrono::microseconds>(woke - deadline).count();
-            perf_log::write("vblank", "steady_us,wake_error_us", fmt::format("{},{}", perf_log::now_us(), error_us));
-        }
-
-        // One dump per vblank is one row set per frame, which is far more rows
-        // than a reading needs. Only the interval boundary writes.
-        if (hotpath::enabled() && (tick % kHotpathDumpTicks) == 0)
-            hotpath::dump_interval();
+        const auto time_ms = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        const auto time_left = TARGET_MICRO_PER_FRAME - (time_ms % TARGET_MICRO_PER_FRAME);
+        std::this_thread::sleep_for(std::chrono::microseconds(time_left));
     }
 
     watchdog.join();
@@ -488,13 +517,16 @@ void wait_vblank(DisplayState &display, KernelState &kernel, const ThreadStatePt
     }
 
     if (is_cb) {
-        for (auto &[_, cb] : display.vblank_callbacks) {
-            if (cb->get_owner_thread_id() == wait_thread->id) {
-                std::string name = cb->get_name();
-                cb->execute(kernel, [name]() {
-                });
+        std::vector<CallbackPtr> owned;
+        {
+            const std::lock_guard<std::mutex> guard(display.mutex);
+            for (const auto &[_, cb] : display.vblank_callbacks) {
+                if (cb->get_owner_thread_id() == wait_thread->id)
+                    owned.push_back(cb);
             }
         }
+        for (const CallbackPtr &cb : owned)
+            cb->execute(kernel, []() {});
     }
 }
 
@@ -573,6 +605,7 @@ void update_prediction(EmuEnvState &emuenv, DisplayFrameInfo &frame) {
     if (!display.predicting) {
         display.next_rendered_frame = frame;
         emuenv.renderer->should_display = true;
+        emuenv.renderer->command_buffer_queue.wake();
     }
 
     for (auto &pred_frame : display.predicted_frames) {
@@ -591,6 +624,7 @@ void update_prediction(EmuEnvState &emuenv, DisplayFrameInfo &frame) {
         LOG_TRACE("Mispredicted the next swapchain image");
         display.next_rendered_frame = frame;
         emuenv.renderer->should_display = true;
+        emuenv.renderer->command_buffer_queue.wake();
     }
 
     // let predict_next_image reset the cycle if necessary

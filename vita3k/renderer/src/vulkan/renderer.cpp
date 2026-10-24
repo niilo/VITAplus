@@ -175,6 +175,13 @@ const static std::vector<const char *> required_device_extensions = {
     vk::KHRMaintenance1ExtensionName
 };
 
+static uint32_t instance_api_version(const vk::detail::DispatchLoaderDynamic &dispatch) {
+    uint32_t version = VK_API_VERSION_1_0;
+    if (!dispatch.vkEnumerateInstanceVersion || dispatch.vkEnumerateInstanceVersion(&version) != VK_SUCCESS)
+        return VK_API_VERSION_1_0;
+    return std::min<uint32_t>(version, VK_API_VERSION_1_1);
+}
+
 namespace renderer::vulkan {
 
 #if defined(__ANDROID__) && defined(USE_ADRENO_TOOLS)
@@ -393,7 +400,6 @@ bool VKState::init() {
 }
 
 bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &config) {
-    gpu_wait_thread_nice = config.thread_nice_renderer;
     {
         const int64_t last_destroy = g_last_device_destroy_ms.load(std::memory_order_relaxed);
         if (last_destroy != 0) {
@@ -430,7 +436,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             .applicationVersion = VK_MAKE_API_VERSION(0, 0, 0, 1), // App Version
             .pEngineName = org_name, // Engine Name, using org instead.
             .engineVersion = VK_MAKE_API_VERSION(0, 0, 0, 1), // Engine Version
-            .apiVersion = VK_API_VERSION_1_0
+            .apiVersion = instance_api_version(VULKAN_HPP_DEFAULT_DISPATCHER)
         };
 
         std::vector<const char *> instance_extensions;
@@ -668,6 +674,17 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     }
 #endif
 
+    if (physical_device_properties.apiVersion >= VK_API_VERSION_1_2
+        && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2KHR) {
+        const auto driver_chain = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
+        is_mesa_turnip = driver_chain.get<vk::PhysicalDeviceDriverProperties>().driverID == vk::DriverId::eMesaTurnip;
+    }
+
+    // Adreno 650 (SD865) draws that switch pipeline overlap the previous pipeline's draws and draw corrupt checkered black blocks
+    wait_on_pipeline_switch = is_mesa_turnip && (physical_device_properties.deviceID >> 24) == 6;
+    if (wait_on_pipeline_switch)
+        LOG_INFO("Turnip on Adreno 6xx (device 0x{:X}): draws that switch pipeline wait for the draws before them", physical_device_properties.deviceID);
+
     bool support_dedicated_allocations = false;
     // Create Device
     {
@@ -705,6 +722,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         bool support_buffer_device_address = false;
         bool support_external_memory = false;
         bool support_shader_interlock = false;
+        bool support_float_controls = false;
         const std::map<std::string_view, bool *> optional_extensions = {
             { vk::KHRGetMemoryRequirements2ExtensionName, &temp_bool },
             // can be used by vma to improve performance
@@ -725,6 +743,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             { vk::KHRShaderFloat16Int8ExtensionName, &support_fsr },
             // used for accurate programmable blending on desktop GPUs
             { vk::EXTFragmentShaderInterlockExtensionName, &support_shader_interlock },
+            // lets a pipeline be requested from the driver cache without compiling it
+            { vk::EXTPipelineCreationCacheControlExtensionName, &support_pipeline_cache_control },
 #ifdef __APPLE__
             // Needed to create the MoltenVK device
             { vk::KHRPortabilitySubsetExtensionName, &temp_bool },
@@ -748,6 +768,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         for (const vk::ExtensionProperties &ext : physical_device.enumerateDeviceExtensionProperties()) {
             available_extension_count++;
             available_extensions += (available_extensions.empty() ? "" : ", ") + std::string(ext.extensionName.data());
+            support_float_controls |= std::string_view(ext.extensionName.data()) == vk::KHRShaderFloatControlsExtensionName;
             auto it = optional_extensions.find(ext.extensionName.data());
             if (it != optional_extensions.end()) {
                 // this extension is available on the GPU
@@ -873,8 +894,22 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             features.support_shader_interlock = support_shader_interlock;
         }
 
+        support_pipeline_cache_control &= has_features2_khr;
+        if (support_pipeline_cache_control) {
+            auto props = physical_device.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>();
+            support_pipeline_cache_control = static_cast<bool>(props.get<vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>().pipelineCreationCacheControl);
+        }
+
         constexpr bool raw_preserve_needs_interlock = false;
         features.preserve_f16_nan_as_u16 = static_cast<bool>(physical_device_features.independentBlend) && (!raw_preserve_needs_interlock || features.support_shader_interlock);
+
+        // Adreno 6xx and 7xx flush fp16 denormals in packHalf2x16 which zeroes small F16 constants such as Scaleform texgen scales
+        bool preserves_f16_denormals = false;
+        if ((physical_device_properties.apiVersion >= VK_API_VERSION_1_2 || support_float_controls) && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties2KHR) {
+            const auto float_controls = physical_device.getProperties2KHR<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceFloatControlsProperties>();
+            preserves_f16_denormals = static_cast<bool>(float_controls.get<vk::PhysicalDeviceFloatControlsProperties>().shaderDenormPreserveFloat16);
+        }
+        features.emulate_f16_denormals = !preserves_f16_denormals;
 
         // depth clamp turns off z-clipping, so behind-the-eye primitives must be clipped in the shader instead
         features.support_clip_distance = enable_depth_clamp && static_cast<bool>(physical_device_features.depthClamp) && static_cast<bool>(physical_device_features.shaderClipDistance);
@@ -887,7 +922,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             vk::PhysicalDeviceUniformBufferStandardLayoutFeatures,
             vk::PhysicalDeviceShaderFloat16Int8Features,
             vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT,
-            vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT>
+            vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT,
+            vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>
             device_info{
                 vk::DeviceCreateInfo{
                     .pEnabledFeatures = &enabled_features },
@@ -901,7 +937,9 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
                 vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT{
                     .fragmentShaderSampleInterlock = VK_TRUE },
                 vk::PhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT{
-                    .rasterizationOrderColorAttachmentAccess = VK_TRUE }
+                    .rasterizationOrderColorAttachmentAccess = VK_TRUE },
+                vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT{
+                    .pipelineCreationCacheControl = VK_TRUE }
             };
         device_info.get().setQueueCreateInfos(queue_infos);
         device_info.get().setPEnabledExtensionNames(device_extensions);
@@ -920,6 +958,9 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         if (!support_shader_interlock)
             device_info.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
+
+        if (!support_pipeline_cache_control)
+            device_info.unlink<vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>();
 
         try {
             device = physical_device.createDevice(device_info.get());
@@ -1006,7 +1047,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         // dummy raw u16 storage image, bound at the raw-color slot when the current surface has no raw alias
         default_raw_image = vkutil::Image(1, 1, vk::Format::eR16G16B16A16Uint);
-        default_raw_image.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst);
+        default_raw_image.init_image(vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eInputAttachment | vk::ImageUsageFlagBits::eTransferDst);
         default_raw_image.transition_to(cmd_buffer, vkutil::ImageLayout::StorageImage);
         vkutil::end_single_time_command(device, general_queue, general_command_pool, cmd_buffer);
 
@@ -1039,16 +1080,6 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         frame.destroy_queue.init(device);
     }
 
-    screen_renderer.extra_images = static_cast<uint32_t>(std::clamp(config.swapchain_extra_images, 0, 3));
-    // Ticket 28: the output surface is what the panel drives, so it stays at the
-    // panel resolution whatever resolution-multiplier does to the guest image.
-    // That is why lowering the multiplier did not change the host memory the
-    // swapchain and its images need. This scales the output surface instead.
-    screen_renderer.scale = std::clamp(config.swapchain_scale, 0.25f, 1.0f);
-    // Ticket 09: the Vulkan backend never read the v-sync setting, so the
-    // present mode ignored it. Seed it here, the same place extra_images is set,
-    // and pending_vsync still overrides it when the setting changes mid-run.
-    screen_renderer.vsync = config.v_sync;
     if (!screen_renderer.setup())
         return false;
 
@@ -1058,7 +1089,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         LOG_WARN("Failed to initialize Vulkan overlay renderer, overlays will be disabled");
     }
 
-    support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+    support_fsr &= screen_renderer.swapchain_supports_fsr;
 
     return true;
 }
@@ -1160,6 +1191,9 @@ void VKState::log_gpu_configuration(const Config &cfg) {
     LOG_INFO("  device: {} (type {}, vendor 0x{:X}, device 0x{:X})", physical_device_properties.deviceName.data(),
         vk::to_string(physical_device_properties.deviceType), physical_device_properties.vendorID,
         physical_device_properties.deviceID);
+#ifdef __ANDROID__
+    LOG_INFO("  android device: {}", android_driver::device_summary());
+#endif
     LOG_INFO("  api version: {}.{}.{}  driver version: 0x{:X}",
         VK_API_VERSION_MAJOR(physical_device_properties.apiVersion),
         VK_API_VERSION_MINOR(physical_device_properties.apiVersion),
@@ -1216,8 +1250,8 @@ void VKState::log_gpu_configuration(const Config &cfg) {
     LOG_INFO("  FeatureState: use_mask_bit={} support_unknown_format={} support_rgb_attributes={} support_scaled_attribute_formats={}",
         features.use_mask_bit, features.support_unknown_format, features.support_rgb_attributes,
         features.support_scaled_attribute_formats);
-    LOG_INFO("  FeatureState: enable_memory_mapping={} use_texture_viewport={} spirv_shader={} features_mask=0x{:X}",
-        features.enable_memory_mapping, features.use_texture_viewport, features.spirv_shader, get_features_mask());
+    LOG_INFO("  FeatureState: enable_memory_mapping={} use_texture_viewport={} spirv_shader={} emulate_f16_denormals={} features_mask=0x{:X}",
+        features.enable_memory_mapping, features.use_texture_viewport, features.spirv_shader, features.emulate_f16_denormals, get_features_mask());
     LOG_INFO("  derived: should_use_shader_interlock={} should_use_texture_barrier={} programmable_blending={}",
         features.should_use_shader_interlock(), features.should_use_texture_barrier(),
         features.is_programmable_blending_supported());
@@ -1229,9 +1263,9 @@ void VKState::log_gpu_configuration(const Config &cfg) {
         (mapping_idx >= 0 && mapping_idx <= 4) ? mapping_names[mapping_idx] : "?",
         screen_renderer.filter ? screen_renderer.filter->get_name() : "<not created yet>",
         res_multiplier, cfg.current_config.high_accuracy, cfg.validation_layer);
-    LOG_INFO("  session config: fullscreen={} stretch_display_area={} hd_res_pixel_perfect={} swapchain={}x{} is_adreno_stock={} is_adreno_turnip={}",
+    LOG_INFO("  session config: fullscreen={} stretch_display_area={} hd_res_pixel_perfect={} swapchain={}x{} is_adreno_stock={} is_adreno_turnip={} is_mesa_turnip={}",
         fullscreen, stretch_the_display_area, fullscreen_hd_res_pixel_perfect,
-        screen_renderer.extent.width, screen_renderer.extent.height, is_adreno_stock, is_adreno_turnip);
+        screen_renderer.extent.width, screen_renderer.extent.height, is_adreno_stock, is_adreno_turnip, is_mesa_turnip);
     // shaders_path is only filled in by set_app(), which runs after this, so it is reported by the
     // pipeline failure dump instead
     LOG_INFO("  shader version: vk{}", shader::CURRENT_VERSION);
@@ -1244,9 +1278,9 @@ void VKState::cleanup() {
         descriptor.descriptors_idx = 0;
     };
 
-    device.waitIdle();
+    wait_gpu_idle();
 
-    request_queue.abort();
+    stop_gpu_request_wait_thread();
 
     context = nullptr;
 
@@ -1510,6 +1544,8 @@ void VKState::swap_window() {
         logging::flush();
     }
 
+    texture_cache.relieve_memory_pressure();
+
     // look once a frame if we need to save the pipeline cache
     const auto time_s = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
@@ -1527,9 +1563,8 @@ void VKState::swap_window() {
     }
 
     if (time_s >= pipeline_cache.next_pipeline_cache_save) {
-        pipeline_cache.save_pipeline_cache();
-
         pipeline_cache.next_pipeline_cache_save = std::numeric_limits<uint64_t>::max();
+        pipeline_cache.save_pipeline_cache_async();
     }
 }
 
@@ -1561,6 +1596,7 @@ uint32_t VKState::get_features_mask() {
             bool use_clip_distance : 1;
             bool use_gxm_clip_planes : 1;
             bool force_full_precision : 1;
+            bool emulate_f16_denormals : 1;
         };
         uint32_t value;
     } features_mask;
@@ -1580,6 +1616,7 @@ uint32_t VKState::get_features_mask() {
     features_mask.use_clip_distance = features.support_clip_distance;
     features_mask.use_gxm_clip_planes = features.support_gxm_clip_planes;
     features_mask.force_full_precision = features.force_full_precision;
+    features_mask.emulate_f16_denormals = features.emulate_f16_denormals;
 
     return features_mask.value;
 }
@@ -2082,22 +2119,19 @@ void VKState::unmap_memory(MemState &mem, Ptr<void> address) {
     }
 
     // we need to wait in case the buffer is being used
-    device.waitIdle();
+    wait_gpu_idle();
 
     // Drain the GPU wait thread's queue too
     {
         auto promise = std::make_shared<std::promise<void>>();
         std::future<void> future = promise->get_future();
-        if (request_queue.push(CallbackRequest{
-                new CallbackRequestFunction([promise]() { promise->set_value(); }),
-                /* wait_for_gpu = */ false })) {
-            while (future.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
-                if (render_abort.load(std::memory_order_relaxed) || request_queue.is_aborted())
-                    break;
-            }
+        request_queue.push(CallbackRequest{
+            new CallbackRequestFunction([promise]() { promise->set_value(); }),
+            /* wait_for_gpu = */ false });
+        while (future.wait_for(std::chrono::milliseconds(5)) != std::future_status::ready) {
+            if (render_abort.load(std::memory_order_relaxed) || request_queue.is_aborted())
+                break;
         }
-        // A refused push means the wait thread is gone, so there is nothing left
-        // to drain and nothing would ever set the promise.
     }
 
     // A range that fell back to page-table holds a vkutil::Buffer
@@ -2165,26 +2199,27 @@ void VKState::unmap_memory(MemState &mem, Ptr<void> address) {
 }
 
 std::tuple<vk::Buffer, uint32_t> VKState::get_matching_mapping(const Ptr<void> address) {
-    auto mapped_memory = mapped_memories.lower_bound(address.address());
-    if (mapped_memory == mapped_memories.end()
-        || mapped_memory->first + mapped_memory->second.size < address.address()) {
-        LOG_ERROR("Could not find matching mapped buffer for vertex stream");
-        return { nullptr, 0 };
+    // the nearest base below can be a range mapped inside a larger one and end before the address so walk down to the one holding it
+    for (auto mapped_memory = mapped_memories.lower_bound(address.address()); mapped_memory != mapped_memories.end(); ++mapped_memory) {
+        if (static_cast<uint64_t>(mapped_memory->first) + mapped_memory->second.size > address.address()) {
+            mapped_memory->second.last_gpu_use = submit_serial + 1;
+            return std::make_tuple(mapped_memory->second.buffer, address.address() - mapped_memory->first + mapped_memory->second.gpu_offset);
+        }
     }
 
-    mapped_memory->second.last_gpu_use = submit_serial + 1;
-    return std::make_tuple(mapped_memory->second.buffer, address.address() - mapped_memory->first + mapped_memory->second.gpu_offset);
+    LOG_ERROR("Could not find matching mapped buffer for vertex stream");
+    return { nullptr, 0 };
 }
 
 uint64_t VKState::get_matching_device_address(const Address address) {
-    auto mapped_memory = mapped_memories.lower_bound(address);
-    if (mapped_memory == mapped_memories.end()
-        || mapped_memory->first + mapped_memory->second.size < address) {
-        LOG_ERROR("Could not find matching mapped buffer for vertex stream");
-        return 0;
+    // the same walk as get_matching_mapping
+    for (auto mapped_memory = mapped_memories.lower_bound(address); mapped_memory != mapped_memories.end(); ++mapped_memory) {
+        if (static_cast<uint64_t>(mapped_memory->first) + mapped_memory->second.size > address)
+            return mapped_memory->second.buffer_address + address - mapped_memory->first;
     }
 
-    return mapped_memory->second.buffer_address + address - mapped_memory->first;
+    LOG_ERROR("Could not find matching mapped buffer for vertex stream");
+    return 0;
 }
 
 int VKState::get_max_anisotropic_filtering() {
@@ -2300,7 +2335,7 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
 #endif
 
         vk::ApplicationInfo app_info{
-            .apiVersion = VK_API_VERSION_1_0
+            .apiVersion = instance_api_version(dispatch)
         };
 
         std::vector<const char *> instance_extensions;
@@ -2368,8 +2403,7 @@ void VKState::precompile_shader(const ShadersHash &hash) {
 
 void VKState::preclose_action() {
     // Stop the GPU request wait thread before destruction begins.
-    // VKState (owns the queue) is destroyed before VKContext (owns the thread).
-    request_queue.abort();
+    stop_gpu_request_wait_thread();
 
     // make sure we are in a game
     if (shaders_path.empty())
