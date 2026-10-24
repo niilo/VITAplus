@@ -1,0 +1,124 @@
+name: Verified Android APK
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        type: string
+        required: true
+    secrets:
+      KEYSTORE:
+        required: false
+      SIGNING_STORE_PASSWORD:
+        required: false
+      SIGNING_KEY_ALIAS:
+        required: false
+      SIGNING_KEY_PASSWORD:
+        required: false
+      DEV_KEYSTORE:
+        required: false
+      DEV_SIGNING_STORE_PASSWORD:
+        required: false
+      DEV_SIGNING_KEY_ALIAS:
+        required: false
+      DEV_SIGNING_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ANDROID_BUILD_CHANNEL: ${{ inputs.channel }}
+      VCPKG_MAX_CONCURRENCY: '4'
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Validate the build channel
+        run: |
+          case "$ANDROID_BUILD_CHANNEL" in dev|release) ;; *) exit 1 ;; esac
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Restore and verify the VITAdev key
+        if: inputs.channel == 'dev'
+        env:
+          DEV_KEYSTORE: ${{ secrets.DEV_KEYSTORE }}
+          DEV_SIGNING_STORE_PASSWORD: ${{ secrets.DEV_SIGNING_STORE_PASSWORD }}
+          DEV_SIGNING_KEY_ALIAS: ${{ secrets.DEV_SIGNING_KEY_ALIAS }}
+          DEV_SIGNING_KEY_PASSWORD: ${{ secrets.DEV_SIGNING_KEY_PASSWORD }}
+        run: python3 .ci/prepare-android-signing.py dev
+      - name: Restore and verify the VITA+ key
+        if: inputs.channel == 'release'
+        env:
+          KEYSTORE: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: python3 .ci/prepare-android-signing.py release
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+      - name: Install pinned build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config autoconf automake libtool perl zip unzip
+          python3 -m venv "$RUNNER_TEMP/vita-tools"
+          "$RUNNER_TEMP/vita-tools/bin/pip" install cmake==3.31.10 ninja==1.13.0
+          echo "$RUNNER_TEMP/vita-tools/bin" >> "$GITHUB_PATH"
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vita-vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vita-vcpkg-cache" >> "$GITHUB_ENV"
+          echo "ANDROID_USER_HOME=$RUNNER_TEMP/vita-android-user" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/vita-vcpkg-cache" "$RUNNER_TEMP/vita-android-user/cache"
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(['sdkmanager', '--install', 'platforms;android-35', 'build-tools;36.0.0', 'ndk;29.0.14206865'], input='y\n' * 100, text=True, check=True)
+          PY
+          baseline=$(python3 -c 'import json; print(json.load(open("vcpkg.json"))["builtin-baseline"])')
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vita-vcpkg"
+          git -C "$RUNNER_TEMP/vita-vcpkg" checkout "$baseline"
+          "$RUNNER_TEMP/vita-vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+      - uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
+        with:
+          key: vitaplus-android-${{ inputs.channel }}
+      - name: Check build tools and allocator regression
+        run: |
+          bash .ci/check-tools.sh
+          bash .ci/test-native-mempool.sh
+      - name: Configure the Android SDK and CMake
+        run: |
+          python3 - <<'PYCODE'
+          import cmake, os, pathlib
+          cmake_root = pathlib.Path(cmake.CMAKE_BIN_DIR).parent
+          pathlib.Path('android/local.properties').write_text(f'sdk.dir={os.environ["ANDROID_HOME"]}\ncmake.dir={cmake_root}\n')
+          PYCODE
+      - name: Build the signed ARM64 APK
+        run: bash .ci/build-android.sh "$RUNNER_TEMP/built-apk"
+      - name: Verify and package the APK and symbols
+        run: |
+          set -euo pipefail
+          version=$(bash tools/release/version-info.sh | sed -n 's/^version=//p')
+          if [ "$ANDROID_BUILD_CHANNEL" = release ]; then prefix=VITA-Plus; else prefix=VITAdev; fi
+          python3 .ci/package-pocket-s-dev.py --project-build --channel "$ANDROID_BUILD_CHANNEL" \
+            --output build/android-verified --name "$prefix-$version-android" \
+            --application-source "$GITHUB_SHA" --testing docs/TESTING.md
+      - name: Delete temporary signing keys
+        if: always()
+        run: rm -f -- "${DEV_SIGNING_STORE_PATH:-}" "${SIGNING_STORE_PATH:-}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-${{ inputs.channel }}
+          path: build/android-verified/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

@@ -37,7 +37,7 @@ chmod +x android/gradlew
 echo "build-android.sh: building ${BUILD_TYPE}"
 
 pushd android > /dev/null
-./gradlew --stacktrace ":app:assemble${BUILD_TYPE}"
+./gradlew --stacktrace --build-cache --max-workers=4 ":app:assemble${BUILD_TYPE}"
 popd > /dev/null
 
 APK_PATH="android/app/build/outputs/apk/${BUILD_TYPE,,}/app-${BUILD_TYPE,,}.apk"

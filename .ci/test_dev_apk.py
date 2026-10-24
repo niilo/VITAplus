@@ -2,7 +2,7 @@
 
 import unittest
 
-from dev_apk import CERTIFICATE_SHA256, ISOLATED_CERTIFICATE_SHA256, PACKAGE, ISOLATED_PACKAGE, apk_identity, verify_dev_identity, verify_isolated_identity
+from dev_apk import CERTIFICATE_SHA256, RELEASE_CERTIFICATE_SHA256, RELEASE_PACKAGE, ISOLATED_CERTIFICATE_SHA256, PACKAGE, ISOLATED_PACKAGE, apk_identity, verify_dev_identity, verify_isolated_identity, verify_release_identity
 
 
 class DevApkTests(unittest.TestCase):
@@ -57,6 +57,14 @@ class DevApkTests(unittest.TestCase):
     def test_unknown_signature_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "missing or ambiguous"):
             apk_identity("", "")
+
+    def test_production_identity_uses_the_existing_release_key(self):
+        verify_release_identity(self.identity(package=RELEASE_PACKAGE, certificate=RELEASE_CERTIFICATE_SHA256))
+
+    def test_production_packaging_rejects_dev_identity_and_keys(self):
+        for identity in (self.identity(), self.identity(package=RELEASE_PACKAGE), self.identity(package=RELEASE_PACKAGE, certificate="ab" * 32)):
+            with self.subTest(identity=identity), self.assertRaisesRegex(ValueError, "existing VITA\\+"):
+                verify_release_identity(identity)
 
 
 if __name__ == "__main__":

@@ -82,33 +82,47 @@ public fingerprint if you need to name the key; see below.
 - Keep secrets out of build logs, test fixtures and error messages. A test that
   needs a credential should read it from the environment and skip without it.
 
-## Plus experiment
+## Development base and releases
 
-Work on `experiment/plus-safe-improvements` in this checkout. The initial source
-is `nckstwrt/Vita3K-Plus/all-enhancements` at
+Develop `master` and feature branches from it. The user confirmed the NGS
+experiment worked on 2026-10-24 and requested its promotion and a new release.
+The tested source is `c48f8b20ce61958fa091489e68836c782a85bdaa`, based on
+`nckstwrt/Vita3K-Plus/all-enhancements` at
 `a86b5f93db43e4c4640ad1527e2a4695aad0f35b`.
 
-The user authorized independent implementation and experimental pre-releases.
-Use the existing VITAdev key in `DEV_KEYSTORE` and the verified signing helper.
-The certificate is `c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8`.
-The package is `org.vita3k.emulator.debug` and its launcher name is `VITAdev`.
+The previous master is preserved on
+`archive/master-before-plus-promotion-20261024`. Its history is also a parent
+of the promotion merge. Do not reintroduce its full patch set. Choose focused
+changes with tests and compare rendering changes on the device.
 
-Keep the Plus baseline available with only the documented ATRAC9 build
-correction. Its renderer, shaders, frontend and dependencies stay unchanged.
-Each candidate must list its runtime changes in `.ci/experiment.json`, with
-focused tests and a device test question. The provenance check permits only
-the shared decoder call correction in ATRAC9. Do not transfer a complete patch
-set from our earlier branch.
+`.ci/provenance.json` records the accepted source and previous master.
+`.ci/experiment.json` and the experiment documentation describe historical
+comparisons. Normal development and release packaging use the shared project
+version script instead of the frozen experiment configuration.
 
-The baseline and the first candidates use Android version code 1030800. Equal
-codes allow a tester to reinstall either APK over the other while keeping app
-data. Use distinct version names, release tags, source commits and manifests.
-Never replace a published experimental release. Publish a new tag instead.
+`tools/release/version-info.sh` is the source of native and Android version
+metadata. `.ci/version-base.txt` declares the next version before tagging.
+Stable `v*` tags produce VITA+ and VITAdev APKs plus the Linux x86_64 AppImage.
+Dashed tags produce a VITAdev pre-release and Linux AppImage. Published releases
+are immutable. Publish a new version rather than replacing their files.
 
-Run the Python checks in `.ci/` and the no-key checks before committing.
-The workflow verifies the runtime diff, signing key, APK identity, assets,
-alignment, native source revision and matching symbols before publication.
+The VITA+ package is `org.vita3k.emulator`. Its production certificate is
+`04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a`.
+VITAdev uses `org.vita3k.emulator.debug` and `DEV_KEYSTORE`, with certificate
+`c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8`.
+Keep both identities and use their existing keys. Never generate replacements.
 
-Device rendering and performance are not measured in this environment. Require
-matched Jak and Uncharted scenes and the actual Vulkan driver before accepting
-a rendering, timing, memory or power change.
+Run `bash .ci/check-tools.sh`, the allocator sanitizer regression, and the
+security checks above before committing build or native changes. Install the
+hooks in each new checkout with `bash tools/release/install-hooks.sh`.
+The release workflow checks signatures, package identities, versions, assets,
+alignment, native revisions, matching symbols and artifact checksums.
+
+Prepare Plus's required logging header with
+`python3 .ci/prepare-plus-build.py` before a manual native build. CI does this
+for Android and Linux. Native build flags, renderer, shaders, dependencies and
+assets remain those of the tested Plus base unless a focused change says why.
+
+Device performance, power and thermals have not been measured in the cloud.
+Use matched scenes and quote the actual Vulkan `driverID` for rendering or
+performance claims. Release instructions are in `docs/release.md`.

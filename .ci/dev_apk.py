@@ -6,6 +6,7 @@ PACKAGE = "org.vita3k.emulator.debug"
 # DEV_KEYSTORE matches the installed VITAdev app, confirmed on 2026-10-22.
 CERTIFICATE_SHA256 = "c6520e3f27f5d1c54469c86111e693d938f04cb1209bb30e8c51c420117155b8"
 RELEASE_CERTIFICATE_SHA256 = "04c7cfc63ab68d91d23a34108516066b737c87e5528f7bff621afa3fea38522a"
+RELEASE_PACKAGE = "org.vita3k.emulator"
 
 
 def apk_identity(badging, certificates):
@@ -36,6 +37,11 @@ def verify_dev_identity(identity, previous=None):
 
 ISOLATED_PACKAGE = "org.vita3k.emulator.debug.visualtest"
 ISOLATED_CERTIFICATE_SHA256 = RELEASE_CERTIFICATE_SHA256
+
+
+def verify_release_identity(identity):
+    if identity["package_id"] != RELEASE_PACKAGE or identity["certificate_sha256"] != RELEASE_CERTIFICATE_SHA256 or identity["version_code"] < 1:
+        raise ValueError("Release APK must use the existing VITA+ package and signing key")
 
 
 def verify_isolated_identity(identity, previous=None):
@@ -69,6 +75,6 @@ if __name__ == "__main__":
     identity = apk_identity(badging, certificates)
     if arguments.channel == "dev":
         verify_dev_identity(identity)
-    elif identity["package_id"] != "org.vita3k.emulator" or identity["certificate_sha256"] != RELEASE_CERTIFICATE_SHA256 or identity["version_code"] < 1:
-        raise SystemExit("Release APK must use the existing VITA+ package and signing key")
+    else:
+        verify_release_identity(identity)
     print(f"Verified {identity['package_id']}, version code {identity['version_code']}, certificate SHA-256 {identity['certificate_sha256']}")
