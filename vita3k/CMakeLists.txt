@@ -58,6 +58,9 @@ endforeach()
 message(STATUS "Vita3K version ${VITA3K_APP_VERSION} (base ${VITA3K_BASE_VERSION}, ${VITA3K_COMMITS_SINCE_RELEASE} commits after the tag)")
 
 set(VITA3K_APP_NUMBER ${VITA3K_VERSION_CODE})
+if(DEFINED VITA3K_BUILD_VERSION AND NOT VITA3K_BUILD_VERSION STREQUAL VITA3K_APP_VERSION)
+	message(FATAL_ERROR "Android and native build versions differ")
+endif()
 
 execute_process(
 	COMMAND git rev-list HEAD --count

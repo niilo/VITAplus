@@ -53,6 +53,12 @@ android {
 		targetSdk = 35
 		versionCode = versionInfo.version_code as int
 		versionName = versionInfo.version.replaceFirst(/^v/, '')
+		externalNativeBuild {
+			cmake {
+				// A tag can change the version without changing any source file.
+				arguments "-DVITA3K_BUILD_VERSION=${versionInfo.version}"
+			}
+		}
 
 		ndk {
 			// x86_64 is emulator-only and broken here: vcpkg OpenSSL cannot assemble its x86 SM3/SM4 code with the NDK.

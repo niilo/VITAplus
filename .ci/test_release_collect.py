@@ -25,6 +25,7 @@ class ReleaseTests(unittest.TestCase):
             "launcher_label": "VITAdev", "variant": "reldebug",
             "native_configuration": "RelWithDebInfo", "version_code": 1030800,
             "version_name": "1.3.8", "updates_vitadev": True,
+            "native_version": "v1.3.8",
             "abi": "arm64-v8a", "native_build_id": "b" * 40,
             "verification": {"apk_signature": "passed", "zipalign": "passed", "symbols_build_id": "matches APK", "required_assets_checked": 59},
         }
@@ -36,7 +37,7 @@ class ReleaseTests(unittest.TestCase):
         self.validate(self.manifest())
 
     def test_wrong_source_package_version_and_signer_are_rejected(self):
-        for key, value in (("source_commit", "c" * 40), ("package_id", PACKAGE + ".test"), ("version_code", 1030700), ("signing_certificate_sha256", "d" * 64)):
+        for key, value in (("source_commit", "c" * 40), ("package_id", PACKAGE + ".test"), ("version_code", 1030700), ("native_version", "v1.3.8-dev.0"), ("signing_certificate_sha256", "d" * 64)):
             manifest = self.manifest()
             manifest[key] = value
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "identity or source"):

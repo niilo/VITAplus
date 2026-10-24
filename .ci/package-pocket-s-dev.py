@@ -116,6 +116,8 @@ def main():
             source_mark = run("git", "rev-parse", "--short", "HEAD").strip()
             if source_mark.encode() not in packaged.read_bytes():
                 raise RuntimeError("Packaged native library does not contain this source revision")
+            if args.project_build and version_info["version"].encode() + b"\0" not in packaged.read_bytes():
+                raise RuntimeError("Packaged native version does not match the Android version")
             if args.build_label and args.build_label.encode() not in packaged.read_bytes():
                 raise RuntimeError("Packaged library does not contain the expected build label")
 
@@ -147,6 +149,7 @@ def main():
         "signing_certificate_sha256": identity["certificate_sha256"],
         "version_code": identity["version_code"],
         "version_name": version["version_name"],
+        "native_version": version_info["version"] if args.project_build else None,
         "workflow_run": f"https://github.com/niilo/VITAplus/actions/runs/{os.environ.get('GITHUB_RUN_ID', 'local-check')}",
         "verification": {"apk_signature": "passed", "zipalign": "passed", "required_assets_checked": assets_checked, "symbols_build_id": "matches APK", "physical_device_performance": "not measured"},
         "artifacts": {path.name: {"size_bytes": path.stat().st_size, "sha256": digest(path)} for path in sorted(out.iterdir())},

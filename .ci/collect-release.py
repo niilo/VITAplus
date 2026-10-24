@@ -43,6 +43,7 @@ def validate_android_manifest(manifest, channel, tag, source, version_code):
         "native_configuration": expected_configuration,
         "version_code": version_code,
         "version_name": tag.removeprefix("v"),
+        "native_version": tag,
         "updates_vitadev": channel == "dev",
         "abi": "arm64-v8a",
     }
