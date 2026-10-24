@@ -2,7 +2,11 @@
 
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -59,6 +63,58 @@ class ReleaseTests(unittest.TestCase):
             asset.write_bytes(b"modified")
             with self.assertRaisesRegex(ValueError, "checksum mismatch"):
                 collect_release.verify_checksums(root)
+
+    def test_complete_release_collects_both_apks_and_linux_with_valid_checksums(self):
+        project = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory(prefix="vita-collect-test-") as temporary:
+            root = Path(temporary)
+            for directory in (".ci", "tools/release", "docs", "downloaded"):
+                (root / directory).mkdir(parents=True)
+            shutil.copyfile(project / "tools/release/version-info.sh", root / "tools/release/version-info.sh")
+            (root / ".ci/version-base.txt").write_text("1.3.8\n")
+            (root / "docs/TESTING.md").write_text("Device test instructions\n")
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, text=True).strip()
+
+            git("init", "-q")
+            git("config", "user.name", "Release test")
+            git("config", "user.email", "release-test@example.invalid")
+            git("add", ".")
+            git("commit", "-qm", "Base")
+            base = git("rev-parse", "HEAD")
+            (root / ".ci/provenance.json").write_text(json.dumps({"upstream_commit": base}))
+            git("add", ".")
+            git("commit", "-qm", "Release")
+            git("tag", "v1.3.8")
+            source = git("rev-parse", "HEAD")
+            patch = subprocess.check_output(["git", "diff", "--binary", base, "HEAD"], cwd=root)
+            for channel in ("dev", "release"):
+                directory = root / "downloaded" / f"android-{channel}"
+                directory.mkdir()
+                prefix = f"{'VITAdev' if channel == 'dev' else 'VITA-Plus'}-v1.3.8-android"
+                manifest = self.manifest()
+                manifest["source_commit"] = source
+                if channel == "release":
+                    manifest.update(package_id=collect_release.RELEASE_PACKAGE, signing_certificate_sha256=collect_release.RELEASE_CERTIFICATE_SHA256, launcher_label="VITA+", variant="release", native_configuration="Release", updates_vitadev=False)
+                for suffix in ("-arm64.apk", "-symbols.zip"):
+                    (directory / (prefix + suffix)).write_bytes(b"test binary")
+                manifest["artifacts"] = {path.name: {"sha256": collect_release.digest(path)} for path in directory.iterdir()}
+                (directory / f"{prefix}-source.patch").write_bytes(patch)
+                (directory / "build-manifest.json").write_text(json.dumps(manifest))
+                checksums = "".join(f"{collect_release.digest(path)}  {path.name}\n" for path in sorted(directory.iterdir()))
+                (directory / "SHA256SUMS").write_text(checksums)
+            linux = root / "downloaded" / f"vita3k-{git('rev-parse', '--short', 'HEAD')}-linux-x64"
+            linux.mkdir()
+            (linux / "Vita3K-x86_64.AppImage").write_bytes(b"test AppImage")
+            subprocess.run([sys.executable, str(project / ".ci/collect-release.py"), "v1.3.8", "downloaded", "release-assets"], cwd=root, check=True, capture_output=True)
+            output = root / "release-assets"
+            self.assertTrue((output / "VITAdev-v1.3.8-android-arm64.apk").exists())
+            self.assertTrue((output / "VITA-Plus-v1.3.8-android-arm64.apk").exists())
+            self.assertTrue((output / "VITA-Plus-v1.3.8-linux-x86_64.AppImage").exists())
+            self.assertEqual((output / "VITA-Plus-v1.3.8-source.patch").read_bytes(), patch)
+            self.assertIn("Vita3K Build: 1030800", (output / "RELEASE_NOTES.md").read_text())
+            subprocess.run(["sha256sum", "-c", "SHA256SUMS.txt"], cwd=output, check=True, capture_output=True)
 
 
 if __name__ == "__main__":
