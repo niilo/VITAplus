@@ -748,6 +748,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     context.last_draw_pipeline = context.current_pipeline;
 
     context.render_cmd.drawIndexed(count, instance_count, 0, 0, 0);
+    context.scene_draw_calls++;
 
     context.vertex_uniform_storage_allocated = false;
     context.fragment_uniform_storage_allocated = false;

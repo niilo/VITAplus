@@ -6,4 +6,5 @@ python3 .ci/test_experiment.py
 python3 .ci/test_version_info.py
 python3 .ci/test_release_collect.py
 python3 tools/android/test_fps_sample.py
+python3 tools/android/test_perf_summary.py
 bash tools/release/check-no-signing-keys.sh

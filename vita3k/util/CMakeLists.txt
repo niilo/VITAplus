@@ -10,6 +10,7 @@ add_library(
 	src/logging.cpp
 	src/mem_snapshot.cpp
 	src/net_utils.cpp
+	src/perf_log.cpp
 	src/string_utils.cpp
 	src/tracy.cpp
 	src/vita_theme_utils.cpp
