@@ -15,11 +15,13 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <util/fs.h>
+#include <util/gpu_timing.h>
 #include <util/perf_log.h>
 
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -157,4 +159,23 @@ TEST(PerfLog, NowUsAdvances) {
     const int64_t first = perf_log::now_us();
     EXPECT_GT(first, 0);
     EXPECT_GE(perf_log::now_us(), first);
+}
+
+TEST(GpuTiming, ConvertsTicksToMicroseconds) {
+    ASSERT_TRUE(gpu_timing::elapsed_us(100, 500, 64, 2.5));
+    EXPECT_DOUBLE_EQ(*gpu_timing::elapsed_us(100, 500, 64, 2.5), 1.0);
+}
+
+TEST(GpuTiming, HandlesCounterWrapAndUnusedHighBits) {
+    EXPECT_DOUBLE_EQ(*gpu_timing::elapsed_us(0xfffffa, 4, 24, 1000), 10);
+    EXPECT_DOUBLE_EQ(*gpu_timing::elapsed_us(0xaffffffa, 0xb0000004, 24, 1000), 10);
+    EXPECT_DOUBLE_EQ(*gpu_timing::elapsed_us(~uint64_t{ 0 } - 5, 4, 64, 1000), 10);
+}
+
+TEST(GpuTiming, UnsupportedTimingIsNotZeroTime) {
+    EXPECT_FALSE(gpu_timing::elapsed_us(0, 1, 0, 1));
+    EXPECT_FALSE(gpu_timing::elapsed_us(0, 1, 65, 1));
+    EXPECT_FALSE(gpu_timing::elapsed_us(0, 1, 64, 0));
+    EXPECT_FALSE(gpu_timing::elapsed_us(0, 1, 64, -1));
+    EXPECT_FALSE(gpu_timing::elapsed_us(0, 1, 64, std::numeric_limits<double>::quiet_NaN()));
 }

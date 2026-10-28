@@ -124,6 +124,20 @@ struct FrameDescriptor {
 };
 
 struct FrameObject {
+    // GPU time of each recording, for the perf-log "gpu_segments" channel.
+    static constexpr uint32_t GPU_QUERY_CAPACITY = 2048;
+    struct GpuSegment {
+        int64_t start_us;
+        uint32_t draws;
+        uint32_t width;
+        uint32_t height;
+    };
+    vk::QueryPool gpu_query_pool;
+    std::vector<GpuSegment> gpu_segments;
+    uint64_t gpu_frame_timestamp = 0;
+    uint32_t gpu_segments_submitted = 0;
+    uint32_t gpu_segments_skipped = 0;
+
     vk::CommandPool render_pool;
     // we need to have a specific prerender pool because prerender command buffer
     // can be reset if we use too many new textures at once
@@ -292,6 +306,8 @@ struct VKContext : public renderer::Context {
     // call, also when the setting is off.
     uint32_t scene_draw_calls = 0;
     int64_t scene_start_us = 0;
+    // Query index of the current recording's start timestamp, or -1.
+    int32_t gpu_query_index = -1;
     bool gxmscene_viewport_logged = false;
     float surface_downscale = 1.0f;
     bool scene_macroblock_flushed = false;

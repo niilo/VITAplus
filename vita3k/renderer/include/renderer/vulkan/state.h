@@ -70,6 +70,8 @@ struct VKState : public renderer::State {
     // Used for memory allocation and general query later.
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties physical_device_properties;
+    // timestampValidBits of the general queue family; 0 turns GPU timing off.
+    uint32_t gpu_timestamp_bits = 0;
     vk::PhysicalDeviceFeatures physical_device_features;
     vk::PhysicalDeviceMemoryProperties physical_device_memory;
     std::vector<vk::QueueFamilyProperties> physical_device_queue_families;
