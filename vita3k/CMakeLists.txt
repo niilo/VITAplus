@@ -166,6 +166,7 @@ endif()
 add_subdirectory(app)
 add_subdirectory(audio)
 add_subdirectory(camera)
+add_subdirectory(cheat)
 add_subdirectory(input)
 add_subdirectory(config)
 add_subdirectory(cpu)
@@ -266,7 +267,7 @@ if(WIN32)
 	target_sources(vita3k PRIVATE util/src/vc_runtime_checker.cpp)
 endif()
 
-target_link_libraries(vita3k PRIVATE app audio codec compat config cppcommon ctrl dialog display ime lang gdbstub gxm io miniz modules motion packages patch renderer shader touch util psvpfsparser)
+target_link_libraries(vita3k PRIVATE app audio cheat codec compat config cppcommon ctrl dialog display ime lang gdbstub gxm io miniz modules motion packages patch renderer shader touch util psvpfsparser)
 if(NOT ANDROID)
 	target_link_libraries(vita3k PRIVATE gui-qt)
 endif()
@@ -425,6 +426,10 @@ elseif(WIN32)
 	target_sources(vita3k PRIVATE resource.h Vita3KPlus.ico Vita3K.rc Windows.manifest)
 	set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT vita3k)
 	set_target_properties(vita3k PROPERTIES WIN32_EXECUTABLE TRUE VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$(Configuration)")
+	if(MSVC AND (CMAKE_INTERPROCEDURAL_OPTIMIZATION OR CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE))
+		# incremental LTCG reuses callers compiled for an older callee and can drop an argument it now uses
+		target_link_options(vita3k PRIVATE $<$<CONFIG:Release>:/LTCG>)
+	endif()
 	add_custom_command(
 		TARGET vita3k
 		POST_BUILD
